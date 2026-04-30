@@ -8,6 +8,18 @@ time verification. The plaintext secret is never persisted.
 Each token record carries an ``agent_id`` UUID generated at issuance time. M3
 seeds the agents table using these UUIDs as primary keys (see
 ``project_meridian_m2_m3_token_contract.md`` in operator memory).
+
+Two issuance sources, both stored in the same table and looked up via the same
+constant-time path:
+
+- ``static`` — issued by ``scripts/issue-token.py``. Used by M3+ daemon-launched
+  agents (Engineer, Implementer, Tester) which can't go through a browser.
+- ``oauth`` — issued by the OAuth Authorization Server endpoints (Claude
+  Desktop's connector flow). The token's ``client_id`` is the OAuth client_id;
+  ``expires_at`` may be set if the OAuth flow chose a finite TTL.
+
+The CLI (``list-tokens.py``) surfaces the ``source`` so the operator can audit
+which tokens came from where.
 """
 
 from __future__ import annotations
@@ -17,15 +29,19 @@ import hmac
 import json
 import secrets
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from typing import Any, Literal
 
 import keyring
 from keyring.errors import PasswordDeleteError
 
 KEYRING_SERVICE = "meridian-orchestrator-tokens"
 INDEX_USERNAME = "_index"
+OAUTH_CLIENTS_INDEX_USERNAME = "_oauth_clients_index"
 TOKEN_PREFIX = "mor"
+
+TokenSource = Literal["static", "oauth"]
 
 _HEX = "0123456789abcdef"
 
@@ -65,6 +81,9 @@ class TokenRecord:
     secret_hash: str
     issued_at: str
     revoked_at: str | None
+    source: TokenSource = "static"
+    client_id: str | None = None
+    expires_at: str | None = None
 
     def to_json(self) -> str:
         return json.dumps(
@@ -76,6 +95,9 @@ class TokenRecord:
                 "secret_hash": self.secret_hash,
                 "issued_at": self.issued_at,
                 "revoked_at": self.revoked_at,
+                "source": self.source,
+                "client_id": self.client_id,
+                "expires_at": self.expires_at,
             }
         )
 
@@ -90,6 +112,70 @@ class TokenRecord:
             secret_hash=d["secret_hash"],
             issued_at=d["issued_at"],
             revoked_at=d.get("revoked_at"),
+            source=d.get("source", "static"),
+            client_id=d.get("client_id"),
+            expires_at=d.get("expires_at"),
+        )
+
+    def is_expired(self, now: datetime | None = None) -> bool:
+        if self.expires_at is None:
+            return False
+        moment = now or datetime.now(tz=UTC)
+        try:
+            return datetime.fromisoformat(self.expires_at) <= moment
+        except ValueError:
+            return True
+
+
+@dataclass(frozen=True, slots=True)
+class OAuthClientRecord:
+    """A registered OAuth client (typically Claude Desktop's connector).
+
+    Persisted in the same keyring service as token records. Used by the OAuth
+    Authorization Server endpoints implemented in ``oauth.py``.
+    """
+
+    client_id: str
+    client_secret: str | None
+    client_name: str
+    redirect_uris: list[str]
+    scope: str | None
+    grant_types: list[str]
+    response_types: list[str]
+    token_endpoint_auth_method: str
+    registered_at: str
+    extra: dict[str, Any] = field(default_factory=dict)
+
+    def to_json(self) -> str:
+        return json.dumps(
+            {
+                "client_id": self.client_id,
+                "client_secret": self.client_secret,
+                "client_name": self.client_name,
+                "redirect_uris": list(self.redirect_uris),
+                "scope": self.scope,
+                "grant_types": list(self.grant_types),
+                "response_types": list(self.response_types),
+                "token_endpoint_auth_method": self.token_endpoint_auth_method,
+                "registered_at": self.registered_at,
+                "extra": dict(self.extra),
+            }
+        )
+
+    @classmethod
+    def from_json(cls, raw: str) -> OAuthClientRecord:
+        d = json.loads(raw)
+        return cls(
+            client_id=d["client_id"],
+            client_secret=d.get("client_secret"),
+            client_name=d.get("client_name", ""),
+            redirect_uris=list(d.get("redirect_uris", [])),
+            scope=d.get("scope"),
+            grant_types=list(d.get("grant_types", [])),
+            response_types=list(d.get("response_types", [])),
+            token_endpoint_auth_method=d.get("token_endpoint_auth_method", "none"),
+            registered_at=d.get("registered_at", _now_iso()),
+            extra=dict(d.get("extra", {})),
         )
 
 
@@ -140,11 +226,23 @@ class TokenStore:
             self._service, _record_key(record.token_id), record.to_json()
         )
 
-    def issue(self, agent_id: str | None, role: str, label: str) -> IssuedToken:
+    def issue(
+        self,
+        agent_id: str | None,
+        role: str,
+        label: str,
+        *,
+        source: TokenSource = "static",
+        client_id: str | None = None,
+        expires_at: str | None = None,
+    ) -> IssuedToken:
         """Issue a new token for ``role`` and bind it to ``agent_id``.
 
         ``agent_id`` is generated if not provided — that UUID is stable and will
         be reused as the agents row PK when M3 seeds the agents table.
+
+        ``source`` distinguishes static (CLI-issued) from OAuth-issued tokens.
+        ``client_id`` and ``expires_at`` are only meaningful for OAuth tokens.
         """
         if not role:
             raise ValueError("role must be non-empty")
@@ -158,6 +256,9 @@ class TokenStore:
             secret_hash=_hash_secret(secret),
             issued_at=_now_iso(),
             revoked_at=None,
+            source=source,
+            client_id=client_id,
+            expires_at=expires_at,
         )
         self._write_record(record)
         index = self._read_index()
@@ -169,7 +270,7 @@ class TokenStore:
 
     def lookup(self, token: str) -> TokenRecord | None:
         """Resolve a token string to its record. Returns ``None`` if not found,
-        revoked, or the secret hash does not match (constant-time comparison)."""
+        revoked, expired, or the secret hash does not match (constant-time)."""
         parsed = _parse_token(token)
         if parsed is None:
             return None
@@ -179,9 +280,17 @@ class TokenStore:
             return None
         if record.revoked_at is not None:
             return None
+        if record.is_expired():
+            return None
         if not hmac.compare_digest(record.secret_hash, _hash_secret(secret)):
             return None
         return record
+
+    def lookup_by_token_id(self, token_id: str) -> TokenRecord | None:
+        """Look up a token record by id alone. Used by the OAuth provider when
+        the framework gives it the access_token string to revoke; we strip the
+        id and call this for the lookup. Does not validate the secret."""
+        return self._read_record(token_id)
 
     def revoke(self, token_id: str) -> bool:
         """Mark a token revoked. Returns True if the record existed and was
@@ -225,6 +334,60 @@ class TokenStore:
             if rec is not None:
                 out.append(rec)
         out.sort(key=lambda r: r.issued_at)
+        return out
+
+    # --- OAuth client registry --------------------------------------------------
+    #
+    # OAuth clients (e.g., Claude Desktop's connector) are persisted alongside
+    # token records in the same keyring service. They share storage because the
+    # operator audit story is unified — both are creds.
+
+    def _oauth_client_key(self, client_id: str) -> str:
+        return f"oauth_client:{client_id}"
+
+    def _read_oauth_clients_index(self) -> list[str]:
+        raw = keyring.get_password(self._service, OAUTH_CLIENTS_INDEX_USERNAME)
+        if raw is None:
+            return []
+        try:
+            data = json.loads(raw)
+            ids = data.get("client_ids", [])
+            return [cid for cid in ids if isinstance(cid, str)]
+        except (json.JSONDecodeError, AttributeError):
+            return []
+
+    def _write_oauth_clients_index(self, client_ids: list[str]) -> None:
+        keyring.set_password(
+            self._service,
+            OAUTH_CLIENTS_INDEX_USERNAME,
+            json.dumps({"client_ids": client_ids}),
+        )
+
+    def register_oauth_client(self, record: OAuthClientRecord) -> None:
+        """Persist a registered OAuth client. Idempotent on client_id."""
+        keyring.set_password(
+            self._service, self._oauth_client_key(record.client_id), record.to_json()
+        )
+        index = self._read_oauth_clients_index()
+        if record.client_id not in index:
+            index.append(record.client_id)
+            self._write_oauth_clients_index(index)
+
+    def get_oauth_client(self, client_id: str) -> OAuthClientRecord | None:
+        raw = keyring.get_password(
+            self._service, self._oauth_client_key(client_id)
+        )
+        if raw is None:
+            return None
+        return OAuthClientRecord.from_json(raw)
+
+    def list_oauth_clients(self) -> list[OAuthClientRecord]:
+        out: list[OAuthClientRecord] = []
+        for cid in self._read_oauth_clients_index():
+            rec = self.get_oauth_client(cid)
+            if rec is not None:
+                out.append(rec)
+        out.sort(key=lambda r: r.registered_at)
         return out
 
 

@@ -5,10 +5,16 @@ The Orchestrator exposes a single MCP endpoint over Streamable-HTTP at
 MCP connector UI rejects ``http://`` URLs. The cert is self-signed (see
 ``tls.py``); the operator imports it into the OS trust store the first time.
 
-Auth is bearer-token (per-agent token issued via ``scripts/issue-token.py``);
-the verifier resolves to ``agent_id`` via ``auth.TokenStore`` and the running
-tool reads the resolved identity from
-``mcp.server.auth.middleware.auth_context.get_access_token``.
+Two coexisting auth modes share the same token table and lookup path:
+
+- **OAuth Authorization Server** (Mike's PM agent via Claude Desktop) — the
+  daemon implements RFC 7591 dynamic client registration and the RFC 6749
+  authorization-code flow with PKCE. See :mod:`meridian_orchestrator.oauth`.
+- **Static bearer tokens** (M3+ daemon-launched Engineer/Implementer/Tester
+  subagents) — issued via ``scripts/issue-token.py``, persisted in keyring.
+
+The :class:`auth.TokenStore` is the single source of truth for both. The
+``TokenVerifier`` accepts a Bearer token from either source.
 
 M2 ships exactly one tool — ``ping`` — to validate the auth chain end-to-end.
 M3 onward registers task/budget/knowledge/etc. tools per ``06-mcp-tools-phase-one.md``.
@@ -22,8 +28,11 @@ from datetime import UTC, datetime
 import structlog
 import uvicorn
 from mcp.server.auth.middleware.auth_context import get_access_token
-from mcp.server.auth.provider import AccessToken, TokenVerifier
-from mcp.server.auth.settings import AuthSettings
+from mcp.server.auth.settings import (
+    AuthSettings,
+    ClientRegistrationOptions,
+    RevocationOptions,
+)
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import AnyHttpUrl, BaseModel
@@ -31,34 +40,12 @@ from pydantic import AnyHttpUrl, BaseModel
 from meridian_orchestrator.auth import TokenStore
 from meridian_orchestrator.config import Settings
 from meridian_orchestrator.errors import AuthError
+from meridian_orchestrator.oauth import MeridianOAuthProvider, make_approval_routes
 from meridian_orchestrator.tls import ensure_cert
 
 logger = structlog.get_logger(__name__)
 
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1", "[::1]"})
-
-
-class _StoreTokenVerifier(TokenVerifier):
-    """TokenVerifier backed by ``auth.TokenStore``.
-
-    Resolves a bearer token to an ``AccessToken`` whose ``client_id`` is the
-    agent_id and whose ``scopes`` carry the agent's role. Returns ``None`` for
-    any failure — the FastMCP middleware then emits a 401 without exposing
-    *why* the token was rejected.
-    """
-
-    def __init__(self, store: TokenStore) -> None:
-        self._store = store
-
-    async def verify_token(self, token: str) -> AccessToken | None:
-        record = self._store.lookup(token)
-        if record is None:
-            return None
-        return AccessToken(
-            token=token,
-            client_id=record.agent_id,
-            scopes=[f"role:{record.role}"],
-        )
 
 
 class PingOutput(BaseModel):
@@ -95,16 +82,30 @@ def build_server(settings: Settings, store: TokenStore | None = None) -> FastMCP
         ],
     )
 
+    oauth_provider = MeridianOAuthProvider(token_store)
+
     mcp = FastMCP(
         name="meridian-orchestrator",
         instructions="Meridian AI Orchestrator — MCP server for the AI-staffed company.",
-        token_verifier=_StoreTokenVerifier(token_store),
-        auth=AuthSettings(issuer_url=base_url, resource_server_url=base_url),
+        auth_server_provider=oauth_provider,
+        auth=AuthSettings(
+            issuer_url=base_url,
+            resource_server_url=base_url,
+            client_registration_options=ClientRegistrationOptions(
+                enabled=True,
+                valid_scopes=["role:pm"],
+                default_scopes=["role:pm"],
+            ),
+            revocation_options=RevocationOptions(enabled=True),
+        ),
         transport_security=transport_security,
         host=settings.mcp_host,
         port=settings.mcp_port,
         log_level=settings.log_level.upper(),  # type: ignore[arg-type]
     )
+
+    for path, methods, handler in make_approval_routes(oauth_provider):
+        mcp.custom_route(path, methods=methods)(handler)
 
     @mcp.tool(
         name="ping",

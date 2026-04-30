@@ -9,7 +9,7 @@ Design documents live in `docs/kickoff/`. Read `00-README.md` first.
 ## Status
 
 - M1: Project skeleton + storage layer
-- M2: MCP server scaffolding + auth (`ping` tool over Streamable-HTTP, keyring-backed bearer tokens)
+- M2: MCP server scaffolding + auth (`ping` tool over Streamable-HTTP/TLS; OAuth 2.0 AS for Claude Desktop; static keyring tokens for daemon-launched subagents)
 - M3: Agent config loading + permission framework + bridge design (pending)
 - M4: Task management + subagent dispatch with parallel (pending)
 - M5: Budget & usage + window-aware planner + continuous-mode driver (pending)
@@ -81,22 +81,63 @@ trusted. Either:
 
 After regeneration (cert expiry or manual deletion), repeat the trust step.
 
-## Issue an MCP token and connect Claude Desktop
+## Auth: two coexisting flows
 
-Tokens authenticate per-agent MCP connections. They live in the OS keychain
-(Windows Credential Manager on Mike's machine), not in the database or `.env`.
+The daemon accepts Bearer tokens from two sources, both stored in the OS
+keychain (Windows Credential Manager on Mike's machine):
+
+| Source   | Used by                                         | How issued                                 |
+|----------|-------------------------------------------------|--------------------------------------------|
+| `oauth`  | Mike's PM agent via Claude Desktop's connector  | OAuth 2.0 authorization-code flow + PKCE  |
+| `static` | M3+ daemon-launched Engineer/Implementer/Tester | `scripts/issue-token.py` (operator action) |
+
+Tokens from either source flow through the same verifier; the role on the
+token determines what MCP tools the caller can invoke. `list-tokens.py` shows
+the source so you can audit which credentials came from where.
+
+### Claude Desktop (OAuth) — the load-bearing path for Mike
+
+Claude Desktop's connector UI does OAuth automatically. After trusting the
+TLS cert (above), in Claude Desktop:
+
+1. Settings → Connectors → **Add custom connector**.
+2. URL: `https://127.0.0.1:8765/mcp` (note the `/mcp` suffix).
+3. Claude Desktop self-registers via RFC 7591 dynamic client registration,
+   then opens your default browser to the daemon's `/authorize` endpoint.
+4. The daemon redirects to a local **approval page** (`/approve`) that
+   shows the connector name, redirect URI, scopes requested, and the role
+   the token will be granted. Read it. Click **Approve**.
+5. The browser is redirected back to Claude Desktop's loopback callback with
+   an authorization code; Claude Desktop exchanges it for an access token at
+   the daemon's `/token` endpoint (PKCE-verified).
+6. Connector is added. The `ping` tool round-trips and returns the
+   resolved `agent_id` — first proof that the auth chain works.
+
+The issued token has `source=oauth` and a 30-day expiry. Revoke any time
+via `scripts/revoke-token.py <token_id>` or by removing the connector in
+Claude Desktop. **Loopback-only:** the daemon refuses any redirect URI
+that isn't `127.0.0.1`, `::1`, or `localhost` — same threat-model reasoning
+as the loopback bind default.
+
+### Subagent tokens (static) — for M3+
+
+M3 introduces Engineer/Implementer/Tester subagents that run as daemon-
+launched subprocesses. They cannot do an interactive OAuth flow, so the
+operator pre-issues static bearer tokens for them via the CLI:
 
 ```bash
-uv run python scripts/issue-token.py --role pm --label "mike-claude-desktop"
+uv run python scripts/issue-token.py --role engineer --label "engineer-default"
 uv run python scripts/list-tokens.py
 uv run python scripts/revoke-token.py <token_id>
 ```
 
-`issue-token.py` prints the full token exactly once. Paste the value into
-Claude Desktop's MCP connector configuration as a Bearer credential against
-the URL `https://127.0.0.1:8765/mcp` (after trusting the cert per the TLS
-section above). The `ping` tool round-trips and returns the resolved
-`agent_id` — first proof that the auth chain works.
+`issue-token.py` prints the full token exactly once. The subagent reads it
+from environment / config at launch time. These tokens have `source=static`
+and no expiry until revoked.
+
+**Don't use static tokens for Claude Desktop.** Claude Desktop's connector
+UI is OAuth-only and won't accept a manually entered Bearer token. Static
+tokens are for non-interactive M3+ agents.
 
 ## Test
 

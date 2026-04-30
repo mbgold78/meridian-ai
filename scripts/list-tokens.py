@@ -20,11 +20,24 @@ def main() -> int:
     if not records:
         print("No tokens issued yet.")
         return 0
-    print(f"{'token_id':<18} {'role':<14} {'status':<10} {'agent_id':<38} label")
-    print("-" * 100)
+    header = (
+        f"{'token_id':<18} {'role':<10} {'source':<8} {'status':<10} "
+        f"{'client_id':<24} {'agent_id':<38} label"
+    )
+    print(header)
+    print("-" * len(header))
     for r in records:
-        status = "revoked" if r.revoked_at else "active"
-        print(f"{r.token_id:<18} {r.role:<14} {status:<10} {r.agent_id:<38} {r.label}")
+        if r.revoked_at:
+            status = "revoked"
+        elif r.is_expired():
+            status = "expired"
+        else:
+            status = "active"
+        client = r.client_id or "-"
+        print(
+            f"{r.token_id:<18} {r.role:<10} {r.source:<8} {status:<10} "
+            f"{client:<24} {r.agent_id:<38} {r.label}"
+        )
     return 0
 
 
