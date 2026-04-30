@@ -1,15 +1,15 @@
 # Engineer ↔ Subagent Bridge
 
-**Status: APPROVED (M3 design). Awaiting Mike's explicit sign-off in `08-implementation-plan.md` § M3 checkpoint before M4 implementation begins.**
+**Status: APPROVED-WITH-REVISIONS (M3 design, 2026-04-30). Awaiting Mike's final sign-off in `08-implementation-plan.md` § M3 checkpoint before M4 implementation begins.**
 
-This document was a stub during the kickoff package; M3 finalizes it. The constraints are unchanged from the stub except where M2 made them concrete (see Constraint 10). The decision sections, lifecycle spec, sequence diagrams, storage shape, and timeout behavior are all new at M3.
+This document was a stub during the kickoff package; M3 finalizes it. The constraints are unchanged from the stub except where M2 made them concrete (see Constraint 10). The decision sections, lifecycle spec, sequence diagrams, storage shape, and timeout behavior are all new at M3. Revisions following the M3 review (canonical-clone merge model, continuous-mode PM heartbeat watchdog, schema and timeout corrections) are folded in throughout.
 
 ## Decision summary
 
 - **Subprocess model:** **Option A — Claude Code subprocess.** Subscription-inherited, parallel-friendly, the natural fit for the Phase 1 cost model. Other options were considered and rejected; rationale below.
 - **Result delivery:** **Path 3 — MCP-tool completion.** Sub-agent calls `complete_dispatch(...)` to deliver structured output through the same MCP channel it already uses for `record_api_call`. No stdout parsing.
 - **Auth:** Per-dispatch static token issued via the keyring `TokenStore` (the dual-source auth shipped at M2). Token is `source="static"`, scoped to the dispatch's role, revoked on terminal state.
-- **Working-directory isolation:** Per-dispatch `git worktree` against per-dispatch branch (`dispatch/<dispatch_id>`) under a daemon-owned tree, separate from Mike's manual working tree. Merge protocol surfaces conflicts to Engineer → PM; PM escalates to Mike for manual resolution in Phase 1.
+- **Working-directory isolation:** Daemon owns its own substrate clone at `<MERIDIAN_ORCH_DATA_DIR>/substrate-canonical/`, kept current with the upstream remote. Per-dispatch `git worktree` adds a fresh branch (`dispatch/<dispatch_id>`) off `substrate-canonical/main`. On `complete_dispatch(status='completed')`, daemon attempts `git merge --ff-only` into `substrate-canonical/main` and pushes to upstream. Mike's manual working tree at `meridian-homepoc/` is **never touched directly**; it stays current via Mike's own `git pull` against the same upstream. Merge conflicts surface to Engineer → PM as `question`-urgency; rollback is a PM-submitted revert task that flows through the same dispatch cycle.
 - **Continuous-mode PM:** Same subprocess infrastructure (Claude Code subprocess, static MCP token, structured output via tool calls). Lifecycle owner is the daemon's `PMSupervisor`, not Engineer. Coordinates with the interactive PM (Mike's Claude Code session) via `pm_mode_log` reads on each planning iteration.
 
 ## Constraints (load-bearing)
@@ -109,14 +109,60 @@ This design intentionally does **not** issue OAuth-flow tokens for dispatches. D
 
 ### Working-directory model
 
-Per-dispatch worktrees prevent concurrent subprocesses from stomping each other.
+The bridge owns a **canonical clone** of the substrate at `<MERIDIAN_ORCH_DATA_DIR>/substrate-canonical/`. Per-dispatch worktrees branch from this canonical clone, never from Mike's manual working tree at `C:\Users\mbgol\dev\meridian-homepoc\`. Completed dispatches auto-merge into the canonical clone's `main` and push to the same upstream Mike's working tree pulls from. Mike's working tree stays current via Mike's own `git pull`; the daemon never reads or writes Mike's working tree.
 
-- **Worktree path:** `<MERIDIAN_ORCH_DATA_DIR>/dispatch-worktrees/<dispatch_id>/`
-- **Branch:** `dispatch/<dispatch_id>`, branched from the substrate's main HEAD at dispatch time (`git -C <substrate> worktree add -b dispatch/<id> <worktree_path>`)
-- **Substrate path:** read from `projects.working_directory` for the project the parent task belongs to; defaults to `C:\Users\mbgol\dev\meridian-homepoc\` per the M1 seed
-- **Subprocess cwd:** the worktree path, not the substrate's primary working tree — keeps Mike's manual work uncontaminated
-- **Merge protocol on completion:** daemon attempts `git merge --ff-only dispatch/<id>` against substrate main. On conflict (overlap with main commits since dispatch start), daemon records `merge_conflict=true` on the dispatch result. Engineer surfaces to PM; PM decides whether to re-dispatch with rebased base or escalate to Mike via `notify_human(urgency="question")`. Phase 1 has no automated conflict resolution.
-- **Cleanup on terminal state:** worktree removed (`git worktree remove --force`) and branch deleted unless `keep_worktree_on_failure` is set (debug aid). Default is to clean up regardless of outcome.
+This separation is load-bearing. Concurrent automated dispatches into Mike's working tree would race with his manual edits, branch operations, and IDE state. The canonical clone is the daemon's playground; Mike's working tree is his.
+
+#### Layout
+
+```
+<MERIDIAN_ORCH_DATA_DIR>/
+├── substrate-canonical/           # daemon-owned clone of meridian-homepoc upstream
+│   ├── .git/                      # full clone, tracking origin/main
+│   └── ... working tree ...       # daemon's "main" working copy; never edited directly
+└── dispatch-worktrees/
+    ├── <dispatch_id_A>/           # `git worktree add -b dispatch/<A> <path> origin/main`
+    └── <dispatch_id_B>/           # parallel-safe; each worktree on its own branch
+```
+
+#### Substrate-canonical lifecycle
+
+- **First daemon startup:** if `substrate-canonical/` does not exist, daemon clones from upstream (`git clone <upstream_url> substrate-canonical`). Upstream URL is read from the substrate project's git remote at `projects.working_directory` — i.e., the daemon inspects Mike's working tree's `origin` once at provisioning time, then operates against that upstream directly.
+- **Before each dispatch:** daemon does `git -C substrate-canonical fetch origin && git -C substrate-canonical merge --ff-only origin/main` to stay current with anything Mike or other automation pushed since the last dispatch. If fast-forward fails (canonical has diverged from upstream — should never happen since daemon's the only writer), daemon emits `dispatch.canonical_diverged` audit event, halts the dispatch, surfaces as `urgent` to PM. Manual operator recovery; not auto-healed.
+- **No daemon edits to canonical's working tree.** The daemon only `fetch`/`merge --ff-only`/`push` against canonical. Edits happen in worktrees off canonical, then merge back via `--ff-only`.
+
+#### Per-dispatch worktree
+
+- **Path:** `<MERIDIAN_ORCH_DATA_DIR>/dispatch-worktrees/<dispatch_id>/`
+- **Branch:** `dispatch/<dispatch_id>`, created by `git -C substrate-canonical worktree add -b dispatch/<id> <worktree_path> origin/main` at dispatch time.
+- **Subprocess cwd:** the worktree path. The Claude Code subprocess sees a clean checkout of upstream main, makes its edits, commits to the dispatch branch (Implementer's job is to land at least one commit; commit hash is reported via `complete_dispatch`).
+
+#### Merge protocol on completion
+
+On `complete_dispatch(status='completed', commit_hash=<sha>)`:
+
+1. Daemon refreshes canonical: `git -C substrate-canonical fetch origin && git -C substrate-canonical merge --ff-only origin/main`. If a non-ff is required here, see § Merge conflicts below.
+2. Daemon attempts to merge the dispatch branch into canonical's `main` via `git -C substrate-canonical merge --ff-only dispatch/<id>`. The `--ff-only` flag makes this safe: if upstream has moved since the worktree was branched, the merge fails cleanly without creating a merge commit on top of stale state.
+3. On `--ff-only` success: daemon pushes canonical's `main` to upstream (`git -C substrate-canonical push origin main`). Audit `dispatch.merged` with the new upstream HEAD.
+4. On `--ff-only` failure (upstream advanced): daemon does **not** auto-rebase. It records `merge_conflict_files_json` and `dispatch.merge_conflict`, leaves the dispatch branch in canonical (cleanup deferred until conflict-resolution decision), surfaces to Engineer → PM. PM decides: re-dispatch with rebased base (which gets a fresh worktree off the new `origin/main`), or escalate to Mike. No automated rebase.
+5. The previous `dispatch/<id>` branch and its worktree are removed (`git worktree remove --force` + `git branch -D dispatch/<id>`) once the dispatch reaches a terminal state — *unless* `keep_worktree_on_failure` is set (see below).
+
+#### Merge conflicts
+
+Two distinct conflict surfaces:
+
+- **`origin/main` advanced during dispatch.** The dispatch branch can no longer fast-forward into canonical's main. Common case: parallel dispatches landed first, or Mike pushed something. Recovery: PM re-submits the same task with a fresh worktree off the new `origin/main`. Engineer dispatches; the second attempt typically merges cleanly.
+- **Genuine semantic conflict.** Two parallel dispatches edited the same file. The dispatch graph should have caught this and serialized them; if it didn't, the second-merging dispatch fails `--ff-only`. Recovery: same as above — PM re-submits with a fresh base. The dispatch graph logic gets a follow-up to refine the conflict-detection heuristics.
+
+In both cases, the conflicting paths are stored in `dispatches.merge_conflict_files_json` (a JSON array of paths) so PM can reason about scope.
+
+#### Rollback
+
+Phase 1 has no `dispatch.revert` tool or daemon-driven rollback. Rollback is a normal PM action: PM submits a task whose description is "revert commit `<sha>` from substrate" with appropriate context; Engineer claims; Engineer dispatches Implementer with the spec "git revert `<sha>`, push, commit hash `<new_sha>`"; Implementer's `complete_dispatch` reports success; daemon merges and pushes via the same protocol. Audit chain preserved.
+
+#### Cleanup on terminal state
+
+Worktree removed and branch deleted on every terminal state by default — `completed`, `declined`, `failed`, `timed_out`, `cancelled`. The `keep_worktree_on_failure` per-dispatch flag (see § keep_worktree_on_failure flag) overrides this for non-`completed` terminal states only; even when set, daemon **always** cleans up worktrees on service restart to prevent orphan accumulation.
 
 ### Lifecycle state machine
 
@@ -165,6 +211,8 @@ hard_timeout_seconds = max(estimated_tokens / model_throughput_tps, 300)
 - `300` is a 5-minute floor — even tiny dispatches get five minutes to start up, authenticate, and call `complete_dispatch`.
 - Configurable per-dispatch via an optional `timeout_override_seconds` field on `dispatch_implementer` / `dispatch_tester` for cases where Engineer knows a specific dispatch will run long (e.g., a Playwright suite that legitimately takes 20 minutes).
 
+**Calibration note (M4 follow-up).** The tps constants above are starting estimates pending empirical correction. M4 integration tests run at least one real dispatch each on Sonnet and Opus, measure observed tokens-per-second from the `record_api_call` event stream and the dispatch's `started_at` / `completed_at` timestamps, and update `bridge/timeouts.py` with corrected values before M5 closes. If M4 lands without the calibration, the bridge spec opens a queue item titled "Calibrate model_throughput_tps from observed dispatch data" with priority 2; the queue item must be resolved before M5 acceptance.
+
 #### Soft warning
 
 If 120 seconds elapse since the dispatch's last `record_api_call` (`dispatches.last_activity_at`) **and** `actual_tokens_so_far < estimated_tokens * 0.8`, log `dispatch.soft_warning` with the dispatch_id, idle seconds, and remaining budget. No process action; this is observability for Engineer and PM to consult via `get_dispatch_status`.
@@ -205,10 +253,13 @@ Per-dispatch lifecycle writes the following `audit_log` rows. All rows include `
 | `dispatch.last_activity` | Each `record_api_call` from the dispatch | `model`, `input_tokens`, `output_tokens` |
 | `dispatch.soft_warning` | 2 minutes since last activity, budget remaining | `idle_seconds`, `tokens_used_so_far`, `tokens_estimated` |
 | `dispatch.complete_called` | Subprocess calls `complete_dispatch` | full `CompleteDispatchInput` payload |
-| `dispatch.timeout` | Hard timeout fires | `elapsed_seconds`, `record_api_call_count` |
-| `dispatch.token_revoked` | `TokenStore.revoke` returns | `token_id`, `reason` (`completed`, `declined`, `failed`, `timeout`, `cancelled`) |
-| `dispatch.subprocess_terminated` | Process exit captured | `exit_code`, `signal`, `total_elapsed_seconds` |
+| `dispatch.timeout` | Hard timeout fires (sub-agent dispatches) | `elapsed_seconds`, `record_api_call_count` |
+| `dispatch.heartbeat_timeout` | Continuous-mode PM idle > 30 min | `idle_seconds`, `last_tool_called` |
+| `dispatch.token_revoked` | `TokenStore.revoke` returns | `token_id`, `reason` (`completed`, `declined`, `failed`, `timeout`, `heartbeat_timeout`, `cancelled`) |
+| `dispatch.subprocess_terminated` | Process exit captured | `exit_code`, `signal`, `total_elapsed_seconds`, `worktree_retained` |
+| `dispatch.merged` | Dispatch branch fast-forwarded into canonical main and pushed | `branch`, `new_upstream_head` |
 | `dispatch.merge_conflict` | Worktree merge into main fails | `branch`, `conflicting_files` |
+| `dispatch.canonical_diverged` | Canonical clone has diverged from upstream (should never happen) | `canonical_head`, `upstream_head` |
 
 The chain from `task.submit` → `task.claim` → `dispatch.issued` → ... → `dispatch.subprocess_terminated` → `task.status_change` is the load-bearing audit trail Mike inspects via `get_audit_log` to reconstruct the cycle.
 
@@ -217,7 +268,7 @@ The chain from `task.submit` → `task.claim` → `dispatch.issued` → ... → 
 A new `dispatches` table ships at M4. This is *not* an `ALTER TABLE tasks` extension because dispatches have multiple-per-task semantics (one task can spawn multiple dispatches across retries or staged execution).
 
 ```sql
--- Migration 0005_dispatches.sql at M4 (numbering after 0001-0004 already planned)
+-- Migration 0005_dispatches.sql at M4 (after 0002_task_planning.sql, also at M4)
 
 CREATE TABLE dispatches (
     id TEXT PRIMARY KEY,
@@ -231,6 +282,8 @@ CREATE TABLE dispatches (
     estimated_tokens INTEGER,
     actual_tokens INTEGER,
     timeout_seconds INTEGER NOT NULL,
+    timeout_override_seconds INTEGER,            -- per-dispatch override of the calculated default
+    keep_worktree_on_failure INTEGER NOT NULL DEFAULT 0,  -- debug flag, see § keep_worktree_on_failure
     token_id TEXT,                               -- the keyring token_id (NEVER the secret)
     subprocess_pid INTEGER,
     issued_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -238,6 +291,7 @@ CREATE TABLE dispatches (
     last_activity_at TEXT,
     completed_at TEXT,
     timed_out_at TEXT,
+    merge_conflict_files_json TEXT,              -- JSON array of conflicting paths; NULL when no conflict
     artifacts_json TEXT,
     test_results_json TEXT,
     queue_items_raised_json TEXT,
@@ -251,6 +305,18 @@ CREATE INDEX idx_dispatches_role_status ON dispatches(role, status);   -- contin
 
 The `token_id` column stores the keyring `token_id` (the short hex prefix), not the full token string. The full token never persists to SQLite — only to keyring's hashed record.
 
+**M4 ships two migrations sequentially: `0002_task_planning.sql` (the existing planned migration adding `tasks.estimated_tokens` and `tasks.actual_tokens`) and `0005_dispatches.sql` (the new dispatches table from this spec).** They apply in numeric order on a fresh start. The reservation gap (`0003_pm_mode.sql` ships at M5; `0004_notifications.sql` ships at M6) is intentional and matches the existing migration plan in `05-data-model.md`. The migrations are independent — `0005_dispatches.sql` does not reference any column or table that `0003`/`0004` add — so out-of-ship-order numbering is functionally safe. M4 integration tests run with both 0002 and 0005 applied, and the dispatch lifecycle tests in particular exercise the new columns without depending on `pm_mode_log` or notification tables.
+
+### `keep_worktree_on_failure` flag
+
+A debug aid for investigating failed or declined dispatches. Default behavior cleans up the worktree on every terminal state (see § Cleanup on terminal state above). When the flag is set, the worktree and dispatch branch are preserved on **non-completed** terminal states (`failed`, `declined`, `timed_out`, `cancelled`) so the operator can inspect the partial state.
+
+- **Default:** `false` (clean up unconditionally).
+- **Configuration:** per-dispatch field `keep_worktree_on_failure: bool = False` on `DispatchImplementerInput` / `DispatchTesterInput`. Engineer sets it when dispatching for diagnostic purposes; not in the normal hot path.
+- **Cleanup on `completed`:** worktree and branch always removed regardless of flag — there's no diagnostic value in keeping a worktree whose work successfully merged.
+- **Cleanup on service restart:** daemon **always** cleans up worktrees on startup, even when the flag is set. This prevents orphan accumulation across daemon crashes/restarts. If the operator wants to inspect a dispatch's worktree, the inspection must happen between the dispatch reaching its terminal state and the next daemon restart.
+- **Audit:** `dispatch.subprocess_terminated` includes a `worktree_retained: bool` field so the audit log records whether cleanup ran.
+
 ### Continuous-mode PM specifics
 
 The continuous-mode PM uses the same subprocess infrastructure with different lifecycle semantics:
@@ -261,13 +327,33 @@ The continuous-mode PM uses the same subprocess infrastructure with different li
 | Subprocess command | `claude -p <spec>` | `claude -p <pm_continuous_prompt>` |
 | Working directory | Per-dispatch git worktree under data dir | `<MERIDIAN_ORCH_DATA_DIR>/pm-continuous/` (no git, no worktree) |
 | Token role | `implementer` or `tester` | `pm` (with `label="pm-continuous"` to distinguish from interactive PM tokens) |
-| Hard timeout | `max(estimated_tokens / tps, 300s)` per dispatch | None — long-lived |
+| Hard timeout | `max(estimated_tokens / tps, 300s)` per dispatch | None — long-lived; replaced by heartbeat watchdog (see below) |
 | Result delivery | `complete_dispatch` MCP tool | No completion call. PM stays alive; signals state via `set_pm_mode` and enqueues work via `submit_task` |
-| Termination | On `complete_dispatch` or hard timeout | Daemon shutdown, or admin command |
+| Termination | On `complete_dispatch` or hard timeout | Daemon shutdown, admin command, or heartbeat-watchdog respawn |
 | Coordination | None with other dispatches | Reads `pm_mode_log` on each iteration to detect Mike's interactive presence; pauses dispatch when mode is `interactive` |
 | Audit row source | `dispatches` table | `dispatches` table with `role='pm-continuous'`, but most state is in `pm_mode_log` and the task queue |
 
 Engineer does **not** dispatch the continuous PM and does **not** directly coordinate with it. The two communicate exclusively through the database — task queue, `pm_mode_log`, and audit log. Engineer reads the queue and claims tasks regardless of which PM instance enqueued them; the continuous PM submits tasks the same way the interactive PM does.
+
+#### Heartbeat watchdog
+
+The continuous PM has no natural completion signal — by design, it runs until daemon shutdown. That creates a hung-subprocess hazard: a continuous PM that wedges on a stuck model call has no automatic recovery without operator intervention. The heartbeat watchdog closes that gap.
+
+**Expected cadence.** The continuous PM is expected to make at least one MCP call (any tool — `get_window_state`, `get_queue`, `record_api_call`, `submit_task`, `set_pm_mode`) within every **15-minute** window during normal operation. Each MCP call updates `dispatches.last_activity_at` for the `role='pm-continuous'` dispatch row, the same column used for sub-agent dispatch tracking.
+
+**Watchdog logic.** `PMSupervisor` checks `last_activity_at` every 60 seconds. If `now - last_activity_at > 30 minutes`, the continuous PM subprocess is presumed hung:
+
+1. Audit `dispatch.heartbeat_timeout` with `idle_seconds`, `last_tool_called`, and the dispatch_id.
+2. Standard timeout sequence: SIGTERM the subprocess, 10-second grace period, SIGKILL if still alive.
+3. `TokenStore.revoke(token_id)`. Audit `dispatch.token_revoked` with `reason='heartbeat_timeout'`.
+4. Audit `dispatch.subprocess_terminated` with exit code (or signal).
+5. Mark the dispatch row `status='timed_out'`, `timed_out_at=now()`.
+6. **Immediately respawn** a fresh continuous-mode PM subprocess (new dispatch_id, new token, new subprocess). The new instance reads `pm_mode_log` and the queue from scratch — no in-memory state to migrate. Audit a fresh `dispatch.issued` chain.
+7. If three respawns occur within an hour, `PMSupervisor` halts further respawns and surfaces `urgent`-urgency to Mike via `notify_human` (operator must investigate; auto-respawn alone isn't a fix for a deeper bug).
+
+**Why 15-minute expected cadence and 30-minute timeout.** The continuous PM's normal loop polls `pm_mode_log`, `get_window_state`, and the queue every few minutes; even when paused (`mode=interactive`), it should continue polling to detect when Mike's session ends. A 15-minute expected cadence gives generous slack for slow model calls; a 30-minute timeout (2× the expected cadence) is the unambiguous "hung" threshold. Both are configurable via `MERIDIAN_ORCH_PM_HEARTBEAT_EXPECTED_SECONDS` (default 900) and `MERIDIAN_ORCH_PM_HEARTBEAT_TIMEOUT_SECONDS` (default 1800).
+
+**Distinct from hard timeout.** Sub-agent dispatches use the `max(estimated_tokens / tps, 300s)` hard timeout; the continuous PM uses heartbeat-only because it has no estimated-tokens budget to bound on. The audit action `dispatch.heartbeat_timeout` is distinct from `dispatch.timeout` so the audit log distinguishes "ran too long for its budget" from "stopped responding."
 
 ## Sequence diagrams
 
@@ -392,7 +478,12 @@ PMSupervisor.launch:
 
 [Mike opens his interactive Claude Code session]
   Mike's first MCP call to the orchestrator:
-    Daemon's auth context detects Mike's token (role=pm, label!='pm-continuous')
+    Daemon's auth context resolves the bearer token via TokenStore.lookup; the
+    resolved TokenRecord has source='oauth', role='pm' (Mike's interactive
+    token; OAuth-issued at M2 onboarding via Claude Code's loopback flow).
+    The (source='oauth', role='pm') tuple is the unambiguous signal of Mike's
+    interactive presence — distinct from the continuous-mode PM, whose token
+    is source='static', role='pm', label='pm-continuous'.
     Daemon writes pm_mode_log: mode='interactive', triggered_by='mike_message'
   Continuous PM's next loop iteration: reads pm_mode_log, sees interactive, pauses dispatch
 
@@ -400,12 +491,25 @@ PMSupervisor.launch:
   Daemon writes pm_mode_log: mode='continuous', triggered_by='mike_inactivity_timeout'
   Continuous PM resumes dispatch on next iteration
 
+[Heartbeat watchdog respawn — see § Heartbeat watchdog]
+  PMSupervisor checks dispatches.last_activity_at every 60s.
+  If now - last_activity_at > 30 minutes:
+    [audit heartbeat_timeout idle_seconds=N last_tool_called=<tool>]
+    SIGTERM, 10s grace, SIGKILL. TokenStore.revoke(token_PM).
+    [audit token_revoked reason='heartbeat_timeout', subprocess_terminated]
+    Mark dispatch row status='timed_out'.
+    Immediately respawn: new dispatch_id, new token, fresh subprocess.
+    [audit dispatch.issued chain for the new instance]
+  Three respawns within an hour: halt; notify_human(urgency='urgent', ...).
+
 [Daemon shutdown]
   PMSupervisor.terminate:
     SIGTERM continuous PM subprocess; 10s grace; SIGKILL if alive
     TokenStore.revoke(token_PM)
     [audit subprocess_terminated, token_revoked]
 ```
+
+**Auth-source distinction recap.** The interactive PM (Mike) authenticates via OAuth (`source='oauth'`); the continuous PM authenticates via a daemon-issued static token (`source='static'`). The daemon's auto-flip of `pm_mode_log` to `interactive` is gated on `(source='oauth', role='pm')` — checking source rather than label means the distinction is enforced at the auth layer, not by string matching on a label that an attacker (or a future operator who renames a token's label) could forge. This relies on M2's `TokenRecord.source` being load-bearing: the daemon trusts that field, and it is set at issuance time only by the OAuth provider (`source='oauth'`) or by the static-token CLI (`source='static'`). Neither path lets the caller specify the source.
 
 ### 5. Timeout / abandonment
 
@@ -452,16 +556,21 @@ The M4 milestone implements the bridge per this spec. Concrete deliverables:
 
 - `src/meridian_orchestrator/bridge/__init__.py`
 - `src/meridian_orchestrator/bridge/dispatcher.py` — `BridgeDispatcher` class for Engineer-driven dispatches
-- `src/meridian_orchestrator/bridge/pm_supervisor.py` — `PMSupervisor` class for continuous-mode PM lifecycle
-- `src/meridian_orchestrator/bridge/worktree.py` — git worktree provisioning + merge protocol
-- `src/meridian_orchestrator/bridge/timeouts.py` — `model_throughput_tps` table + timeout calculation
-- `src/meridian_orchestrator/storage/sql/0005_dispatches.sql` — schema per § Storage shape
+- `src/meridian_orchestrator/bridge/pm_supervisor.py` — `PMSupervisor` class for continuous-mode PM lifecycle (includes the heartbeat watchdog)
+- `src/meridian_orchestrator/bridge/canonical.py` — provisioning and `fetch`/`merge --ff-only`/`push` operations on `<data_dir>/substrate-canonical/`
+- `src/meridian_orchestrator/bridge/worktree.py` — git worktree provisioning, dispatch-branch lifecycle, and the `--ff-only` merge protocol
+- `src/meridian_orchestrator/bridge/timeouts.py` — `model_throughput_tps` table + timeout calculation. Constants are starting estimates; M4 integration tests measure observed tps for at least one real Sonnet dispatch and one real Opus dispatch and update this file before M5 closes (queue item raised if not addressed).
+- `src/meridian_orchestrator/storage/sql/0002_task_planning.sql` — pre-existing planned migration; ships at M4 with this work
+- `src/meridian_orchestrator/storage/sql/0005_dispatches.sql` — schema per § Storage shape; ships at M4 alongside 0002
 - `src/meridian_orchestrator/tools/dispatch.py` — `dispatch_implementer`, `dispatch_tester`, `get_dispatch_status`, `get_dispatch_result`, **and the new `complete_dispatch` tool**
 - Tests:
-  - Unit: timeout calculation, state machine transitions, decline propagation, audit log emission, token revocation on each terminal state
-  - Integration: full PM→Engineer→Implementer→Engineer→PM cycle with a real `meridian-homepoc` no-op task; parallel-dispatch scenario with two non-conflicting Implementers; merge-conflict scenario; timeout scenario
+  - Unit: timeout calculation (including override), heartbeat watchdog state transitions, all 7 dispatch lifecycle terminal states, decline propagation, audit log emission for all 13 actions, token revocation on each terminal state, `keep_worktree_on_failure` default and override behavior, `merge_conflict_files_json` population on conflict
+  - Integration: substrate-canonical provisioning on first daemon startup; full PM→Engineer→Implementer→Engineer→PM cycle with a real `meridian-homepoc` upstream and a no-op task; parallel-dispatch scenario with two non-conflicting Implementers ending in clean fast-forward merges; merge-conflict scenario where the second-merging dispatch fails `--ff-only` and surfaces conflicting files; timeout scenario; heartbeat-timeout-respawn scenario for the continuous PM
+  - Calibration: observed-tps measurement for Sonnet and Opus dispatches; `bridge/timeouts.py` updated before M5
 
-The M4 acceptance criteria in `08-implementation-plan.md` already enumerate what passes; this spec doesn't add to them.
+The migrations apply in numeric order: `0002_task_planning.sql` first (adding `tasks.estimated_tokens` and `tasks.actual_tokens`), then `0005_dispatches.sql` (creating the new table). Integration tests run with both applied. The reservation gap (`0003_pm_mode.sql` ships at M5; `0004_notifications.sql` ships at M6) is intentional and documented in `05-data-model.md`; the migrations are independent so out-of-ship-order numbering is functionally safe.
+
+The M4 acceptance criteria in `08-implementation-plan.md` already enumerate what passes; this spec adds the heartbeat-respawn integration test and the calibration deliverable.
 
 ## Cross-doc cleanup scope (deferred to a separate commit)
 
