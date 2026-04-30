@@ -82,7 +82,7 @@ async def _run() -> None:
         mcp_task = asyncio.create_task(serve_mcp(settings), name="mcp-server")
         logger.info(
             "startup.complete",
-            mcp_url=f"http://{settings.mcp_host}:{settings.mcp_port}/mcp",
+            mcp_url=f"https://{settings.mcp_host}:{settings.mcp_port}/mcp",
         )
         try:
             done, _ = await asyncio.wait(

@@ -17,6 +17,7 @@ Sketched in `docs/kickoff/12-phase-two-engineering-team.md`.
 - Lawyer, Accountant, Designer, Advisor agents (deferred indefinitely)
 - Multi-recipient Telegram notifications (Phase 1 is single-chat-id)
 - SAVEPOINT-based nested transactions in storage (Phase 1 has reentrant flat transactions)
+- Automated TLS cert renewal (Phase 1 generates a 365-day self-signed cert at first startup and only regenerates if the file is missing or expired; the operator must re-import the new cert into the OS trust store on regeneration. Phase 2 should add a renewal task that rotates the cert before expiry and a notification surface for the trust-store re-import step.)
 
 ## Open questions deferred to later milestones
 

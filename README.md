@@ -42,10 +42,44 @@ uv run python -m meridian_orchestrator.main
 ```
 
 The daemon connects to the DB, runs migrations, and starts the MCP server on
-`http://127.0.0.1:8765/mcp` (configurable via `MERIDIAN_ORCH_MCP_HOST` /
+`https://127.0.0.1:8765/mcp` (configurable via `MERIDIAN_ORCH_MCP_HOST` /
 `MERIDIAN_ORCH_MCP_PORT`). It refuses non-loopback bind addresses unless
 `MERIDIAN_ORCH_MCP_ALLOW_NON_LOOPBACK=true` is set explicitly. Shuts down
 cleanly on SIGTERM / SIGINT / SIGBREAK.
+
+## TLS
+
+Claude Desktop's MCP connector UI rejects `http://` URLs, so the daemon serves
+Streamable-HTTP over TLS. On first startup it generates a self-signed cert
+under `~/.meridian-orchestrator/certs/`:
+
+```
+certs/
+├── server.crt   # PEM-encoded cert (CN=meridian-orchestrator-local, RSA-2048, SHA-256, 365-day validity)
+└── server.key   # PKCS8 private key, owner-only ACL
+```
+
+The cert's SHA-256 fingerprint is logged at every startup (`event=tls.cert_loaded`).
+The cert is regenerated only when missing or expired; Phase 1 has no automated
+renewal (see `BACKLOG.md`).
+
+### Trusting the cert in Claude Desktop
+
+The first time you connect, Claude Desktop will warn that the cert is not
+trusted. Either:
+
+1. **Accept in-app** — if Claude Desktop offers a "trust this connection"
+   prompt, click through it. Easiest path; trust is scoped to that connector.
+2. **Import into Windows Trusted Root Certification Authorities** — fallback
+   if Claude Desktop refuses self-signed certs:
+   - Open `certmgr.msc` (Run → `certmgr.msc`).
+   - Navigate to `Trusted Root Certification Authorities` → `Certificates`.
+   - Right-click → `All Tasks` → `Import...`.
+   - Select `~/.meridian-orchestrator/certs/server.crt`.
+   - Confirm the security warning. Verify the SHA-256 fingerprint shown matches
+     the one logged at daemon startup.
+
+After regeneration (cert expiry or manual deletion), repeat the trust step.
 
 ## Issue an MCP token and connect Claude Desktop
 
@@ -60,8 +94,9 @@ uv run python scripts/revoke-token.py <token_id>
 
 `issue-token.py` prints the full token exactly once. Paste the value into
 Claude Desktop's MCP connector configuration as a Bearer credential against
-the URL `http://127.0.0.1:8765/mcp`. The `ping` tool round-trips and returns
-the resolved `agent_id` — first proof that the auth chain works.
+the URL `https://127.0.0.1:8765/mcp` (after trusting the cert per the TLS
+section above). The `ping` tool round-trips and returns the resolved
+`agent_id` — first proof that the auth chain works.
 
 ## Test
 
