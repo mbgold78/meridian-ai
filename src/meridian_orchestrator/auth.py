@@ -289,12 +289,27 @@ class TokenStore:
     def lookup_by_token_id(self, token_id: str) -> TokenRecord | None:
         """Look up a token record by id alone. Used by the OAuth provider when
         the framework gives it the access_token string to revoke; we strip the
-        id and call this for the lookup. Does not validate the secret."""
+        id and call this for the lookup. Does not validate the secret.
+
+        Returns the record even when revoked. Load-bearing for the dispatch
+        self-access pattern (Implementer reads its own dispatch result via
+        ``get_dispatch_result`` after the dispatcher has already revoked the
+        per-dispatch token in its terminal-state cleanup). Authorization checks
+        at the call site are responsible for validating ``revoked_at``; do
+        not filter revoked records here without auditing every caller.
+        """
         return self._read_record(token_id)
 
     def revoke(self, token_id: str) -> bool:
         """Mark a token revoked. Returns True if the record existed and was
-        flipped, False if the token_id was unknown or already revoked."""
+        flipped, False if the token_id was unknown or already revoked.
+
+        Forwards every metadata field on the original record. Earlier versions
+        defaulted ``source``/``client_id``/``expires_at`` on the rebuilt
+        record, which silently flipped a revoked OAuth token's source to
+        ``static`` — corrupting audit context for any downstream call that
+        inspected revoked records (the dispatch self-access path is one).
+        """
         record = self._read_record(token_id)
         if record is None or record.revoked_at is not None:
             return False
@@ -306,6 +321,9 @@ class TokenStore:
             secret_hash=record.secret_hash,
             issued_at=record.issued_at,
             revoked_at=_now_iso(),
+            source=record.source,
+            client_id=record.client_id,
+            expires_at=record.expires_at,
         )
         self._write_record(revoked)
         return True
