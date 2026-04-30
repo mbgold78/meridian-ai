@@ -273,7 +273,7 @@ A new `dispatches` table ships at M4. This is *not* an `ALTER TABLE tasks` exten
 CREATE TABLE dispatches (
     id TEXT PRIMARY KEY,
     task_id TEXT NOT NULL REFERENCES tasks(id),
-    role TEXT NOT NULL,                          -- 'implementer' | 'tester' | 'pm-continuous'
+    role TEXT NOT NULL,                          -- 'implementer' | 'tester' | 'pm-continuous' | 'engineer-supervisor'
     status TEXT NOT NULL DEFAULT 'queued',       -- queued | running | completed | declined | failed | timed_out | cancelled
     working_directory TEXT NOT NULL,
     spec_path TEXT,
@@ -300,7 +300,7 @@ CREATE TABLE dispatches (
 
 CREATE INDEX idx_dispatches_task ON dispatches(task_id);
 CREATE INDEX idx_dispatches_status ON dispatches(status);
-CREATE INDEX idx_dispatches_role_status ON dispatches(role, status);   -- continuous-mode PM lookup
+CREATE INDEX idx_dispatches_role_status ON dispatches(role, status);   -- continuous-mode PM and engineer-supervisor lookup
 ```
 
 The `token_id` column stores the keyring `token_id` (the short hex prefix), not the full token string. The full token never persists to SQLite — only to keyring's hashed record.
@@ -317,43 +317,45 @@ A debug aid for investigating failed or declined dispatches. Default behavior cl
 - **Cleanup on service restart:** daemon **always** cleans up worktrees on startup, even when the flag is set. This prevents orphan accumulation across daemon crashes/restarts. If the operator wants to inspect a dispatch's worktree, the inspection must happen between the dispatch reaching its terminal state and the next daemon restart.
 - **Audit:** `dispatch.subprocess_terminated` includes a `worktree_retained: bool` field so the audit log records whether cleanup ran.
 
-### Continuous-mode PM specifics
+### Long-running supervisors: continuous-mode PM and Engineer
 
-The continuous-mode PM uses the same subprocess infrastructure with different lifecycle semantics:
+Two long-running supervisor subprocesses share infrastructure and lifecycle semantics: the continuous-mode PM (PMSupervisor-managed, `dispatches.role='pm-continuous'`) and the Engineer (EngineerSupervisor-managed, `dispatches.role='engineer-supervisor'`). Both are Claude Code subprocesses with daemon-issued static tokens; both use the heartbeat watchdog discipline below; neither has a hard timeout because neither is per-task. They differ in role responsibilities (PM does product/altitude reasoning, Engineer does technical decomposition and dispatch supervision) but the lifecycle plumbing is symmetric.
 
-| Aspect | Sub-agent dispatch (Engineer-driven) | Continuous-mode PM (PMSupervisor-driven) |
+| Aspect | Sub-agent dispatch (Engineer-driven) | Long-running supervisor (PMSupervisor or EngineerSupervisor) |
 |---|---|---|
-| Lifecycle owner | `bridge.dispatcher.BridgeDispatcher` | `bridge.pm_supervisor.PMSupervisor` |
-| Subprocess command | `claude -p <spec>` | `claude -p <pm_continuous_prompt>` |
-| Working directory | Per-dispatch git worktree under data dir | `<MERIDIAN_ORCH_DATA_DIR>/pm-continuous/` (no git, no worktree) |
-| Token role | `implementer` or `tester` | `pm` (with `label="pm-continuous"` to distinguish from interactive PM tokens) |
-| Hard timeout | `max(estimated_tokens / tps, 300s)` per dispatch | None — long-lived; replaced by heartbeat watchdog (see below) |
-| Result delivery | `complete_dispatch` MCP tool | No completion call. PM stays alive; signals state via `set_pm_mode` and enqueues work via `submit_task` |
+| Lifecycle owner | `bridge.dispatcher.BridgeDispatcher` | `bridge.pm_supervisor.PMSupervisor` (continuous PM) or `bridge.engineer_supervisor.EngineerSupervisor` (Engineer) |
+| Subprocess command | `claude -p <spec>` | `claude -p <continuous_pm_prompt>` (continuous PM) or `claude -p <engineer_prompt>` (Engineer) |
+| Working directory | Per-dispatch git worktree under data dir | `<MERIDIAN_ORCH_DATA_DIR>/pm-continuous/` or `<MERIDIAN_ORCH_DATA_DIR>/engineer/` (no git, no worktree) |
+| Token role | `implementer` or `tester` | `pm` with `label='pm-continuous'`, or `engineer` with `label='engineer-supervisor'` |
+| Hard timeout | `max(estimated_tokens / tps, 300s)` per dispatch | None — long-lived; heartbeat watchdog instead |
+| Result delivery | `complete_dispatch` MCP tool | No completion call. Supervisor stays alive; signals state via tool calls (`set_pm_mode` for PM, `update_task_status` for Engineer) |
 | Termination | On `complete_dispatch` or hard timeout | Daemon shutdown, admin command, or heartbeat-watchdog respawn |
-| Coordination | None with other dispatches | Reads `pm_mode_log` on each iteration to detect Mike's interactive presence; pauses dispatch when mode is `interactive` |
-| Audit row source | `dispatches` table | `dispatches` table with `role='pm-continuous'`, but most state is in `pm_mode_log` and the task queue |
+| Coordination | None with other dispatches | Reads `pm_mode_log` on each iteration (continuous PM pauses dispatch when `interactive`; Engineer prepends a one-time mode-flip context header on the next status update) |
+| Audit row source | `dispatches` table | `dispatches` table with `role='pm-continuous'` or `role='engineer-supervisor'` (single supervisor row per role, persistent across daemon lifetime barring respawn) |
 
 Engineer does **not** dispatch the continuous PM and does **not** directly coordinate with it. The two communicate exclusively through the database — task queue, `pm_mode_log`, and audit log. Engineer reads the queue and claims tasks regardless of which PM instance enqueued them; the continuous PM submits tasks the same way the interactive PM does.
 
 #### Heartbeat watchdog
 
-The continuous PM has no natural completion signal — by design, it runs until daemon shutdown. That creates a hung-subprocess hazard: a continuous PM that wedges on a stuck model call has no automatic recovery without operator intervention. The heartbeat watchdog closes that gap.
+Long-running supervisors (continuous PM and Engineer) have no natural completion signal — by design, they run until daemon shutdown. That creates a hung-subprocess hazard: a supervisor that wedges on a stuck model call has no automatic recovery without operator intervention. The heartbeat watchdog closes that gap. The discipline below applies to both `role='pm-continuous'` and `role='engineer-supervisor'` rows; the supervisor implementations (`PMSupervisor`, `EngineerSupervisor`) share the same watchdog code path.
 
-**Expected cadence.** The continuous PM is expected to make at least one MCP call (any tool — `get_window_state`, `get_queue`, `record_api_call`, `submit_task`, `set_pm_mode`) within every **15-minute** window during normal operation. Each MCP call updates `dispatches.last_activity_at` for the `role='pm-continuous'` dispatch row, the same column used for sub-agent dispatch tracking.
+**Expected cadence.** A long-running supervisor is expected to make at least one MCP call (any MCP tool the supervisor is permitted to call — for both supervisors: `get_window_state`, `get_queue`, `record_api_call`, `claim_task`, `update_task_status`; PM-continuous additionally: `set_pm_mode`, `submit_task`; engineer-supervisor additionally: `dispatch_implementer`, `dispatch_tester`, `get_dispatch_status`, `get_dispatch_events`, etc.) within every **15-minute** window during normal operation. Each MCP call updates `dispatches.last_activity_at` for the supervisor's dispatch row, the same column used for sub-agent dispatch tracking.
 
-**Watchdog logic.** `PMSupervisor` checks `last_activity_at` every 60 seconds. If `now - last_activity_at > 30 minutes`, the continuous PM subprocess is presumed hung:
+**Watchdog logic.** The supervisor checks `last_activity_at` every 60 seconds. If `now - last_activity_at > 30 minutes`, the supervisor subprocess is presumed hung:
 
 1. Audit `dispatch.heartbeat_timeout` with `idle_seconds`, `last_tool_called`, and the dispatch_id.
 2. Standard timeout sequence: SIGTERM the subprocess, 10-second grace period, SIGKILL if still alive.
 3. `TokenStore.revoke(token_id)`. Audit `dispatch.token_revoked` with `reason='heartbeat_timeout'`.
 4. Audit `dispatch.subprocess_terminated` with exit code (or signal).
 5. Mark the dispatch row `status='timed_out'`, `timed_out_at=now()`.
-6. **Immediately respawn** a fresh continuous-mode PM subprocess (new dispatch_id, new token, new subprocess). The new instance reads `pm_mode_log` and the queue from scratch — no in-memory state to migrate. Audit a fresh `dispatch.issued` chain.
-7. If three respawns occur within an hour, `PMSupervisor` halts further respawns and surfaces `urgent`-urgency to Mike via `notify_human` (operator must investigate; auto-respawn alone isn't a fix for a deeper bug).
+6. **Immediately respawn** a fresh supervisor subprocess (new dispatch_id, new token, new subprocess). The new instance reconstructs state from the database — `pm_mode_log` and queue for continuous PM; `get_dispatch_status` and `get_recent_dispatches` for Engineer rebuilding its dispatch graph. No in-memory state to migrate. Audit a fresh `dispatch.issued` chain.
+7. If three respawns occur within an hour for the same role, the supervisor halts further respawns and surfaces `urgent`-urgency to Mike via `notify_human` (operator must investigate; auto-respawn alone isn't a fix for a deeper bug).
 
-**Why 15-minute expected cadence and 30-minute timeout.** The continuous PM's normal loop polls `pm_mode_log`, `get_window_state`, and the queue every few minutes; even when paused (`mode=interactive`), it should continue polling to detect when Mike's session ends. A 15-minute expected cadence gives generous slack for slow model calls; a 30-minute timeout (2× the expected cadence) is the unambiguous "hung" threshold. Both are configurable via `MERIDIAN_ORCH_PM_HEARTBEAT_EXPECTED_SECONDS` (default 900) and `MERIDIAN_ORCH_PM_HEARTBEAT_TIMEOUT_SECONDS` (default 1800).
+**Why 15-minute expected cadence and 30-minute timeout.** The continuous PM's normal loop polls `pm_mode_log`, `get_window_state`, and the queue every few minutes; even when paused (`mode=interactive`), it should continue polling to detect when Mike's session ends. Engineer's loop runs faster (claim → compose → dispatch → poll → write) but the cadence floor is the same — symmetry between supervisor types simplifies the watchdog. A 15-minute expected cadence gives generous slack for slow model calls; a 30-minute timeout (2× the expected cadence) is the unambiguous "hung" threshold. Configurable per supervisor type via `MERIDIAN_ORCH_PM_HEARTBEAT_EXPECTED_SECONDS` / `MERIDIAN_ORCH_PM_HEARTBEAT_TIMEOUT_SECONDS` (default 900 / 1800) and `MERIDIAN_ORCH_ENGINEER_HEARTBEAT_EXPECTED_SECONDS` / `MERIDIAN_ORCH_ENGINEER_HEARTBEAT_TIMEOUT_SECONDS` (same defaults).
 
-**Distinct from hard timeout.** Sub-agent dispatches use the `max(estimated_tokens / tps, 300s)` hard timeout; the continuous PM uses heartbeat-only because it has no estimated-tokens budget to bound on. The audit action `dispatch.heartbeat_timeout` is distinct from `dispatch.timeout` so the audit log distinguishes "ran too long for its budget" from "stopped responding."
+**Distinct from hard timeout.** Sub-agent dispatches use the `max(estimated_tokens / tps, 300s)` hard timeout; long-running supervisors use heartbeat-only because they have no estimated-tokens budget to bound on. The audit action `dispatch.heartbeat_timeout` is distinct from `dispatch.timeout` so the audit log distinguishes "ran too long for its budget" from "stopped responding."
+
+**Engineer-supervisor specifics.** Engineer's supervisor row is a single persistent row across daemon lifetime (modulo respawns). Engineer reconstructs its dispatch graph from `get_dispatch_status` (in-flight rows it owns) and `get_recent_dispatches` (recent history, for the substrate touch map cache) on every loop iteration — no in-memory dispatch graph survives across iterations. This is intentional: the database is the source of truth, respawns recover cleanly, and stale-state hazards are eliminated by design.
 
 ## Sequence diagrams
 
