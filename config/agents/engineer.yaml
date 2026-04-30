@@ -13,8 +13,10 @@
 id: null  # set by registry from keyring (token role='engineer')
 role: engineer
 display_name: Engineer
-reports_to: null  # resolved by registry to the seeded PM agent's id
-manages: []       # populated by registry once Implementer/Tester are seeded
+reports_to: pm
+manages:
+  - implementer
+  - tester
 model_tier_default: sonnet
 
 mcp_tools_allowed:

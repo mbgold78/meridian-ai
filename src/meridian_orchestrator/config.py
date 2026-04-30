@@ -53,3 +53,7 @@ class Settings(BaseSettings):
     @property
     def config_dir(self) -> Path:
         return self.data_dir / "config"
+
+    @property
+    def agents_dir(self) -> Path:
+        return self.data_dir / "config" / "agents"

@@ -38,10 +38,24 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import AnyHttpUrl, BaseModel
 
+from meridian_orchestrator.agents.permissions import PermissionResolver
+from meridian_orchestrator.agents.registry import AgentRegistry
 from meridian_orchestrator.auth import TokenStore
 from meridian_orchestrator.config import Settings
-from meridian_orchestrator.errors import AuthError
+from meridian_orchestrator.errors import AuthError, NotFoundError
+from meridian_orchestrator.errors import PermissionError as OrchestratorPermissionError
 from meridian_orchestrator.oauth import MeridianOAuthProvider, make_approval_routes
+from meridian_orchestrator.tools.agents import (
+    GetAgentConfigInput,
+    GetAgentConfigOutput,
+    GetOrgChartInput,
+    GetOrgChartOutput,
+    ListAgentsInput,
+    ListAgentsOutput,
+    get_agent_config,
+    get_org_chart,
+    list_agents,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -62,8 +76,19 @@ def _resolve_agent_id() -> str:
     return access.client_id
 
 
-def build_server(settings: Settings, store: TokenStore | None = None) -> FastMCP:
-    """Construct the FastMCP server with auth + the M2 tool set."""
+def build_server(
+    settings: Settings,
+    store: TokenStore | None = None,
+    registry: AgentRegistry | None = None,
+) -> FastMCP:
+    """Construct the FastMCP server with auth + the current tool set.
+
+    ``registry`` is the agent registry the M3+ tools (list_agents,
+    get_agent_config, get_org_chart) close over. If ``None``, those tools
+    return an empty universe — useful for M2-only smoke tests but not for
+    production. The ``serve()`` entry point passes a registry built and
+    started in the daemon lifespan.
+    """
     if not settings.mcp_allow_non_loopback and settings.mcp_host not in _LOOPBACK_HOSTS:
         raise ValueError(
             f"refusing to bind MCP server to non-loopback host {settings.mcp_host!r}; "
@@ -120,17 +145,86 @@ def build_server(settings: Settings, store: TokenStore | None = None) -> FastMCP
             server_time=datetime.now(tz=UTC).isoformat(timespec="seconds"),
         )
 
+    if registry is not None:
+        _register_agent_tools(mcp, registry)
+
     return mcp
 
 
-async def serve(settings: Settings, ready: asyncio.Event | None = None) -> None:
+def _resolve_caller_role(registry: AgentRegistry) -> str:
+    """Look up the caller's agent_id in the registry and return its role.
+
+    Raises :class:`AuthError` if the request context has no resolved agent
+    (no Bearer token); raises :class:`OrchestratorPermissionError` when the
+    agent_id resolves to no registered role (token issued but no YAML config
+    landed yet — orphan token state).
+    """
+    agent_id = _resolve_agent_id()
+    ra = registry.get_by_agent_id(agent_id)
+    if ra is None:
+        raise OrchestratorPermissionError(
+            f"caller agent_id={agent_id!r} not registered"
+        )
+    return ra.config.role
+
+
+def _register_agent_tools(mcp: FastMCP, registry: AgentRegistry) -> None:
+    """Register list_agents / get_agent_config / get_org_chart on ``mcp``.
+
+    Each tool checks the caller's per-tool allowlist via
+    :class:`PermissionResolver` against the current registry snapshot. The
+    snapshot is read fresh per call so hot-reloads take effect immediately.
+    """
+
+    @mcp.tool(
+        name="list_agents",
+        description="List registered agents. Optional filters by role and status.",
+    )
+    async def _list_agents(
+        role: str | None = None, status: str | None = None
+    ) -> ListAgentsOutput:
+        caller_role = _resolve_caller_role(registry)
+        resolver = PermissionResolver(registry.configs_by_role())
+        resolver.require_tool(caller_role, "list_agents")  # type: ignore[arg-type]
+        return list_agents(registry, ListAgentsInput(role=role, status=status))
+
+    @mcp.tool(
+        name="get_agent_config",
+        description="Return the public configuration of an agent (system_prompt excluded).",
+    )
+    async def _get_agent_config(agent_id: str) -> GetAgentConfigOutput:
+        caller_role = _resolve_caller_role(registry)
+        resolver = PermissionResolver(registry.configs_by_role())
+        resolver.require_tool(caller_role, "get_agent_config")  # type: ignore[arg-type]
+        result = get_agent_config(registry, GetAgentConfigInput(agent_id=agent_id))
+        if result is None:
+            raise NotFoundError(f"agent_id={agent_id!r} not found")
+        return result
+
+    @mcp.tool(
+        name="get_org_chart",
+        description="Return the management hierarchy as a nested tree rooted at PM.",
+    )
+    async def _get_org_chart() -> GetOrgChartOutput:
+        caller_role = _resolve_caller_role(registry)
+        resolver = PermissionResolver(registry.configs_by_role())
+        resolver.require_tool(caller_role, "get_org_chart")  # type: ignore[arg-type]
+        return get_org_chart(registry, GetOrgChartInput())
+
+
+async def serve(
+    settings: Settings,
+    ready: asyncio.Event | None = None,
+    registry: AgentRegistry | None = None,
+) -> None:
     """Run the MCP HTTP server until cancelled.
 
     Cancelling the awaiting task triggers a graceful uvicorn shutdown. Pass
     ``ready`` to be signalled once the listener is accepting connections (used
-    by the integration test).
+    by the integration test). Pass ``registry`` for M3+ tools; ``None`` keeps
+    the M2-only ``ping``-tool surface for tests that don't need agent state.
     """
-    mcp = build_server(settings)
+    mcp = build_server(settings, registry=registry)
     app = mcp.streamable_http_app()
     config = uvicorn.Config(
         app,
