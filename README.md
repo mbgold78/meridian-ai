@@ -9,7 +9,7 @@ Design documents live in `docs/kickoff/`. Read `00-README.md` first.
 ## Status
 
 - M1: Project skeleton + storage layer
-- M2: MCP server scaffolding + auth (pending)
+- M2: MCP server scaffolding + auth (`ping` tool over Streamable-HTTP, keyring-backed bearer tokens)
 - M3: Agent config loading + permission framework + bridge design (pending)
 - M4: Task management + subagent dispatch with parallel (pending)
 - M5: Budget & usage + window-aware planner + continuous-mode driver (pending)
@@ -41,7 +41,27 @@ Creates `${MERIDIAN_ORCH_DATA_DIR}/data/orchestrator.db` (default `~/.meridian-o
 uv run python -m meridian_orchestrator.main
 ```
 
-M1 is a no-op skeleton — connects to the DB, runs migrations, idles, exits cleanly on SIGTERM / SIGINT / SIGBREAK.
+The daemon connects to the DB, runs migrations, and starts the MCP server on
+`http://127.0.0.1:8765/mcp` (configurable via `MERIDIAN_ORCH_MCP_HOST` /
+`MERIDIAN_ORCH_MCP_PORT`). It refuses non-loopback bind addresses unless
+`MERIDIAN_ORCH_MCP_ALLOW_NON_LOOPBACK=true` is set explicitly. Shuts down
+cleanly on SIGTERM / SIGINT / SIGBREAK.
+
+## Issue an MCP token and connect Claude Desktop
+
+Tokens authenticate per-agent MCP connections. They live in the OS keychain
+(Windows Credential Manager on Mike's machine), not in the database or `.env`.
+
+```bash
+uv run python scripts/issue-token.py --role pm --label "mike-claude-desktop"
+uv run python scripts/list-tokens.py
+uv run python scripts/revoke-token.py <token_id>
+```
+
+`issue-token.py` prints the full token exactly once. Paste the value into
+Claude Desktop's MCP connector configuration as a Bearer credential against
+the URL `http://127.0.0.1:8765/mcp`. The `ping` tool round-trips and returns
+the resolved `agent_id` — first proof that the auth chain works.
 
 ## Test
 

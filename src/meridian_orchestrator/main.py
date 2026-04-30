@@ -1,13 +1,13 @@
 """Meridian Orchestrator daemon entry point.
 
-M1: clean startup/shutdown skeleton with no MCP server yet. Connects to storage,
-runs migrations, idles waiting for shutdown signal, exits cleanly. M2 adds the
-MCP server inside the same lifespan.
+Connects to storage, runs migrations, starts the MCP server, idles until a
+shutdown signal arrives, then drains cleanly.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import signal
 import sys
@@ -17,6 +17,7 @@ from contextlib import asynccontextmanager
 import structlog
 
 from meridian_orchestrator.config import Settings
+from meridian_orchestrator.server import serve as serve_mcp
 from meridian_orchestrator.storage.migrations import run_migrations
 from meridian_orchestrator.storage.sqlite import SqliteStorage
 
@@ -78,10 +79,28 @@ async def _run() -> None:
             signal.signal(signal.SIGBREAK, lambda *_: _on_signal())
 
     async with _lifespan(settings):
-        logger.info("startup.complete")
-        # M1: idle wait for shutdown. M2 adds MCP server.serve() here.
-        await shutdown.wait()
-        logger.info("shutdown.begin")
+        mcp_task = asyncio.create_task(serve_mcp(settings), name="mcp-server")
+        logger.info(
+            "startup.complete",
+            mcp_url=f"http://{settings.mcp_host}:{settings.mcp_port}/mcp",
+        )
+        try:
+            done, _ = await asyncio.wait(
+                {mcp_task, asyncio.create_task(shutdown.wait(), name="shutdown-wait")},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            for t in done:
+                if t.get_name() == "mcp-server":
+                    exc = t.exception()
+                    if exc is not None:
+                        logger.error("mcp.crashed", error=str(exc))
+                        raise exc
+            logger.info("shutdown.begin")
+        finally:
+            if not mcp_task.done():
+                mcp_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await mcp_task
 
     logger.info("shutdown.complete")
 

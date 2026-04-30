@@ -30,6 +30,10 @@ class Settings(BaseSettings):
     data_dir: Path = Field(default_factory=_default_data_dir)
     log_level: str = Field(default="INFO")
 
+    mcp_host: str = Field(default="127.0.0.1")
+    mcp_port: int = Field(default=8765, ge=1, le=65535)
+    mcp_allow_non_loopback: bool = Field(default=False)
+
     @property
     def db_path(self) -> Path:
         return self.data_dir / "data" / "orchestrator.db"

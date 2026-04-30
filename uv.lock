@@ -422,6 +422,7 @@ dependencies = [
     { name = "pydantic-settings" },
     { name = "pyyaml" },
     { name = "structlog" },
+    { name = "uvicorn" },
     { name = "watchfiles" },
 ]
 
@@ -444,6 +445,7 @@ requires-dist = [
     { name = "pydantic-settings", specifier = ">=2.2" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "structlog", specifier = ">=24.1" },
+    { name = "uvicorn", specifier = ">=0.30" },
     { name = "watchfiles", specifier = ">=0.21" },
 ]
 
