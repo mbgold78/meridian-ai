@@ -105,19 +105,24 @@ Mike: (a) edits `pm.yaml` to remove `get_dashboard_summary` from the allowlist, 
 - Migration `0002_task_planning.sql` — `ALTER TABLE tasks ADD COLUMN estimated_tokens INTEGER; ALTER TABLE tasks ADD COLUMN actual_tokens INTEGER;`
 - Task priority is first-class in the queue read paths (`get_queue` ordering on `(status, priority)`); the planner consumes priority + `estimated_tokens` for window-aware decisions starting M5
 - `audit/logger.py` — audit log writer wired into every state-changing tool
-- `bridge/` — implementation of the M3-approved bridge architecture, **including parallel concurrent dispatch with isolated working directories per dispatch and merge logic for landing parallel branches**
-- `tools/dispatch.py` — `dispatch_implementer`, `dispatch_tester`, `get_dispatch_status`, `get_dispatch_result`
-- Indexes verified via `EXPLAIN QUERY PLAN` on the queue read paths
-- Unit tests: happy path, validation errors, permission denial, not-found, conflict (double claim, illegal transition), **parallel dispatch (Engineer dispatches two non-conflicting Implementers concurrently, both complete, both branches merge cleanly), parallel dispatch with file-conflict (forced serialization)**
-- Integration test: full PM → Engineer → Implementer (real dispatch into `meridian-homepoc`) → Engineer → PM cycle, plus a parallel-dispatch scenario in the same `meridian-homepoc` working tree
+- `bridge/` — implementation of the M3-approved bridge architecture per `11-engineer-bridge.md`, **including parallel concurrent dispatch with isolated working directories per dispatch and merge logic for landing parallel branches**. Concrete modules: `bridge/dispatcher.py`, `bridge/pm_supervisor.py`, `bridge/engineer_supervisor.py`, `bridge/canonical.py`, `bridge/worktree.py`, `bridge/timeouts.py`
+- Migration `0005_dispatches.sql` — `dispatches` table per `11-engineer-bridge.md` § Storage shape, including the `engineer_decisions_json`, `actual_touched_files_json`, `merge_conflict_files_json` columns and the `idx_dispatches_role_completed` partial index
+- `tools/dispatch.py` — `dispatch_implementer`, `dispatch_tester`, `get_dispatch_status`, `get_dispatch_result`, **plus the bridge-spec-formalized M4 tool deltas: `complete_dispatch` (sub-agent → Engineer structured-output channel), `get_dispatch_events` (Engineer's polling subscription for in-flight audit events; subtree-scoped; schema in `11-engineer-bridge.md` § `get_dispatch_events` MCP tool), and `get_recent_dispatches` (Engineer's substrate touch map cache read path; PM's post-mortem queries; subtree-scoped; schema in `11-engineer-bridge.md` § `get_recent_dispatches` MCP tool)**
+- `DispatchImplementerInput` and `DispatchTesterInput` schemas extended with the `engineer_decisions: list[EngineerDecision] = []` field per `11-engineer-bridge.md` § `engineer_decisions` field. `dispatch.issued` audit row's `details_json` captures the full payload; sub-agent reads as constraints (no acknowledgment field)
+- Daemon populates `dispatches.actual_touched_files_json` from `git diff --name-only <commit>~1 <commit>` against the canonical clone post-`complete_dispatch` and post-`--ff-only` merge. NULL when no commit landed
+- Indexes verified via `EXPLAIN QUERY PLAN` on the queue read paths AND the `idx_dispatches_role_completed` partial index that backs Engineer's `get_recent_dispatches` scans
+- Unit tests: happy path, validation errors, permission denial, not-found, conflict (double claim, illegal transition), **parallel dispatch (Engineer dispatches two non-conflicting Implementers concurrently, both complete, both branches merge cleanly), parallel dispatch with file-conflict (forced serialization), `engineer_decisions` payload propagation through `dispatch.issued` audit details_json, `actual_touched_files_json` population after clean merge, `get_dispatch_events` and `get_recent_dispatches` hierarchy scoping (Engineer sees own subtree, PM sees full subtree, Implementer/Tester denied)**
+- Integration test: full PM → Engineer → Implementer (real dispatch into `meridian-homepoc`) → Engineer → PM cycle, plus a parallel-dispatch scenario in the same `meridian-homepoc` working tree, plus a substrate touch map cache E2E (Engineer dispatches Implementer; daemon populates touch set on completion; subsequent Engineer iteration reads via `get_recent_dispatches` and uses the touch set for parallelization)
 
 ### Acceptance
 
 - All unit tests pass
-- The integration test produces a real commit in `meridian-homepoc` (against a scratch branch or no-op task that touches only a sandbox file)
-- Audit log captures the full chain — Mike can query `get_audit_log` and reconstruct the dispatch
+- The integration test produces a real commit in `meridian-homepoc`'s upstream (via the daemon-owned canonical clone's push, against a scratch branch or no-op task that touches only a sandbox file)
+- Audit log captures the full chain — Mike can query `get_audit_log` and reconstruct the dispatch; Engineer can query `get_dispatch_events` for the same rows scoped to its own dispatches
+- Substrate touch map cache populates correctly: at least one Implementer dispatch lands a commit, `actual_touched_files_json` reflects the diff, and `get_recent_dispatches` returns the parsed list
 - Double-claim returns `CONFLICT`, not corruption
 - Role-mismatch claim returns `PERMISSION_DENIED`
+- Sub-agent dispatched without `engineer_decisions` constraints does not differ behaviorally from sub-agent dispatched with empty `engineer_decisions: []` (the field's absence is equivalent to its empty-list default; no NULL-vs-empty hazards)
 
 ### Checkpoint
 

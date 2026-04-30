@@ -242,11 +242,11 @@ On `hard_timeout_seconds` elapsed without `complete_dispatch` having been called
 
 ### Audit log entries
 
-Per-dispatch lifecycle writes the following `audit_log` rows. All rows include `dispatch_id` in `details_json`; per-event additional fields listed below.
+Per-dispatch lifecycle writes the following `audit_log` rows. All rows include `dispatch_id` in `details_json`; per-event additional fields listed below. The `get_dispatch_events` MCP tool (see § `get_dispatch_events` MCP tool below) returns the same rows that `get_audit_log` returns, filtered by `dispatch_id` — both tools read the same `audit_log` table; the difference is the filter shape and the hierarchy-scoping rules.
 
 | Action | When | Additional `details_json` fields |
 |---|---|---|
-| `dispatch.issued` | Engineer's `dispatch_*` MCP call validates and persists the dispatch row | `task_id`, `role`, `working_directory`, `spec_path`, `timeout_seconds` |
+| `dispatch.issued` | Engineer's `dispatch_*` MCP call validates and persists the dispatch row | `task_id`, `role`, `working_directory`, `spec_path`, `timeout_seconds`, `engineer_decisions` (full payload from the dispatch input) |
 | `dispatch.token_created` | `TokenStore.issue` returns | `token_id` (never the secret) |
 | `dispatch.subprocess_started` | `Process.launch` returns | `pid`, `command` (redacted of token), `cwd` |
 | `dispatch.mcp_authenticated` | First authenticated MCP call from the subprocess lands | `agent_id`, `first_tool_called` |
@@ -286,12 +286,14 @@ CREATE TABLE dispatches (
     keep_worktree_on_failure INTEGER NOT NULL DEFAULT 0,  -- debug flag, see § keep_worktree_on_failure
     token_id TEXT,                               -- the keyring token_id (NEVER the secret)
     subprocess_pid INTEGER,
+    engineer_decisions_json TEXT,                -- JSON array of altitude-1 decisions Engineer made composing the spec; see § engineer_decisions field
     issued_at TEXT NOT NULL DEFAULT (datetime('now')),
     started_at TEXT,
     last_activity_at TEXT,
     completed_at TEXT,
     timed_out_at TEXT,
     merge_conflict_files_json TEXT,              -- JSON array of conflicting paths; NULL when no conflict
+    actual_touched_files_json TEXT,              -- JSON array of file paths populated by daemon from `git diff --name-only` post-completion. NULL until completion. NULL if commit_hash is NULL (no commit means no touches). See § Substrate touch map cache
     artifacts_json TEXT,
     test_results_json TEXT,
     queue_items_raised_json TEXT,
@@ -301,6 +303,7 @@ CREATE TABLE dispatches (
 CREATE INDEX idx_dispatches_task ON dispatches(task_id);
 CREATE INDEX idx_dispatches_status ON dispatches(status);
 CREATE INDEX idx_dispatches_role_status ON dispatches(role, status);   -- continuous-mode PM and engineer-supervisor lookup
+CREATE INDEX idx_dispatches_role_completed ON dispatches(role, status, completed_at) WHERE status='completed';   -- Engineer's get_recent_dispatches scan for substrate touch map
 ```
 
 The `token_id` column stores the keyring `token_id` (the short hex prefix), not the full token string. The full token never persists to SQLite — only to keyring's hashed record.
@@ -316,6 +319,97 @@ A debug aid for investigating failed or declined dispatches. Default behavior cl
 - **Cleanup on `completed`:** worktree and branch always removed regardless of flag — there's no diagnostic value in keeping a worktree whose work successfully merged.
 - **Cleanup on service restart:** daemon **always** cleans up worktrees on startup, even when the flag is set. This prevents orphan accumulation across daemon crashes/restarts. If the operator wants to inspect a dispatch's worktree, the inspection must happen between the dispatch reaching its terminal state and the next daemon restart.
 - **Audit:** `dispatch.subprocess_terminated` includes a `worktree_retained: bool` field so the audit log records whether cleanup ran.
+
+### `engineer_decisions` field
+
+Engineer's altitude-1 reasoning lands in three layers per `engineer.yaml` § Altitude framework: work-logs (primary), structured decision metadata in dispatch specs (secondary), inline notes (tertiary). The secondary layer is implemented as the `engineer_decisions` field on the dispatch input schemas:
+
+```python
+class EngineerDecision(BaseModel):
+    decision: str                                 # one-line summary of the choice made
+    rationale: str                                # the "because Y" — factual, not defensive
+    alternatives_considered: list[str] | None = None  # other paths Engineer evaluated, optional
+
+class DispatchImplementerInput(BaseModel):
+    task_id: str
+    spec_path: str
+    working_directory: str
+    timeout_override_seconds: int | None = None
+    keep_worktree_on_failure: bool = False
+    engineer_decisions: list[EngineerDecision] = []
+
+class DispatchTesterInput(BaseModel):
+    task_id: str
+    commit_hash: str
+    working_directory: str
+    assertion_spec: str
+    timeout_override_seconds: int | None = None
+    keep_worktree_on_failure: bool = False
+    engineer_decisions: list[EngineerDecision] = []
+```
+
+The sub-agent reads `engineer_decisions` as constraints — Engineer made these calls when composing the spec, the sub-agent inherits them rather than re-deciding. No acknowledgment field; the audit trail is the `dispatch.issued` audit row's `details_json` (which captures the full `engineer_decisions` payload) plus Engineer's work-log "decisions made" section (which references the same decisions in human-readable prose).
+
+Engineer's prompt (`engineer.yaml`) instructs Engineer to write specs that are explicit about their inherited constraints — the sub-agent should never have to *guess* whether something is Engineer's call or its own to make. If the spec is ambiguous about ownership, that's a no-ambiguity-surface violation per Engineer's spec-writing rules; Engineer resolves before dispatch.
+
+### Substrate touch map cache
+
+The substrate touch map is the cache Engineer reads on every iteration to predict file overlap when composing parallel dispatches (per `engineer.yaml` § Parallel dispatch: balanced). The mechanism:
+
+1. **Population.** When a dispatch reaches `status='completed'` and the commit landed cleanly (`commit_hash IS NOT NULL` and `--ff-only` succeeded), the daemon runs `git diff --name-only <commit_hash>~1 <commit_hash>` against the canonical clone, parses the output as a list of paths, and writes the JSON-encoded list to `dispatches.actual_touched_files_json` for the dispatch row.
+2. **Read path.** Engineer queries via `get_recent_dispatches(role='implementer', status=['completed'], since=<recent>)` and aggregates `actual_touched_files` per task type / spec keyword / file region as needed. The aggregation lives in Engineer's working memory for the current iteration only — see `engineer.yaml`'s "you do not maintain a persistent in-memory dispatch graph" discipline.
+3. **No cache for declined or failed dispatches.** A dispatch that didn't commit didn't actually touch the substrate as far as the canonical clone is concerned (the worktree was cleaned). `actual_touched_files_json` stays NULL.
+4. **Index.** `idx_dispatches_role_completed` (above) makes Engineer's repeated scans cheap — `WHERE status='completed' AND role='implementer' AND completed_at >= ?` hits the index directly.
+
+### `get_dispatch_events` MCP tool (M4)
+
+Engineer needs to subscribe to its own in-flight dispatches' audit events for prediction-divergence detection (see `engineer.yaml` § Parallel dispatch). `get_dispatch_events` is the polling surface for that subscription.
+
+```python
+class GetDispatchEventsInput(BaseModel):
+    dispatch_ids: list[str]
+    since_timestamp: str | None = None    # ISO 8601 UTC; default: no time filter (returns all events for the listed dispatches)
+
+class GetDispatchEventsOutput(BaseModel):
+    events: list[AuditEvent]               # same shape as get_audit_log entries
+```
+
+Returns the same audit rows that `get_audit_log` returns, filtered by `dispatch_id` (the rows whose `details_json.dispatch_id` is in the input list) and optionally by timestamp. The tool is read-only and not itself audited — query traffic on observability tools would dwarf the actual dispatch lifecycle audit signal.
+
+**Hierarchy check.** Engineer can only query events for dispatches Engineer initiated (the audit row's `actor` is in Engineer's subtree, OR the dispatch row's `task_id` was claimed by Engineer). PM can query any dispatch (subtree includes all dispatches). Mike can query all.
+
+**Allowed for PM, Engineer.** Implementer/Tester see only their own dispatch events via `get_dispatch_status` / `get_dispatch_result`; they don't need the audit-event polling surface.
+
+### `get_recent_dispatches` MCP tool (M4)
+
+Engineer's primary use is building the substrate touch map cache (above). PM's use is post-mortem queries — "show me everything Implementer did in the last 24 hours."
+
+```python
+class DispatchSummary(BaseModel):
+    id: str
+    task_id: str
+    role: Literal['implementer', 'tester', 'pm-continuous', 'engineer-supervisor']
+    status: Literal['queued', 'running', 'completed', 'declined', 'failed', 'timed_out', 'cancelled']
+    working_directory: str
+    completed_at: str | None
+    actual_touched_files: list[str]        # parsed from actual_touched_files_json; empty list if NULL
+    commit_hash: str | None
+
+class GetRecentDispatchesInput(BaseModel):
+    role: Literal['implementer', 'tester', 'pm-continuous', 'engineer-supervisor'] | None = None
+    status: list[str] | None = None       # filter to these statuses; default: any
+    since: str | None = None              # ISO 8601 UTC; default: 24h ago
+    limit: int = 50
+
+class GetRecentDispatchesOutput(BaseModel):
+    dispatches: list[DispatchSummary]
+```
+
+Read-only; not audited (high-frequency for Engineer's loop).
+
+**Hierarchy check.** Same scoping as `get_dispatch_events`. Engineer sees its own dispatches and its sub-agents' dispatches; PM sees everything in its subtree (Engineer + Implementer + Tester); Mike sees all. Implementer/Tester see only their own dispatches via `get_dispatch_status` / `get_dispatch_result`.
+
+**Allowed for PM, Engineer.**
 
 ### Long-running supervisors: continuous-mode PM and Engineer
 
@@ -563,11 +657,13 @@ The M4 milestone implements the bridge per this spec. Concrete deliverables:
 - `src/meridian_orchestrator/bridge/worktree.py` — git worktree provisioning, dispatch-branch lifecycle, and the `--ff-only` merge protocol
 - `src/meridian_orchestrator/bridge/timeouts.py` — `model_throughput_tps` table + timeout calculation. Constants are starting estimates; M4 integration tests measure observed tps for at least one real Sonnet dispatch and one real Opus dispatch and update this file before M5 closes (queue item raised if not addressed).
 - `src/meridian_orchestrator/storage/sql/0002_task_planning.sql` — pre-existing planned migration; ships at M4 with this work
-- `src/meridian_orchestrator/storage/sql/0005_dispatches.sql` — schema per § Storage shape; ships at M4 alongside 0002
-- `src/meridian_orchestrator/tools/dispatch.py` — `dispatch_implementer`, `dispatch_tester`, `get_dispatch_status`, `get_dispatch_result`, **and the new `complete_dispatch` tool**
+- `src/meridian_orchestrator/storage/sql/0005_dispatches.sql` — schema per § Storage shape (including the `engineer_decisions_json`, `actual_touched_files_json`, and `merge_conflict_files_json` columns + `idx_dispatches_role_completed` partial index); ships at M4 alongside 0002
+- `src/meridian_orchestrator/tools/dispatch.py` — `dispatch_implementer`, `dispatch_tester`, `get_dispatch_status`, `get_dispatch_result`, **plus the new `complete_dispatch`, `get_dispatch_events`, and `get_recent_dispatches` MCP tools** (schemas in § `engineer_decisions` field, § `get_dispatch_events` MCP tool, § `get_recent_dispatches` MCP tool above)
+- `DispatchImplementerInput` and `DispatchTesterInput` extended with the `engineer_decisions: list[EngineerDecision] = []` field; sub-agent inherits Engineer's altitude-1 decisions as constraints rather than re-deciding
+- Daemon-side substrate touch map population: post-`complete_dispatch` and post-`--ff-only` merge, daemon runs `git diff --name-only <commit>~1 <commit>` against the canonical clone and writes the JSON-encoded path list to `dispatches.actual_touched_files_json`
 - Tests:
-  - Unit: timeout calculation (including override), heartbeat watchdog state transitions, all 7 dispatch lifecycle terminal states, decline propagation, audit log emission for all 13 actions, token revocation on each terminal state, `keep_worktree_on_failure` default and override behavior, `merge_conflict_files_json` population on conflict
-  - Integration: substrate-canonical provisioning on first daemon startup; full PM→Engineer→Implementer→Engineer→PM cycle with a real `meridian-homepoc` upstream and a no-op task; parallel-dispatch scenario with two non-conflicting Implementers ending in clean fast-forward merges; merge-conflict scenario where the second-merging dispatch fails `--ff-only` and surfaces conflicting files; timeout scenario; heartbeat-timeout-respawn scenario for the continuous PM
+  - Unit: timeout calculation (including override), heartbeat watchdog state transitions, all 7 dispatch lifecycle terminal states, decline propagation, audit log emission for all 13 actions, token revocation on each terminal state, `keep_worktree_on_failure` default and override behavior, `merge_conflict_files_json` population on conflict, `engineer_decisions` payload propagation through `dispatch.issued` audit details_json and back via `complete_dispatch` payload, `actual_touched_files_json` population after a clean merge, `get_dispatch_events` and `get_recent_dispatches` hierarchy scoping (Engineer sees own subtree, PM sees full subtree, Implementer/Tester denied)
+  - Integration: substrate-canonical provisioning on first daemon startup; full PM→Engineer→Implementer→Engineer→PM cycle with a real `meridian-homepoc` upstream and a no-op task; parallel-dispatch scenario with two non-conflicting Implementers ending in clean fast-forward merges; merge-conflict scenario where the second-merging dispatch fails `--ff-only` and surfaces conflicting files; timeout scenario; heartbeat-timeout-respawn scenario for the continuous PM and the engineer-supervisor; substrate touch map cache E2E (Engineer dispatches Implementer; on completion, daemon populates `actual_touched_files_json`; subsequent Engineer iteration reads via `get_recent_dispatches` and uses the touch set in its parallelization decision)
   - Calibration: observed-tps measurement for Sonnet and Opus dispatches; `bridge/timeouts.py` updated before M5
 
 The migrations apply in numeric order: `0002_task_planning.sql` first (adding `tasks.estimated_tokens` and `tasks.actual_tokens`), then `0005_dispatches.sql` (creating the new table). Integration tests run with both applied. The reservation gap (`0003_pm_mode.sql` ships at M5; `0004_notifications.sql` ships at M6) is intentional and documented in `05-data-model.md`; the migrations are independent so out-of-ship-order numbering is functionally safe.
