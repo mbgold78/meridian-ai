@@ -52,7 +52,7 @@ Each milestone's acceptance criteria are listed in `08-implementation-plan.md`. 
 
 - For M1–M2: Mike runs the commands, sees the expected output, says continue.
 - For M3 specifically: Mike reviews and approves `11-engineer-bridge.md` before M4 implementation starts.
-- For M4: Mike walks through a real PM→Engineer→Implementer cycle in Claude Desktop and observes the resulting commit in `meridian-homepoc`.
+- For M4: Mike walks through a real PM→Engineer→Implementer cycle in his interactive Claude Code session and observes the resulting commit in `meridian-homepoc`.
 - For M5–M6: Mike inspects the JSON outputs and confirms they reconcile with reality.
 - For M7: Mike installs as a service, restarts his machine, confirms automatic startup, runs the smoke test.
 

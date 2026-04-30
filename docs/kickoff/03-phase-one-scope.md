@@ -29,7 +29,7 @@
 All twelve must be true:
 
 1. Service starts cleanly via system service manager
-2. Claude Desktop connects via MCP and lists all Phase 1 tools
+2. Claude Code connects via MCP and lists all Phase 1 tools
 3. Mike can chat with PM such that PM submits a task to Engineer, Engineer dispatches Implementer in `meridian-homepoc`, Implementer ships a real code change, Tester verifies, Engineer reports back, PM surfaces to Mike — end-to-end
 4. PM-level decision discipline is observable: mechanical decisions decided silently, foundational decisions logged with reasoning, downgradable strategics decided + downgrade-justified, non-downgradable strategics escalated
 5. Hierarchy enforcement: Mike cannot bypass PM. PM cannot bypass Engineer. Permissions enforced server-side.
@@ -56,7 +56,7 @@ These are deferred. They are listed here so nobody (Mike, future Claude, anyone 
 ### Capabilities not in Phase 1
 
 - Inter-agent coordination beyond strict hierarchy. PM↔Engineer↔{Implementer,Tester} is the only chain.
-- Web dashboard UI. Claude Desktop is the only interface.
+- Web dashboard UI. Claude Code is the only interface.
 - Anthropic usage API polling. Agents self-report via `record_api_call`. Polling is a Phase-2-or-later optimization.
 - Cloud deployment.
 - Multi-user support. Mike is the only human user.

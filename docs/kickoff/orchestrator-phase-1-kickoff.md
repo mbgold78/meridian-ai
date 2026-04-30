@@ -181,7 +181,7 @@ Conventions:
 
 ## Architecture (locked decisions)
 
-**MCP-as-service, not webserver.** The Orchestrator is a long-lived Python daemon that exposes its capabilities via MCP. Claude Desktop is the human interface — Mike talks to PM in a Claude Desktop conversation that has the PM system prompt configured plus an MCP connection back to the Orchestrator. No custom chat UI. No webserver.
+**MCP-as-service, not webserver.** The Orchestrator is a long-lived Python daemon that exposes its capabilities via MCP. Claude Code is the human interface — Mike talks to PM in an interactive Claude Code session that connects to the orchestrator MCP via OAuth (loopback redirect, RFC 8252). No custom chat UI. No webserver. (The kickoff originally specified Claude Desktop's GUI Custom Connectors; M2 surfaced that those are cloud-mediated and cannot reach a localhost daemon — see `02-architecture.md` and `11-engineer-bridge.md` for context.)
 
 **Local-only for v1.** Mike's laptop. No remote access, no Tailscale, no cloud. Architecture must remain cloud-portable so a future move is a config change, not a rewrite, but no remote work happens in phase 1.
 
@@ -546,9 +546,9 @@ Standard sequence from the kickoff package, adjusted for re-scoped phase 1.
 
 Acceptance: `uv sync` clean, service starts and exits cleanly, storage tests pass, DB created with all tables.
 
-**M2 — MCP server scaffolding & auth.** `server.py` using official Anthropic MCP Python SDK, `auth.py` with keychain integration, per-agent token mapping, `ping` test tool, README updated with Claude Desktop connection instructions.
+**M2 — MCP server scaffolding & auth.** `server.py` using official Anthropic MCP Python SDK, `auth.py` with keychain integration and dual-source tokens (OAuth-issued for the operator, static for daemon-launched subagents), OAuth Authorization Server endpoints for Claude Code's loopback flow, `ping` test tool, README updated with Claude Code connection instructions.
 
-Acceptance: Service starts and MCP reachable, valid token allows connection, invalid/missing rejected, `ping` round-trip works, tokens persist across restart. **Checkpoint**: Mike pastes a token into Claude Desktop and verifies `ping` works end-to-end.
+Acceptance: Service starts and MCP reachable, valid token (OAuth or static) allows connection, invalid/missing rejected, `ping` round-trip works, tokens persist across restart. **Checkpoint**: Mike runs `claude mcp add --transport http` and verifies `ping` works end-to-end via the OAuth approval flow.
 
 **M3 — Agent config loading, permission framework, AND Engineer↔subagent bridge design.** YAML loader with pydantic validation, permissions module (including hierarchy enforcement), file watcher for hot reload, four YAML configs (PM, Engineer, Implementer, Tester) with Implementer/Tester migrated from `meridian-homepoc`, agent rows seeded with `reports_to`, `get_agent_config` and `list_agents` and `get_org_chart` tools.
 
@@ -558,15 +558,15 @@ Acceptance: Configs load and validate, hot reload works, permission checks corre
 
 **M4 — Task management + subagent dispatch.** All task tools (`submit_task`, `get_queue`, `update_task_status`, `set_task_priority`, `claim_task`, `get_subtasks`), audit log writes, permission rules per role, indexes verified. **Plus implement the Engineer↔subagent dispatch tools** (`dispatch_implementer`, `dispatch_tester`, `get_dispatch_status`, `get_dispatch_result`) per the M3-approved bridge architecture.
 
-Acceptance: Unit tests for happy path/validation/permission/not-found, full lifecycle integration test (PM submits, Engineer claims, Engineer dispatches, Implementer completes, Engineer reads result, PM consumes), conflict on double claim, role-mismatch denial. **Checkpoint**: Mike walks through a full PM→Engineer→Implementer→Engineer→PM cycle in Claude Desktop conversation.
+Acceptance: Unit tests for happy path/validation/permission/not-found, full lifecycle integration test (PM submits, Engineer claims, Engineer dispatches, Implementer completes, Engineer reads result, PM consumes), conflict on double claim, role-mismatch denial. **Checkpoint**: Mike walks through a full PM→Engineer→Implementer→Engineer→PM cycle in his interactive Claude Code session.
 
 **M5 — Budget & usage tools.** All budget tools, 5-hour rolling window calculation, by-agent and by-model aggregations, burn rate projection, stub model routing.
 
-Acceptance: Window-boundary tests, multi-agent multi-model aggregation correctness, burn rate sensible, dashboard burn rate consistent. **Checkpoint**: Mike calls these tools from Claude Desktop and inspects JSON output.
+Acceptance: Window-boundary tests, multi-agent multi-model aggregation correctness, burn rate sensible, dashboard burn rate consistent. **Checkpoint**: Mike calls these tools from his interactive Claude Code session and inspects JSON output.
 
 **M6 — Knowledge & routing tools, audit log query.** `read_knowledge`, `list_knowledge`, `write_knowledge` with glob permissions and SHA256 audit; `get_dashboard_summary` markdown; `get_audit_log` query (Mike-only); seed knowledge dir with README, sync substrate's foundation doc and queue into knowledge base, seed Mike's strategic decisions document.
 
-Acceptance: Permitted reads work, denied reads error cleanly, path traversal rejected, dashboard markdown well-formed, audit log filters work, knowledge sync from substrate codebase works. **Checkpoint**: Mike reads substrate foundation doc via PM in Claude Desktop conversation, end-to-end.
+Acceptance: Permitted reads work, denied reads error cleanly, path traversal rejected, dashboard markdown well-formed, audit log filters work, knowledge sync from substrate codebase works. **Checkpoint**: Mike reads substrate foundation doc via PM in his interactive Claude Code session, end-to-end.
 
 **M7 — Service deployment, smoke test, hardening.** launchd plist (Mac), systemd unit (Linux), Windows Service config, install.md, auto-restart, daily SQLite backup, log rotation, smoke test script, final README + .env.example pass.
 
@@ -579,7 +579,7 @@ Acceptance: Service installs and starts, survives kill -9, daily backup appears,
 All of the following must be true:
 
 1. Service starts cleanly via system service manager
-2. Claude Desktop connects via MCP and lists all phase-1 tools
+2. Claude Code connects via MCP and lists all phase-1 tools
 3. Mike can have a chat with PM that uses Orchestrator tools (PM submits a task to Engineer, Engineer dispatches Implementer in `meridian-homepoc`, Implementer ships a real code change, Tester verifies, Engineer reports back, PM surfaces to Mike)
 4. PM-level decision discipline is observable: PM makes mechanical decisions, logs foundational with reasoning, downgrades strategic-to-foundational where appropriate, escalates non-downgradable strategic to Mike
 5. Hierarchy enforcement: Mike cannot bypass PM to call Engineer. PM cannot bypass Engineer to call Implementer. Permissions enforced server-side.

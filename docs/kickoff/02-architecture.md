@@ -2,11 +2,11 @@
 
 ## Service shape
 
-The Orchestrator is a long-lived Python daemon. It exposes its capabilities over MCP. Claude Desktop is the human interface — Mike opens a Claude Desktop conversation that has the PM system prompt configured plus an MCP connection to the Orchestrator daemon. There is no custom chat UI, no webserver, no browser app for v1.
+The Orchestrator is a long-lived Python daemon. It exposes its capabilities over MCP. Claude Code is the human interface — Mike opens an interactive Claude Code session with the orchestrator MCP server connected (PM role bound via OAuth at first connection; see M2 in `08-implementation-plan.md`). There is no custom chat UI, no webserver, no browser app for v1. (The kickoff originally specified Claude Desktop's GUI Custom Connectors; M2 surfaced that those are cloud-mediated and cannot reach a localhost daemon — see `11-engineer-bridge.md` § Cross-doc cleanup scope for context. Phase 1 binds plain HTTP on loopback; Claude Code's RFC 8252 loopback OAuth flow is the supported connector path.)
 
 ```
 ┌────────────────────────────┐         ┌──────────────────────────────────┐
-│  Claude Desktop (Mike)     │         │  Orchestrator daemon (Python)    │
+│  Claude Code (Mike)        │         │  Orchestrator daemon (Python)    │
 │  ┌──────────────────────┐  │ ─MCP→   │                                  │
 │  │ PM system prompt     │  │         │  ┌────────────────────────────┐  │
 │  │ (configured locally) │  │         │  │ MCP server (anthropic SDK) │  │
@@ -102,10 +102,10 @@ The subscription-first cost model has a corollary: **idle subscription capacity 
 
 PM has two first-class operating modes:
 
-- **Interactive** — Mike is in a Claude Desktop conversation with PM. Mike's conversation has priority; PM throttles continuous dispatch to leave window headroom for the conversation. Sliding 30-minute window from Mike's last message before PM returns to continuous mode.
+- **Interactive** — Mike is in an interactive Claude Code session with PM. Mike's session has priority; PM throttles continuous dispatch to leave window headroom for the conversation. Sliding 30-minute window from Mike's last message before PM returns to continuous mode.
 - **Continuous** — Default when Mike is not interactive. PM autonomously advances the queue, dispatches to Engineer in parallel where dependencies allow, sends batched Telegram updates, pauses only on `question` / `urgent` items that genuinely require Mike. Independent threads continue while waiting on a Mike reply to one open question.
 
-**Architectural realization (rides on the M3 bridge decision):** the interactive PM is the Claude Desktop conversation Mike opens. The continuous PM is a long-running Claude Code subprocess launched and managed by the daemon. The two PM "instances" are different Claude conversations with the same system prompt and MCP access; they coordinate through the database via `pm_mode_log` and the task queue. When Mike's MCP token is used, the daemon writes `mode='interactive'` to `pm_mode_log`, and the continuous-mode subprocess pauses dispatch on its next planning iteration. If M3 picks a bridge architecture other than Option A (subprocess Claude Code), the continuous-mode driver re-architects accordingly — **the M3 decision must explicitly address both sub-agent dispatch and continuous-mode PM driving.**
+**Architectural realization (decided at M3, see `11-engineer-bridge.md`):** both the interactive PM and the continuous PM are Claude Code subprocesses. The interactive PM is the session Mike opens directly (authenticated via OAuth — Claude Code's loopback flow against the orchestrator's OAuth AS). The continuous PM is a long-running, daemon-launched Claude Code subprocess (authenticated via a daemon-issued static token with `label='pm-continuous'`). The two PM instances are different Claude conversations with the same system prompt and MCP access; they coordinate through the database via `pm_mode_log` and the task queue, never directly. When the daemon observes an MCP call from a token with `(source='oauth', role='pm')` — which is unforgeable, set only by the OAuth provider at issuance — it writes `mode='interactive'` to `pm_mode_log`, and the continuous-mode subprocess pauses dispatch on its next planning iteration. The M3 bridge decision is Option A (subprocess Claude Code) with MCP-tool completion (the `complete_dispatch` tool) as the structured-output mechanism for sub-agent dispatch.
 
 ### Window-aware burn
 
@@ -175,7 +175,7 @@ Manual setup steps for Mike are documented in `14-telegram-setup.md`.
 | Logging | `structlog` JSON to `~/.meridian-orchestrator/logs/` |
 | Service manager | launchd (Mac), systemd (Linux), Windows Service (Mike's machine) |
 | Backup | SQLite dump on startup + daily; retain last 7 |
-| Bridge to sub-agents | TBD at M3; constraints in `11-engineer-bridge.md`; must support parallel concurrent dispatch |
-| PM operating modes | Interactive (Claude Desktop conversation) and continuous (Claude Code subprocess); coordinated via `pm_mode_log` |
+| Bridge to sub-agents | M3-decided per `11-engineer-bridge.md`: Option A (subprocess Claude Code) with `complete_dispatch` MCP-tool completion; per-dispatch git worktrees off a daemon-owned canonical clone; parallel concurrent dispatch supported |
+| PM operating modes | Interactive (Mike's Claude Code session, OAuth-authenticated) and continuous (daemon-launched Claude Code subprocess, static-token-authenticated); coordinated via `pm_mode_log` |
 | Subscription utilization | Aggressive — target 70–90% during work hours; window-aware burn with `upgrade` / `conserve` pace transitions |
 | Notifications | Telegram bot, PM-only, bidirectional, M6 deliverable |

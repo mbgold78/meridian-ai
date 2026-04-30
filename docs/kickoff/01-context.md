@@ -44,6 +44,6 @@ The kickoff message itself — the long brief that started this build — was au
 
 - Local-only daemon for v1. No remote, no Tailscale, no cloud. Cloud-portable architecture, but no cloud work in Phase 1.
 - Subscription-first cost model. Phase 1 runs on Mike's Claude Pro/Max subscription. API credits are overflow.
-- MCP-as-service. Claude Desktop is the human interface. No custom chat UI.
+- MCP-as-service. Claude Code is the human interface (interactive PM session via OAuth loopback). No custom chat UI.
 - Strict hierarchy. PM ↔ Engineer ↔ {Implementer, Tester}. No bypass.
 - PM has downgrade authority. The destructive-chip semantic question (worked example in `07`) is the canonical illustration.

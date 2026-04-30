@@ -31,7 +31,7 @@ The notification system itself is built at M6. This document is the operational 
    ```
 
 9. Restart the Orchestrator service.
-10. Test from a Claude Desktop conversation with PM:
+10. Test from an interactive Claude Code session with PM:
 
     > "PM, send a test notification with urgency `info`, subject 'Setup test', body 'Notification service online.'"
 

@@ -27,7 +27,7 @@ This field is the **routing-decision baseline consumed by `check_budget_for_task
 
 The active tier may be downgraded for budget pressure (e.g., burn rate near the 5-hour-window cap) or upgraded for high-complexity tasks; `model_tier_default` is the baseline before those adjustments. So `model_tier_default: opus` does NOT mean "PM always runs on Opus" — it means "in the absence of budget pressure or specific complexity demands, route PM-class tasks to Opus."
 
-The conversation Mike is having with PM at any given moment runs in Claude Desktop on whatever tier Claude Desktop is configured with — which uses Mike's Claude Pro/Max subscription. `model_tier_default` shapes routing decisions PM makes about other agents' work; it does not override the active conversation tier.
+The conversation Mike is having with PM at any given moment runs in his interactive Claude Code session on whatever tier Claude Code is configured with — which uses Mike's Claude Pro/Max subscription. `model_tier_default` shapes routing decisions PM makes about other agents' work; it does not override the active conversation tier.
 
 Calling this out explicitly because the YAML can mislead a reader who assumes `opus` means "always Opus."
 
@@ -118,9 +118,9 @@ system_prompt: |
   - Use `get_window_state` to inform pacing. `normal` when window has capacity; `upgrade` when the window has unused capacity nearing reset (actively look for lower-priority work to promote); `conserve` when the window is depleted; `rate_limited` is operational reality, not failure (resume aggressively at reset).
   - When you complete a phase that ships substrate work, log to queue, send `info` Telegram update at the configured batch cadence, and immediately plan the next phase. Don't wait for Mike to "approve continuing."
   - When you encounter a `question` or `urgent` item that requires Mike, send the Telegram immediately and continue working on independent threads. Don't park the entire chain on one open question if other work can proceed.
-  - Periodically (every ~30 minutes of activity) write session-progress notes to the queue so Mike has context if he checks Telegram or opens Claude Desktop.
+  - Periodically (every ~30 minutes of activity) write session-progress notes to the queue so Mike has context if he checks Telegram or opens his interactive Claude Code session.
 
-  When Mike sends a message in Claude Desktop, the daemon writes `mode='interactive'` to `pm_mode_log`. The continuous-mode driver detects this on its next planning iteration and pauses high-token dispatch, leaving window headroom for the conversation. The continuous instance also calls `set_pm_mode('paused_blocked', reason=...)` if external blockers (e.g., Engineer rate-limited) prevent forward progress. Returns to `continuous` 30 minutes after Mike's last message OR when the blocker clears.
+  When Mike sends a message in his interactive Claude Code session, the daemon observes an MCP call from a token with `(source='oauth', role='pm')` and writes `mode='interactive'` to `pm_mode_log`. The continuous-mode driver detects this on its next planning iteration and pauses high-token dispatch, leaving window headroom for the conversation. The continuous instance also calls `set_pm_mode('paused_blocked', reason=...)` if external blockers (e.g., Engineer rate-limited) prevent forward progress. Returns to `continuous` 30 minutes after Mike's last message OR when the blocker clears.
 
   ## Subscription utilization expectations
 

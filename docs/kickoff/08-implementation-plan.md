@@ -45,7 +45,7 @@ Mike runs `uv sync && uv run python scripts/init-db.py && uv run pytest`. Confir
 - `auth.py` — token issuance, lookup, OS keychain via `keyring`
 - One test tool: `ping(echo: str) -> {pong: str, agent_id: str, server_time: str}`
 - Token management CLI in `scripts/`: `issue-token.py`, `revoke-token.py`, `list-tokens.py`
-- README updated with: Claude Desktop connection instructions, how to issue a token, where the token goes
+- README updated with: Claude Code connection instructions (`claude mcp add --transport http ...`) and the OAuth-flow narrative; static-token CLI documented for daemon-launched M3+ subagents (separate auth path)
 - `tests/integration/test_mcp_ping.py` — full round-trip via MCP client
 
 ### Acceptance
@@ -59,7 +59,7 @@ Mike runs `uv sync && uv run python scripts/init-db.py && uv run pytest`. Confir
 
 ### Checkpoint
 
-Mike issues a token via `scripts/issue-token.py`, pastes it into Claude Desktop's MCP config, opens a conversation, and calls `ping`. Verifies he sees the echoed value and his agent_id. **This is the first real proof that the MCP architecture works on Mike's machine.**
+Mike runs `claude mcp add --transport http meridian-orchestrator http://127.0.0.1:8765/mcp`, starts an interactive Claude Code session, runs `/mcp` and picks Authenticate, approves in the browser-rendered approval page, and calls `ping`. Verifies he sees the echoed value and his agent_id. (The static-token CLI from `scripts/issue-token.py` exists in M2 for the M3+ daemon-launched subagent auth path; it is not the operator-onboarding path.) **This is the first real proof that the MCP architecture works on Mike's machine.**
 
 ---
 
@@ -92,7 +92,7 @@ Mike issues a token via `scripts/issue-token.py`, pastes it into Claude Desktop'
 
 ### Checkpoint
 
-Mike: (a) edits `pm.yaml` to remove `get_dashboard_summary` from the allowlist, sees the hot-reload log line, calls the tool from his Claude Desktop conversation, gets a clean `PERMISSION_DENIED`, restores the config, sees reload, gets success. (b) Reviews `11-engineer-bridge.md` and approves the bridge architecture (both dispatch and continuous-mode driving) before M4 implementation begins.
+Mike: (a) edits `pm.yaml` to remove `get_dashboard_summary` from the allowlist, sees the hot-reload log line, calls the tool from his interactive Claude Code session, gets a clean `PERMISSION_DENIED`, restores the config, sees reload, gets success. (b) Reviews `11-engineer-bridge.md` and approves the bridge architecture (both dispatch and continuous-mode driving) before M4 implementation begins.
 
 ---
 
@@ -121,7 +121,7 @@ Mike: (a) edits `pm.yaml` to remove `get_dashboard_summary` from the allowlist, 
 
 ### Checkpoint
 
-Mike walks through a real PM→Engineer→Implementer→Engineer→PM cycle in his Claude Desktop conversation, observes the work happening in `meridian-homepoc`, queries the audit log, sees the chain. **This is Phase 1's load-bearing demo: the company actually staffs itself.**
+Mike walks through a real PM→Engineer→Implementer→Engineer→PM cycle in his interactive Claude Code session, observes the work happening in `meridian-homepoc` (via the daemon's substrate-canonical clone fast-forwarded to upstream main, which Mike's working tree pulls from), queries the audit log, sees the chain. **This is Phase 1's load-bearing demo: the company actually staffs itself.**
 
 ---
 
@@ -154,7 +154,7 @@ Mike walks through a real PM→Engineer→Implementer→Engineer→PM cycle in h
 
 ### Checkpoint
 
-Mike calls `record_api_call`, `get_token_usage`, `get_burn_rate`, `get_window_state` directly from his Claude Desktop conversation and inspects the JSON output. Confirms numbers reconcile. Observes `pm_mode_log` auto-flip on his tool calls. Continuous-mode driver runs in the background; Mike can `tail` the log and see it pausing/resuming as he interacts.
+Mike calls `record_api_call`, `get_token_usage`, `get_burn_rate`, `get_window_state` directly from his interactive Claude Code session and inspects the JSON output. Confirms numbers reconcile. Observes `pm_mode_log` auto-flip on his tool calls (gated on `(source='oauth', role='pm')` per the M3 bridge spec). Continuous-mode driver runs in the background; Mike can `tail` the log and see it pausing/resuming as he interacts.
 
 ---
 
@@ -199,9 +199,9 @@ Mike calls `record_api_call`, `get_token_usage`, `get_burn_rate`, `get_window_st
 
 Two-part checkpoint:
 
-(1) Mike chats with PM in Claude Desktop, asks about the foundation doc, observes PM call `read_knowledge`, surface the contents. Confirms PM's decision-altitude framing uses the foundation context.
+(1) Mike chats with PM in his interactive Claude Code session, asks about the foundation doc, observes PM call `read_knowledge`, surface the contents. Confirms PM's decision-altitude framing uses the foundation context.
 
-(2) Mike completes the manual Telegram setup steps in `docs/kickoff/14-telegram-setup.md`, sends a test `notify_human` from Claude Desktop with PM, receives the message on his phone, replies, observes PM consume the reply on next session start.
+(2) Mike completes the manual Telegram setup steps in `docs/kickoff/14-telegram-setup.md`, sends a test `notify_human` from his interactive Claude Code session with PM, receives the message on his phone, replies, observes PM consume the reply on next session start.
 
 **This is the first time the AI-staffed company demonstrably reasons over its own knowledge AND can reach Mike without him initiating.**
 
@@ -236,7 +236,7 @@ M6 absorbs notification work; estimated +2-3 days vs. the original M6 scope. Doe
 
 ### Checkpoint
 
-Mike installs as a Windows Service on his actual laptop, restarts the machine, confirms automatic startup, opens Claude Desktop, runs through the smoke test scenario manually with PM, sees the company-staffed-by-AI experience working as designed. **Phase 1 done.**
+Mike installs as a Windows Service on his actual laptop, restarts the machine, confirms automatic startup, opens his interactive Claude Code session, runs through the smoke test scenario manually with PM, sees the company-staffed-by-AI experience working as designed. **Phase 1 done.**
 
 ---
 

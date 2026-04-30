@@ -14,7 +14,7 @@ These are locked decisions. Don't relitigate without Mike's sign-off.
 
 | Library | Use | Notes |
 |---|---|---|
-| `mcp` | MCP server (Anthropic's official Python SDK) | Server side; client is Claude Desktop. |
+| `mcp` | MCP server (Anthropic's official Python SDK) | Server side; client is Claude Code (interactive PM) and daemon-launched subprocesses (continuous PM, Implementer, Tester). |
 | `pydantic` v2 | Data validation, config schemas, tool I/O schemas | Strict mode. No `Config.allow_population_by_field_name` foot-guns. |
 | `pyyaml` | Agent config files | Safe-load only. |
 | `aiosqlite` | Async SQLite driver | Single connection pool managed via async context manager. |

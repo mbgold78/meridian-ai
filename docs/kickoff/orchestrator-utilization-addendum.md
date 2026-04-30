@@ -20,7 +20,7 @@ The Orchestrator is not "polite about budget" — it's "deliberate about budget.
 
 ### PM continuous mode
 
-PM operates in two modes: **interactive** (Mike is in a Claude Desktop conversation with PM, asking questions or directing work) and **continuous** (Mike is not present, PM is autonomously advancing the work queue).
+PM operates in two modes: **interactive** (Mike is in an interactive Claude Code session with PM, asking questions or directing work) and **continuous** (Mike is not present, PM is autonomously advancing the work queue).
 
 Both modes are first-class. Continuous mode is not a degraded version of interactive mode — it has its own behavior pattern.
 
@@ -104,7 +104,7 @@ If utilization drops below 60% across a session for reasons other than Mike's in
 
 ### Mike's interactive sessions take precedence
 
-When Mike is actively conversing with PM in Claude Desktop, that conversation has priority over continuous-mode work. The reason: Mike's conversation is using the same subscription window PM is burning autonomously. PM should detect interactive mode (recent message exchange with Mike) and throttle continuous-mode dispatches to leave headroom for the conversation.
+When Mike is actively conversing with PM in his interactive Claude Code session, that conversation has priority over continuous-mode work. The reason: Mike's conversation is using the same subscription window PM is burning autonomously. PM should detect interactive mode (recent message exchange with Mike) and throttle continuous-mode dispatches to leave headroom for the conversation.
 
 Specifically:
 
@@ -210,7 +210,7 @@ In continuous mode:
 - When you complete a phase that ships substrate work, log to queue, send `info` Telegram update at the configured batch cadence, and immediately plan the next phase. Don't wait for Mike to "approve continuing."
 - When you encounter a `question` or `urgent` item that requires Mike, send the Telegram immediately and continue working on independent threads. Don't park the entire chain on one open question if other work can proceed.
 
-When Mike sends a message in Claude Desktop, transition to interactive mode immediately. In interactive mode, throttle continuous dispatch to leave window headroom for the conversation. Return to continuous mode 30 minutes after Mike's last message.
+When Mike sends a message in his interactive Claude Code session, transition to interactive mode immediately. In interactive mode, throttle continuous dispatch to leave window headroom for the conversation. Return to continuous mode 30 minutes after Mike's last message.
 
 ## Subscription utilization expectations
 

@@ -572,9 +572,9 @@ The migrations apply in numeric order: `0002_task_planning.sql` first (adding `t
 
 The M4 acceptance criteria in `08-implementation-plan.md` already enumerate what passes; this spec adds the heartbeat-respawn integration test and the calibration deliverable.
 
-## Cross-doc cleanup scope (deferred to a separate commit)
+## Cross-doc cleanup scope (completed in `docs(M3): align kickoff package with Claude Code interactive PM (post-M2)`)
 
-The kickoff package was authored before the M2 operator-interface decision. The following Claude Desktop references are stale and should be updated to "Claude Code (Mike's interactive session)" or equivalent in a separate commit. **Not** updated as part of this commit per Mike's M3 design-review instruction.
+The kickoff package was authored before the M2 operator-interface decision. The Claude Desktop references listed below were stale and have been updated to "Claude Code (Mike's interactive session)" or equivalent in the cleanup commit referenced in this section heading. The table is preserved as a historical record of the M2-driven scope.
 
 | File | Lines | Context |
 |---|---|---|
