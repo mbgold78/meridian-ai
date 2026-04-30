@@ -1,13 +1,12 @@
 """Full round-trip integration test for the M2 ping tool.
 
 Spins up the MCP server on a free localhost port, connects via the
-Streamable-HTTP MCP client over TLS with a Bearer-issued token, calls
-``ping``, and checks the response. Also exercises:
+Streamable-HTTP MCP client over plain HTTP with a Bearer-issued token, calls
+``ping``, and checks the response. Also asserts that an invalid or revoked
+token is rejected with a 401 rather than reaching the tool.
 
-- Auth failure: invalid/revoked token → 401, not a tool result.
-- TLS-required: an httpx client that does not trust the self-signed cert
-  fails with an SSL error. (Validates the cert is self-signed and that the
-  daemon is, in fact, doing TLS — a plain-HTTP client cannot reach the tool.)
+Phase 1 binds loopback only; TLS is intentionally not used. Threat-model
+notes are in the README's "MCP server" section.
 """
 
 from __future__ import annotations
@@ -16,11 +15,9 @@ import asyncio
 import contextlib
 import json
 import socket
-import ssl
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-import httpx
 import pytest
 from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
@@ -34,27 +31,6 @@ def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
-
-
-def _insecure_factory(
-    headers: dict[str, str] | None = None,
-    timeout: httpx.Timeout | None = None,
-    auth: httpx.Auth | None = None,
-) -> httpx.AsyncClient:
-    """httpx factory that skips cert verification.
-
-    Used by tests so they don't need to import the daemon's freshly-generated
-    self-signed cert into the test process's trust store. Production clients
-    (Claude Desktop) verify against the OS trust store after the operator
-    imports the cert.
-    """
-    return httpx.AsyncClient(
-        headers=headers,
-        timeout=timeout if timeout is not None else httpx.Timeout(30.0),
-        auth=auth,
-        follow_redirects=True,
-        verify=False,
-    )
 
 
 @asynccontextmanager
@@ -81,9 +57,7 @@ def settings(tmp_path: object) -> Settings:
 
 async def _call_ping(url: str, headers: dict[str, str], echo: str) -> object:
     async with (
-        streamablehttp_client(
-            url, headers=headers, httpx_client_factory=_insecure_factory
-        ) as (read, write, _),
+        streamablehttp_client(url, headers=headers) as (read, write, _),
         ClientSession(read, write) as session,
     ):
         await session.initialize()
@@ -95,7 +69,7 @@ async def test_ping_round_trip_with_valid_token(settings: Settings) -> None:
     issued = store.issue(agent_id="a-pm-uuid", role="pm", label="integration")
 
     async with _running_server(settings):
-        url = f"https://{settings.mcp_host}:{settings.mcp_port}/mcp"
+        url = f"http://{settings.mcp_host}:{settings.mcp_port}/mcp"
         result = await _call_ping(
             url, {"Authorization": f"Bearer {issued.token}"}, "hello"
         )
@@ -112,7 +86,7 @@ async def test_ping_round_trip_with_valid_token(settings: Settings) -> None:
 
 async def test_ping_rejects_invalid_token(settings: Settings) -> None:
     async with _running_server(settings):
-        url = f"https://{settings.mcp_host}:{settings.mcp_port}/mcp"
+        url = f"http://{settings.mcp_host}:{settings.mcp_port}/mcp"
         with pytest.raises(Exception):  # noqa: B017 - server returns 401
             await _call_ping(
                 url, {"Authorization": "Bearer mor_dead0000beef0000_garbage"}, "x"
@@ -125,23 +99,8 @@ async def test_ping_rejects_revoked_token(settings: Settings) -> None:
     assert store.revoke(issued.record.token_id) is True
 
     async with _running_server(settings):
-        url = f"https://{settings.mcp_host}:{settings.mcp_port}/mcp"
+        url = f"http://{settings.mcp_host}:{settings.mcp_port}/mcp"
         with pytest.raises(Exception):  # noqa: B017
             await _call_ping(
                 url, {"Authorization": f"Bearer {issued.token}"}, "x"
             )
-
-
-async def test_https_required_self_signed_not_in_default_trust(
-    settings: Settings,
-) -> None:
-    """A client that uses the default OS trust store rejects the self-signed
-    cert. This proves (a) the daemon is doing TLS, and (b) the cert is in
-    fact self-signed — Claude Desktop will only trust it after the operator
-    imports it into the OS trust store.
-    """
-    async with _running_server(settings):
-        url = f"https://{settings.mcp_host}:{settings.mcp_port}/mcp"
-        async with httpx.AsyncClient() as client:
-            with pytest.raises((httpx.ConnectError, ssl.SSLError)):
-                await client.get(url)

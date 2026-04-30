@@ -17,7 +17,6 @@ dependencies = [
     "keyring>=25.0",
     "watchfiles>=0.21",
     "uvicorn>=0.30",
-    "cryptography>=42",
 ]
 
 [dependency-groups]

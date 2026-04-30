@@ -1,20 +1,21 @@
 """MCP server construction and lifecycle.
 
 The Orchestrator exposes a single MCP endpoint over Streamable-HTTP at
-``https://<mcp_host>:<mcp_port>/mcp``. TLS is mandatory — Claude Desktop's
-MCP connector UI rejects ``http://`` URLs. The cert is self-signed (see
-``tls.py``); the operator imports it into the OS trust store the first time.
+``http://<mcp_host>:<mcp_port>/mcp``. The daemon binds loopback by default;
+the threat model for a single-user local-only Phase 1 daemon does not require
+TLS over a loopback socket. Phase 2 will add TLS again when a non-loopback
+deployment is on the table.
 
 Two coexisting auth modes share the same token table and lookup path:
 
-- **OAuth Authorization Server** (Mike's PM agent via Claude Desktop) — the
+- **OAuth Authorization Server** (Mike's PM agent via Claude Code) — the
   daemon implements RFC 7591 dynamic client registration and the RFC 6749
   authorization-code flow with PKCE. See :mod:`meridian_orchestrator.oauth`.
 - **Static bearer tokens** (M3+ daemon-launched Engineer/Implementer/Tester
   subagents) — issued via ``scripts/issue-token.py``, persisted in keyring.
 
 The :class:`auth.TokenStore` is the single source of truth for both. The
-``TokenVerifier`` accepts a Bearer token from either source.
+provider's ``load_access_token`` accepts a Bearer token from either source.
 
 M2 ships exactly one tool — ``ping`` — to validate the auth chain end-to-end.
 M3 onward registers task/budget/knowledge/etc. tools per ``06-mcp-tools-phase-one.md``.
@@ -41,7 +42,6 @@ from meridian_orchestrator.auth import TokenStore
 from meridian_orchestrator.config import Settings
 from meridian_orchestrator.errors import AuthError
 from meridian_orchestrator.oauth import MeridianOAuthProvider, make_approval_routes
-from meridian_orchestrator.tls import ensure_cert
 
 logger = structlog.get_logger(__name__)
 
@@ -71,14 +71,14 @@ def build_server(settings: Settings, store: TokenStore | None = None) -> FastMCP
         )
 
     token_store = store if store is not None else TokenStore()
-    base_url = AnyHttpUrl(f"https://{settings.mcp_host}:{settings.mcp_port}")
+    base_url = AnyHttpUrl(f"http://{settings.mcp_host}:{settings.mcp_port}")
     transport_security = TransportSecuritySettings(
         enable_dns_rebinding_protection=True,
         allowed_hosts=["127.0.0.1:*", "localhost:*", "[::1]:*"],
         allowed_origins=[
-            "https://127.0.0.1:*",
-            "https://localhost:*",
-            "https://[::1]:*",
+            "http://127.0.0.1:*",
+            "http://localhost:*",
+            "http://[::1]:*",
         ],
     )
 
@@ -124,19 +124,12 @@ def build_server(settings: Settings, store: TokenStore | None = None) -> FastMCP
 
 
 async def serve(settings: Settings, ready: asyncio.Event | None = None) -> None:
-    """Run the MCP HTTPS server until cancelled.
+    """Run the MCP HTTP server until cancelled.
 
     Cancelling the awaiting task triggers a graceful uvicorn shutdown. Pass
     ``ready`` to be signalled once the listener is accepting connections (used
     by the integration test).
     """
-    cert_path, key_path, fingerprint = ensure_cert(settings.certs_dir)
-    logger.info(
-        "tls.cert_loaded",
-        cert_path=str(cert_path),
-        sha256_fingerprint=fingerprint,
-    )
-
     mcp = build_server(settings)
     app = mcp.streamable_http_app()
     config = uvicorn.Config(
@@ -146,8 +139,6 @@ async def serve(settings: Settings, ready: asyncio.Event | None = None) -> None:
         log_level=settings.log_level.lower(),
         access_log=False,
         lifespan="on",
-        ssl_certfile=str(cert_path),
-        ssl_keyfile=str(key_path),
     )
     server = uvicorn.Server(config)
     server.config.load()

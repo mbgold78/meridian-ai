@@ -1,9 +1,9 @@
 """End-to-end OAuth flow against a live daemon.
 
-Walks the full RFC 6749 authorization-code path Claude Desktop will run:
-register → authorize → operator approval → token exchange → call /mcp ping
-with the issued access token. Also asserts negative paths: PKCE verifier
-mismatch and approval-session CSRF mismatch are both rejected.
+Walks the full RFC 6749 authorization-code path Claude Code will run on first
+connection: register → authorize → operator approval → token exchange → call
+``/mcp ping`` with the issued access token. Also asserts negative paths:
+PKCE verifier mismatch and approval-session CSRF mismatch are both rejected.
 
 The PKCE check (hash(verifier) == code_challenge) is enforced by FastMCP's
 ``TokenHandler``, not by our provider — testing the full flow validates that
@@ -37,20 +37,6 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
-def _insecure_factory(
-    headers: dict[str, str] | None = None,
-    timeout: httpx.Timeout | None = None,
-    auth: httpx.Auth | None = None,
-) -> httpx.AsyncClient:
-    return httpx.AsyncClient(
-        headers=headers,
-        timeout=timeout if timeout is not None else httpx.Timeout(30.0),
-        auth=auth,
-        follow_redirects=True,
-        verify=False,
-    )
-
-
 @asynccontextmanager
 async def _running_server(settings: Settings) -> AsyncIterator[None]:
     ready = asyncio.Event()
@@ -81,7 +67,7 @@ def _pkce_pair() -> tuple[str, str]:
 
 
 async def _register_client(base: str, redirect_uri: str) -> str:
-    async with httpx.AsyncClient(verify=False) as c:
+    async with httpx.AsyncClient() as c:
         resp = await c.post(
             f"{base}/register",
             json={
@@ -99,7 +85,7 @@ async def _register_client(base: str, redirect_uri: str) -> str:
 async def _walk_authorize_to_code(
     base: str, client_id: str, redirect_uri: str, challenge: str
 ) -> str:
-    async with httpx.AsyncClient(verify=False, follow_redirects=False) as c:
+    async with httpx.AsyncClient(follow_redirects=False) as c:
         resp = await c.get(
             f"{base}/authorize",
             params={
@@ -139,7 +125,7 @@ async def _walk_authorize_to_code(
 async def _exchange_code_for_token(
     base: str, client_id: str, code: str, verifier: str, redirect_uri: str
 ) -> str:
-    async with httpx.AsyncClient(verify=False) as c:
+    async with httpx.AsyncClient() as c:
         resp = await c.post(
             f"{base}/token",
             data={
@@ -157,7 +143,7 @@ async def _exchange_code_for_token(
 
 
 async def test_full_oauth_flow_then_ping(settings: Settings) -> None:
-    base = f"https://{settings.mcp_host}:{settings.mcp_port}"
+    base = f"http://{settings.mcp_host}:{settings.mcp_port}"
     redirect_uri = "http://127.0.0.1:54321/cb"
     verifier, challenge = _pkce_pair()
 
@@ -172,7 +158,6 @@ async def test_full_oauth_flow_then_ping(settings: Settings) -> None:
             streamablehttp_client(
                 f"{base}/mcp",
                 headers={"Authorization": f"Bearer {access_token}"},
-                httpx_client_factory=_insecure_factory,
             ) as (read, write, _),
             ClientSession(read, write) as session,
         ):
@@ -189,7 +174,7 @@ async def test_full_oauth_flow_then_ping(settings: Settings) -> None:
 async def test_token_exchange_rejects_pkce_verifier_mismatch(
     settings: Settings,
 ) -> None:
-    base = f"https://{settings.mcp_host}:{settings.mcp_port}"
+    base = f"http://{settings.mcp_host}:{settings.mcp_port}"
     redirect_uri = "http://127.0.0.1:54321/cb"
     _, challenge = _pkce_pair()
     bad_verifier = "x" * 64  # not the verifier whose hash matches `challenge`
@@ -199,7 +184,7 @@ async def test_token_exchange_rejects_pkce_verifier_mismatch(
         code = await _walk_authorize_to_code(
             base, client_id, redirect_uri, challenge
         )
-        async with httpx.AsyncClient(verify=False) as c:
+        async with httpx.AsyncClient() as c:
             resp = await c.post(
                 f"{base}/token",
                 data={
@@ -216,8 +201,8 @@ async def test_token_exchange_rejects_pkce_verifier_mismatch(
 
 
 async def test_register_rejects_non_loopback_redirect(settings: Settings) -> None:
-    base = f"https://{settings.mcp_host}:{settings.mcp_port}"
-    async with _running_server(settings), httpx.AsyncClient(verify=False) as c:
+    base = f"http://{settings.mcp_host}:{settings.mcp_port}"
+    async with _running_server(settings), httpx.AsyncClient() as c:
         resp = await c.post(
             f"{base}/register",
             json={

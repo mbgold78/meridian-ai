@@ -53,7 +53,3 @@ class Settings(BaseSettings):
     @property
     def config_dir(self) -> Path:
         return self.data_dir / "config"
-
-    @property
-    def certs_dir(self) -> Path:
-        return self.data_dir / "certs"
