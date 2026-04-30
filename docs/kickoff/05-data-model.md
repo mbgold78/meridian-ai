@@ -73,11 +73,13 @@ CREATE TABLE api_usage (
     output_tokens INTEGER NOT NULL,
     cost_usd REAL,
     task_id TEXT REFERENCES tasks(id),
-    window_start TEXT NOT NULL
+    window_start TEXT NOT NULL,
+    bucket TEXT NOT NULL DEFAULT 'unknown'    -- 'premium' | 'standard' | 'unknown'; added 0006 at M5
 );
 
 CREATE INDEX idx_api_usage_window ON api_usage(window_start);
 CREATE INDEX idx_api_usage_agent ON api_usage(agent_id);
+CREATE INDEX idx_api_usage_bucket_window ON api_usage(bucket, window_start);   -- added 0006 at M5
 
 CREATE TABLE audit_log (
     id TEXT PRIMARY KEY,
@@ -281,12 +283,16 @@ Phase 1 migration plan:
 
 | File | Milestone | Adds |
 |---|---|---|
-| `0001_initial.sql` | M1 | Original schema: companies, projects, agents (with non-unique role index), tasks (without `estimated_tokens`/`actual_tokens`), api_usage, audit_log |
+| `0001_initial.sql` | M1 | Original schema: companies, projects, agents (with non-unique role index), tasks (without `estimated_tokens`/`actual_tokens`), api_usage (without `bucket`), audit_log |
 | `0002_task_planning.sql` | M4 | `ALTER TABLE tasks ADD COLUMN estimated_tokens INTEGER; ALTER TABLE tasks ADD COLUMN actual_tokens INTEGER;` |
+| `0005_dispatches.sql` | M4 | `dispatches` table per `11-engineer-bridge.md` § Storage shape; multi-per-task dispatch lifecycle tracking |
 | `0003_pm_mode.sql` | M5 | `pm_mode_log` table + `idx_pm_mode_timestamp` |
+| `0006_buckets.sql` | M5 | `ALTER TABLE api_usage ADD COLUMN bucket TEXT NOT NULL DEFAULT 'unknown';` plus `idx_api_usage_bucket_window`. Default is `'unknown'` so new rows whose subprocess cannot determine the bucket are flagged as such (diagnostic). Existing pre-migration rows backfilled to `'standard'` via a one-shot `UPDATE` inside the migration (correct — pre-2026-04-30 state was standard-only, before Mike's Opus 20x premium upgrade). The `bucket` column accepts `'premium'`, `'standard'`, or `'unknown'`; subprocess self-reports via `record_api_call.bucket` |
 | `0004_notifications.sql` | M6 | `inbound_messages`, `outbound_messages`, plus partial indexes |
 
 The split-by-milestone approach is the default for clean traceability. Folding multiple migrations into earlier files is acceptable if no production state exists at the time the later milestone starts (e.g., if Phase 1 build accelerates and M4 starts before M1 has been used in real work, fold 0002 into 0001). Collapse only deliberately.
+
+Migration numbering is sequential by *application order*, not by milestone ship order. M4 ships 0002 + 0005; M5 ships 0003 + 0006; M6 ships 0004. Each migration is independent (no cross-references between 0002/0005 and 0003/0004/0006), so the apparent gap and overlap are functionally safe — the migration runner applies whatever new files are in the sql/ dir on startup, in numeric order.
 
 ## Backup
 

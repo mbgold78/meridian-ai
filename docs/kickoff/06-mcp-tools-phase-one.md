@@ -132,10 +132,11 @@ class GetSubtasksOutput(BaseModel):
 
 ```python
 class RecordApiCallInput(BaseModel):
-    model: str                 # e.g. 'claude-opus-4-7', 'claude-sonnet-4-6'
+    model: str                                                      # e.g. 'claude-opus-4-7', 'claude-sonnet-4-6'
     input_tokens: int
     output_tokens: int
-    task_id: str | None = None # the task this call was for
+    task_id: str | None = None                                      # the task this call was for
+    bucket: Literal['premium', 'standard', 'unknown'] = 'unknown'   # subprocess self-report; default 'unknown' if undetectable
 
 class RecordApiCallOutput(BaseModel):
     usage_id: str
@@ -143,6 +144,8 @@ class RecordApiCallOutput(BaseModel):
 ```
 
 `agent_id` is taken from the auth token, not the input. `cost_usd` is computed server-side from a model→price table maintained in `tools/budget.py`.
+
+The `bucket` field is the subprocess's self-report of which subscription bucket the call landed on (premium vs standard), determined from response headers or other signal available inside the subprocess. Default is `'unknown'` when the subprocess cannot determine the bucket — this is diagnostic, not failure. The daemon stores whatever bucket the subprocess reports; high `'unknown'` attribution in `get_utilization_report` is itself surfaceable to Mike (see M5 acceptance).
 
 **Allowed for all four agents.**
 
@@ -193,10 +196,18 @@ class CheckBudgetForTaskInput(BaseModel):
 
 class CheckBudgetForTaskOutput(BaseModel):
     recommended_model: Literal['claude-haiku-4-5','claude-sonnet-4-6','claude-opus-4-7']
+    recommended_bucket: Literal['premium', 'standard']
     rationale: str
 ```
 
-Stub in M5 — concrete routing logic refined as Mike observes the system run. The stub returns recommendations based on complexity * priority and current burn rate.
+Stub in M5 — concrete routing logic refined as Mike observes the system run. Bucket-aware routing logic (revised 2026-04-30 for the premium-first cost model):
+
+1. **Premium normal/upgrade pace.** Route to `premium`, tier per task complexity (defaults: PM=Opus, Engineer=Sonnet, Implementer=Sonnet, Tester=Sonnet, with complexity-driven upgrades). Most common path under 20x premium.
+2. **Premium conserve pace.** Route to `standard`, downgrade tier one level if complexity allows (Opus → Sonnet, Sonnet → Haiku for trivial work).
+3. **Premium rate_limited.** Route to `standard`. Surface `info`-urgency to Mike about premium rate-limit (uncommon under 20x, diagnostic if it happens).
+4. **Both buckets depleted.** Queue task; surface `urgent`-urgency to Mike — autonomous chain is genuinely capacity-constrained.
+
+Tier defaults remain conservative (Sonnet for Engineer/Implementer/Tester) with budget-driven upgrades. With 20x premium, upgrades to Opus for high-complexity coordination decisions become routine rather than exceptional, but the routing logic decides per-task — defaults are not blanket-upgraded to Opus.
 
 **Not audited.**
 
@@ -208,9 +219,11 @@ Three tools support PM's continuous-mode operation. `get_window_state` and `set_
 
 ```python
 class GetWindowStateInput(BaseModel):
-    agent_id: str | None = None     # default: caller's own agent
+    agent_id: str | None = None                        # default: caller's own agent
+    bucket: Literal['premium', 'standard'] = 'premium' # default: primary bucket
 
 class GetWindowStateOutput(BaseModel):
+    bucket: Literal['premium', 'standard']
     window_start: str
     window_end: str
     tokens_used: int
@@ -218,9 +231,16 @@ class GetWindowStateOutput(BaseModel):
     percentage_used: float
     minutes_to_reset: int
     pace_recommendation: Literal['normal', 'upgrade', 'conserve', 'rate_limited']
+    fallback_bucket_state: dict | None                 # populated when this bucket recommends conserve or rate_limited
+    current_pm_mode: str | None                        # current pm_mode_log mode (interactive | continuous | paused_blocked | paused_question)
+    most_recent_pm_mode_log_timestamp: str | None      # timestamp of most recent pm_mode_log row; for mode-flip detection by callers
 ```
 
-Returns the current 5-hour window state for the specified agent. `pace_recommendation` is computed from `percentage_used` and `minutes_to_reset` per the table in `02-architecture.md` § Window-aware burn. PM's continuous-mode planner consumes this on every planning iteration. Engineer also calls it before dispatching to avoid saturating its own window.
+Returns the current 5-hour window state for the specified agent within the requested bucket. `pace_recommendation` is computed from `percentage_used` and `minutes_to_reset` per the table in `02-architecture.md` § Window-aware burn (per bucket). PM's continuous-mode planner consumes this on every planning iteration as the primary signal; Engineer also calls it before dispatching to avoid saturating its own window.
+
+The `fallback_bucket_state` field (added with the 2026-04-30 premium-first revision) is populated when the queried bucket recommends `conserve` or `rate_limited`, giving PM and Engineer immediate visibility into the fallback bucket's state without a second tool call. Shape mirrors the top-level fields (window_start, tokens_used, etc.).
+
+The `current_pm_mode` and `most_recent_pm_mode_log_timestamp` fields (added during M3 bridge interview) let Engineer detect mode flips against a stored cursor without a separate `get_pm_mode` tool. Callers that don't need mode info ignore these fields.
 
 **Allowed for PM and Engineer.** Implementer/Tester see only their own usage via `get_token_usage`.
 
@@ -251,6 +271,7 @@ class GetUtilizationReportInput(BaseModel):
     session_start: str | None = None    # ISO 8601; default: 24h ago
 
 class WindowUtilization(BaseModel):
+    bucket: Literal['premium', 'standard', 'unknown']
     window_start: str
     window_end: str
     tokens_used: int
@@ -261,12 +282,21 @@ class WindowUtilization(BaseModel):
     unused_attribution: dict[str, int]   # 'mike_interactive' | 'queue_starved' | 'rate_limited' | 'unattributable' → tokens
 
 class GetUtilizationReportOutput(BaseModel):
-    windows: list[WindowUtilization]
-    total_utilization_pct: float
-    unused_reasons: list[str]            # human-readable explanations
+    premium_windows: list[WindowUtilization]
+    standard_windows: list[WindowUtilization]
+    unknown_windows: list[WindowUtilization]    # diagnostic — calls the subprocess couldn't attribute to a bucket
+    premium_total_utilization_pct: float         # primary metric — target 70-90%
+    standard_total_utilization_pct: float        # overflow indicator — no target
+    unknown_total_pct: float                     # diagnostic; high values mean attribution is broken
+    bucket_attribution: dict                     # which dispatches landed on which bucket; dispatch_id → bucket (may include 'unknown')
+    unused_reasons: list[str]                    # human-readable explanations
 ```
 
-Consumed by PM at end-of-session to populate the utilization section of the session report. The daemon attributes unused capacity to known causes (Mike interactive periods, queue starvation, rate-limit events); unattributable unused capacity is flagged in `unused_reasons` so PM can surface to Mike as a `question`.
+Consumed by PM at end-of-session to populate the utilization section of the session report. Premium utilization is the primary metric (target 70-90%); standard utilization is the overflow indicator (no target); unknown utilization is **diagnostic** — high values mean the subprocess-side bucket-attribution mechanism is broken or undocumented. The daemon attributes unused capacity per bucket to known causes (Mike interactive periods, queue starvation, rate-limit events); unattributable unused capacity is flagged in `unused_reasons` so PM can surface to Mike as a `question`.
+
+The `bucket_attribution` field maps each dispatch in the session to the bucket it consumed (including `'unknown'`), so PM can reconstruct which work landed where. Useful when premium utilization is low for diagnostic reasons that aren't visible from per-window stats alone.
+
+Per `07-agent-configs-phase-one.md` § Premium-first utilization expectations, when `unknown_total_pct` exceeds 20% of session total, PM surfaces a `question` urgency to Mike — the bucket-attribution mechanism may need investigation.
 
 **Allowed for PM and Mike.**
 

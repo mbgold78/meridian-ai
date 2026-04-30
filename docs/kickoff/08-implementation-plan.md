@@ -129,27 +129,33 @@ Mike walks through a real PM→Engineer→Implementer→Engineer→PM cycle in h
 
 ### Deliverables
 
-- `tools/budget.py` — `record_api_call`, `get_token_usage`, `get_burn_rate`, `check_budget_for_task`, **`get_window_state`** (with `pace_recommendation` computed per the table in `02-architecture.md` § Window-aware burn)
-- `tools/pm_mode.py` — `set_pm_mode` MCP tool + daemon-side auto-flip writer (writes `mode='interactive'` to `pm_mode_log` whenever Mike's MCP token is used on any tool)
+- `tools/budget.py` — `record_api_call`, `get_token_usage`, `get_burn_rate`, `check_budget_for_task`, **`get_window_state`** (with `pace_recommendation` computed per the table in `02-architecture.md` § Window-aware burn (per bucket); per-bucket queries supported via `bucket="premium"|"standard"` parameter; `fallback_bucket_state` populated when queried bucket recommends `conserve` or `rate_limited`; `current_pm_mode` and `most_recent_pm_mode_log_timestamp` returned for mode-flip detection by callers)
+- `tools/pm_mode.py` — `set_pm_mode` MCP tool + daemon-side auto-flip writer (writes `mode='interactive'` to `pm_mode_log` whenever an MCP call from a `(source='oauth', role='pm')` token is observed)
 - Migration `0003_pm_mode.sql` — `pm_mode_log` table + `idx_pm_mode_timestamp`
+- Migration `0006_buckets.sql` — `ALTER TABLE api_usage ADD COLUMN bucket TEXT NOT NULL DEFAULT 'standard'`; `idx_api_usage_bucket_window`. Backfills existing rows to `'standard'` (correct for pre-2026-04-30 state)
 - Model→price table (per `claude-haiku-4-5`, `claude-sonnet-4-6`, `claude-opus-4-7`)
-- 5-hour rolling window calculation per agent (PM has its own window; Engineer/Implementer/Tester each have their own)
-- By-agent and by-model aggregations
-- Burn rate projection
+- 5-hour rolling window calculation per agent **per bucket** (PM-on-premium and PM-on-standard tracked separately; Engineer/Implementer/Tester each have their own per-bucket windows)
+- By-agent, by-model, and by-bucket aggregations
+- Burn rate projection per bucket
 - Token-cost estimator (stub: `complexity * constant`; refined as actual data accumulates)
-- Stub model routing in `check_budget_for_task`
-- **Continuous-mode driver** — the asyncio supervisor task that launches and manages the long-running PM Claude Code subprocess per the M3-approved bridge architecture. Reads `pm_mode_log` to detect Mike's interactive presence and pauses dispatch when active.
-- Unit tests with seeded data crossing window boundaries, pace-recommendation table coverage, `pm_mode_log` auto-flip on Mike-token use, continuous-mode pause-on-interactive
+- **Bucket-aware model routing in `check_budget_for_task`** per `06-mcp-tools-phase-one.md` § `check_budget_for_task` — premium when premium has normal/upgrade pace; fallback to standard with tier downgrade when premium is `conserve`; `info`-urgency to Mike on premium `rate_limited`; `urgent` when both depleted
+- **Continuous-mode driver** — the asyncio supervisor task that launches and manages the long-running PM Claude Code subprocess per the M3-approved bridge architecture. Reads `pm_mode_log` to detect Mike's interactive presence and pauses dispatch when active. Reads `get_window_state(bucket="premium")` as primary signal.
+- **Bucket-attribution investigation and documentation** — investigate the actual signal source for bucket attribution from inside a Claude Code subprocess (response headers, Claude Code env vars, billing API field, or other). Document the chosen mechanism in `docs/kickoff/04-tech-stack.md` or a new `docs/operations/bucket-attribution.md`. The `record_api_call.bucket` field's reliability depends on this investigation; if no signal source exists, bucket attribution remains advisory and `'unknown'` will dominate `get_utilization_report` until a mechanism is found.
+- Unit tests with seeded data crossing window boundaries, pace-recommendation table coverage per bucket, `pm_mode_log` auto-flip on `(source='oauth', role='pm')` MCP calls, continuous-mode pause-on-interactive, premium-conserve fallback to standard, both-depleted urgent surface, `record_api_call` accepts and persists `bucket='unknown'` correctly
+- **Premium-fallback integration test** — end-to-end scenario forcing premium into `conserve`, verifying new dispatches route to `standard` with tier downgrade, in-flight dispatches finish on their original bucket, and `get_utilization_report` reflects the bucket attribution correctly
+- **Bucket-attribution manual test** — operator runs at least one premium dispatch and one standard dispatch on Mike's actual machine; verifies `record_api_call` self-report yields the correct bucket value (not `'unknown'`); confirms `get_utilization_report` reflects the right bucket on each. If the manual test reveals `'unknown'` is the only achievable value (no attribution mechanism available), document the gap and accept advisory-only routing for Phase 1; queue a Phase 2 follow-up to revisit when Anthropic exposes the signal
 
 ### Acceptance
 
-- Window boundary tests correct (events at 18000-second multiples land in the new window)
-- Multi-agent multi-model aggregation correct
-- Burn rate projection is sensible (rate × remaining seconds in window + observed-so-far)
-- `pace_recommendation` matches the table for every quadrant of (percent-used, minutes-to-reset)
-- Daemon auto-flips `pm_mode_log` to `interactive` when Mike calls any tool; flips back to `continuous` 30 minutes after his last call
+- Window boundary tests correct per bucket (events at 18000-second multiples land in the new window for the relevant bucket)
+- Multi-agent multi-model multi-bucket aggregation correct
+- Burn rate projection is sensible per bucket (rate × remaining seconds in window + observed-so-far)
+- `pace_recommendation` matches the table for every quadrant of (percent-used, minutes-to-reset) within each bucket
+- Daemon auto-flips `pm_mode_log` to `interactive` when an MCP call from a `(source='oauth', role='pm')` token is observed; flips back to `continuous` 30 minutes after the last such call
 - Continuous-mode driver pauses high-token dispatches when `mode='interactive'` is active
-- Dashboard burn rate consistent with `get_burn_rate` direct call
+- Dashboard burn rate consistent with `get_burn_rate` direct call, broken down by bucket
+- Premium-fallback test passes end-to-end (premium conserve → standard fallback → tier downgrade → bucket-attribution audit)
+- Bucket-attribution mechanism investigated and documented; manual test on Mike's machine confirms attribution works on at least one premium and one standard dispatch — OR documents the gap and accepts `'unknown'`-dominant attribution as a Phase 2 follow-up
 - All tests pass
 
 ### Checkpoint

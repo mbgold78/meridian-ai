@@ -1,5 +1,23 @@
 # Addendum: Aggressive subscription utilization
 
+## Premium-first revision (2026-04-30)
+
+Mike upgraded to Claude Opus 20x premium. The cost model inverts: premium is the primary capacity, standard Pro/Max subscription becomes overflow. The behavioral specifications below still apply — the *aggressive utilization* commitment is unchanged — but the bucket targeting changes:
+
+- The 70–90% utilization target applies to **premium specifically**, not to total subscription capacity. Standard subscription utilization is uncapped (overflow indicator, no target).
+- Where the original addendum says "subscription window," read it as "premium window" first; standard window is the fallback when premium is in `conserve` or `rate_limited`.
+- "Idle subscription capacity is wasted capacity" becomes "**idle premium capacity is wasted capacity**." Standard subscription idle is fine — it's the relief valve, not the primary fuel.
+- Two reasons premium is primary: (a) it doesn't compound across windows the way standard subscription does — unused premium time is gone; (b) reserving premium for "important" work creates a hoarding pattern where premium goes unused while standard windows hit rate limits.
+- Rate-limit semantics: premium `rate_limited` is `info`-urgency (uncommon under 20x, diagnostic); standard `rate_limited` after premium fallback is `question`-urgency (both buckets under pressure is meaningful signal); both depleted is `urgent`.
+
+The original addendum content is preserved as-authored below — its behavioral specifications still apply. Read it through the premium-first lens: PM continuous mode dispatches against premium first; Engineer reads `get_window_state(bucket="premium")` as primary; the dispatch loop continues on standard when premium throttles.
+
+See `02-architecture.md` § Premium-first utilization model and `06-mcp-tools-phase-one.md` § `get_window_state` for the per-bucket schema. Migration `0006_buckets.sql` (M5) adds `api_usage.bucket` to track which bucket each call landed on.
+
+---
+
+## Original addendum (pre-2026-04-30)
+
 The current kickoff is defensively scoped on rate-limit handling — graceful degradation, no silent retry, surface to Mike. That's correct for *not breaking* but insufficient for what Mike actually wants: full utilization of the Claude Pro/Max subscription window so the Orchestrator delivers meaningful Meridian work continuously, not just when Mike is at the keyboard.
 
 This addendum amends the kickoff to make aggressive subscription utilization a first-class architectural commitment. Apply these changes to the affected documents before M1 progresses past basic scaffolding.

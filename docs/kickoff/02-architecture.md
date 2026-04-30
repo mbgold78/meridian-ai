@@ -88,15 +88,19 @@ Full list and rationale in `06-mcp-tools-phase-one.md`.
 
 Tool calls are safe to retry. State transitions check current state before applying. Deterministic IDs are used where they make sense (e.g., audit_log entries are UUIDs but seeded such that the same logical event produces the same hash if needed). `claim_task` uses a conditional UPDATE (`WHERE status = 'pending'`) to make double-claim a no-op rather than a corruption.
 
-## Subscription-first cost model
+## Premium-first cost model
 
-Phase 1 runs entirely on Mike's Claude Pro/Max subscription. The Engineer↔subagent bridge architecture chosen at M3 must be subscription-compatible by default. The current likely choice is Option A (subprocess Claude Code), which inherits the subscription via Claude Code's existing auth.
+Phase 1 runs entirely on Mike's Claude subscription tiers — Opus 20x premium (primary) and standard Pro/Max (fallback). The Engineer↔subagent bridge architecture chosen at M3 must be subscription-compatible by default. The chosen path is Option A (subprocess Claude Code), which inherits the subscription via Claude Code's existing auth and consumes whichever bucket Claude Code is currently routing to.
 
-API credits remain available as overflow for specific high-token dispatches but are not required for Phase 1 completion. Rate-limit handling is graceful: log the event, surface to PM, surface to Mike via session report, do not silently retry.
+API credits remain available as overflow for specific high-token dispatches but are not required for Phase 1 completion. Rate-limit handling is graceful: log the event, surface to PM, surface to Mike via session report, do not silently retry. Bucket-routing details are in § Premium-first utilization model below.
 
-## Subscription utilization model
+## Premium-first utilization model
 
-The subscription-first cost model has a corollary: **idle subscription capacity is wasted capacity.** Phase 1 commits to *aggressive* utilization — PM operates continuously when Mike is not interactive, dispatching work to Engineer as fast as the rolling 5-hour window allows. The Orchestrator is "deliberate about budget," not "polite about budget."
+Mike runs Claude Opus 20x premium plus a standard Pro/Max subscription (revised 2026-04-30 from the original subscription-first framing). The Orchestrator's cost model treats premium as the primary capacity to be drained first, with standard subscription as fallback for overflow.
+
+**Operational principle:** burn premium aggressively. When premium has capacity, all dispatchable work routes there. Premium depletion triggers fallback to standard subscription. Reserving premium for "important" work is an anti-pattern — it creates idle premium capacity while standard windows hit rate limits.
+
+The two reasons premium gets primary treatment: (a) it's paid-for capacity that doesn't compound across windows the way standard subscription does — unused premium time is gone; (b) reserving it for "important" work creates a hoarding pattern where premium goes unused while standard windows hit rate limits.
 
 ### PM operating modes
 
@@ -107,19 +111,27 @@ PM has two first-class operating modes:
 
 **Architectural realization (decided at M3, see `11-engineer-bridge.md`):** both the interactive PM and the continuous PM are Claude Code subprocesses. The interactive PM is the session Mike opens directly (authenticated via OAuth — Claude Code's loopback flow against the orchestrator's OAuth AS). The continuous PM is a long-running, daemon-launched Claude Code subprocess (authenticated via a daemon-issued static token with `label='pm-continuous'`). The two PM instances are different Claude conversations with the same system prompt and MCP access; they coordinate through the database via `pm_mode_log` and the task queue, never directly. When the daemon observes an MCP call from a token with `(source='oauth', role='pm')` — which is unforgeable, set only by the OAuth provider at issuance — it writes `mode='interactive'` to `pm_mode_log`, and the continuous-mode subprocess pauses dispatch on its next planning iteration. The M3 bridge decision is Option A (subprocess Claude Code) with MCP-tool completion (the `complete_dispatch` tool) as the structured-output mechanism for sub-agent dispatch.
 
-### Window-aware burn
+### Window-aware burn (per bucket)
 
-PM consumes `get_window_state` on every planning iteration. The pace recommendation is one of four states:
+`get_window_state` returns per-bucket state — premium and standard are tracked separately. PM consumes `get_window_state(bucket="premium")` on every planning iteration as the primary signal; standard-bucket state is the fallback signal. The pace recommendations apply within a bucket; cross-bucket behavior is overlaid below.
 
-| Window state | Pace | PM behavior |
+| Window state (within a bucket) | Pace | Behavior |
 |---|---|---|
 | > 50% remaining, > 2h to reset | `normal` | Dispatch as needed |
 | > 50% remaining, < 1h to reset | `upgrade` | Actively promote lower-priority work into unused capacity |
 | < 50% remaining, > 1h to reset | `normal` (defer optional polish-tier) | Continue at normal pace; defer non-essential work to next window |
-| < 20% remaining | `conserve` | Finish in-flight work, no new high-token dispatches |
-| Rate-limited | `rate_limited` | Surface as `question`-urgency to Mike, resume aggressively at reset |
+| < 20% remaining | `conserve` | Finish in-flight work, no new high-token dispatches *into this bucket* |
+| Rate-limited | `rate_limited` | Surface to Mike, resume aggressively at reset |
 
-The `upgrade` transition is the load-bearing behavior — PM actively looks for work to promote into windows with unused capacity rather than passively waiting for reset.
+**Cross-bucket overlay:**
+
+- **Premium normal/upgrade.** All dispatchable work routes to premium. Most common state.
+- **Premium conserve (< 20% remaining).** Premium is nearly exhausted. New dispatches fall back to **standard** subscription; in-flight dispatches finish on whichever bucket they started.
+- **Premium rate_limited.** Rare under 20x premium; if it happens, fall back to standard. Surface to Mike as `info`-urgency (uncommon enough to be diagnostic, not actionable).
+- **Standard rate_limited (after premium fallback).** Worth surfacing as `question`-urgency — both buckets under pressure simultaneously is meaningful signal.
+- **Both depleted.** Surface as `urgent` — the autonomous chain is genuinely capacity-constrained and Mike should know.
+
+The `upgrade` transition remains the load-bearing behavior, scoped to whichever bucket is active — PM actively looks for work to promote into windows with unused capacity rather than passively waiting for reset.
 
 ### Parallel sub-agent dispatch
 
@@ -129,9 +141,13 @@ The bridge architecture (M3) must support: concurrent subprocess invocations, is
 
 ### Utilization targets
 
-During Mike's work hours (8 AM – 6 PM ET, weekdays), continuous-mode utilization should run **70–90% of available subscription capacity.** Lower utilization is acceptable when (a) Mike is interactive heavily, (b) the queue has genuinely no dispatchable work, (c) Engineer is rate-limited on substrate codebase work, or (d) PM is paused on a legitimate `question` to Mike with no other independent work. Lower utilization for any other reason is surfaced to Mike as `question`-urgency.
+The 70–90% target applies to **premium** specifically, not to total capacity. Standard-subscription utilization is whatever it ends up being — used as overflow when premium throttles, no target.
 
-End-of-session reports include a per-window utilization breakdown with attributed reasons for any unused capacity. PM is honest about under-utilization — if the autonomous chain isn't delivering on the "burn the subscription" promise, Mike sees it.
+During Mike's work hours (8 AM – 6 PM ET, weekdays), **premium utilization** should run 70–90% of available capacity. Lower premium utilization is acceptable when (a) Mike is interactive heavily, (b) the queue has genuinely no dispatchable work, (c) Engineer is rate-limited on substrate codebase work, or (d) PM is paused on a legitimate `question` to Mike with no other independent work. Lower premium utilization for any other reason is surfaced to Mike as `question`-urgency.
+
+End-of-session reports include per-window utilization broken down by bucket — premium first (the primary metric), standard second (the overflow indicator). PM is honest about under-utilization — if the autonomous chain isn't delivering on the "burn premium" promise, Mike sees it.
+
+The critical reframe from the pre-2026-04-30 model: **idle premium capacity is what's wasted, not idle subscription capacity in general.** Burn premium first; standard subscription is the relief valve, not the primary fuel.
 
 ## Notifications (M6)
 
