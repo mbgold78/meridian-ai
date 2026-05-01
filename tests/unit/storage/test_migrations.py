@@ -10,11 +10,14 @@ import pytest_asyncio
 from meridian_orchestrator.storage.migrations import run_migrations
 from meridian_orchestrator.storage.sqlite import SqliteStorage
 
-# At M4a we ship 0002_task_planning.sql and 0005_dispatches.sql alongside
-# 0001_initial.sql. The reservation gap (0003 ships at M5; 0004 at M6) is
-# intentional; the migrations are independent so out-of-ship-order numbering
-# is safe.
-EXPECTED_VERSIONS = [1, 2, 5]
+# Shipped migrations:
+#   0001_initial.sql                          (M1)
+#   0002_task_planning.sql                    (M4a)
+#   0005_dispatches.sql                       (M4a)
+#   0006_dispatches_last_tool_called.sql      (M4c-supervisor-base)
+# The reservation gap (0003 ships at M5; 0004 at M6) is intentional; the
+# migrations are independent so out-of-ship-order numbering is safe.
+EXPECTED_VERSIONS = [1, 2, 5, 6]
 
 
 @pytest_asyncio.fixture
@@ -131,6 +134,8 @@ async def test_dispatches_columns_match_spec(storage: SqliteStorage) -> None:
         "test_results_json",
         "queue_items_raised_json",
         "notes",
+        # 0006 — added at M4c-supervisor-base for the activity writer
+        "last_tool_called",
     }
     missing = expected - col_names
     assert not missing, f"Missing columns on dispatches: {missing}"

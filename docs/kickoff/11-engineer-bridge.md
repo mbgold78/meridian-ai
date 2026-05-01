@@ -437,28 +437,31 @@ Long-running supervisors (continuous PM and Engineer) have no natural completion
 
 **Expected cadence.** A long-running supervisor is expected to make at least one MCP call (any MCP tool the supervisor is permitted to call — for both supervisors: `get_window_state`, `get_queue`, `record_api_call`, `claim_task`, `update_task_status`; PM-continuous additionally: `set_pm_mode`, `submit_task`; engineer-supervisor additionally: `dispatch_implementer`, `dispatch_tester`, `get_dispatch_status`, `get_dispatch_events`, etc.) within every **15-minute** window during normal operation. Each MCP call updates `dispatches.last_activity_at` for the supervisor's dispatch row (see § `last_activity_at` writer below).
 
-#### `last_activity_at` writer (MCP middleware)
+#### `last_activity_at` and `last_tool_called` writer
 
-`dispatches.last_activity_at` is the general "subprocess is alive and making progress" signal across **all** dispatched subprocesses — sub-agent dispatches (Implementer, Tester) and long-running supervisors (engineer-supervisor at M4c, pm-continuous at M5). It is **not** supervisor-specific. Future liveness-derived behaviors (the soft-warning threshold at `dispatch.soft_warning`; potential M5+ stall detection on sub-agent dispatches; etc.) read from this same column.
+`dispatches.last_activity_at` and `dispatches.last_tool_called` together form the general "subprocess is alive and making progress" signal across **all** dispatched subprocesses — sub-agent dispatches (Implementer, Tester) and long-running supervisors (engineer-supervisor at M4c, pm-continuous at M5). Both are **current state** of the dispatch row, not historical events; storing them on the row (rather than deriving them from `audit_log` queries) is the right shape because the watchdog reads them every poll and the cost of an audit-log query in the hot path is unacceptable. Future liveness-derived behaviors (the soft-warning threshold at `dispatch.soft_warning`; potential M5+ stall detection on sub-agent dispatches; etc.) read from these same columns.
 
-**Writer contract.** Every authenticated MCP call lands through the daemon's MCP server. Middleware in the auth-resolved-token path runs:
+**Writer contract.** A single helper function `bridge.activity.record_mcp_call(storage, token_id, tool_name)` is the only call site for the UPDATE that touches these columns. Tool wrappers in `server.py` call it immediately after `_resolve_agent_id()` resolves the caller's token. The helper runs:
 
 ```sql
 UPDATE dispatches
-   SET last_activity_at = datetime('now')
+   SET last_activity_at = datetime('now'),
+       last_tool_called = ?
  WHERE token_id = ?
    AND status NOT IN ('completed','declined','failed','timed_out','cancelled','compacted')
 ```
 
+**Single-call-site discipline.** The helper's docstring states explicitly: *"single point of write for `dispatches.last_activity_at` and `dispatches.last_tool_called`; do not write these columns elsewhere."* Any future code that bypasses the helper to UPDATE these columns directly is incorrect by spec; this discipline makes drift catchable at code review.
+
 **Skip cases (both produce zero updated rows):**
 1. Tokens with no associated dispatch row (e.g., the operator's interactive OAuth-sourced PM token; static admin tokens not bound to a dispatch). Resolved by the `token_id = ?` clause matching nothing.
-2. Tokens whose dispatch row is in a terminal state. A subprocess making a final MCP call after termination — for example, a sub-agent that calls `complete_dispatch` and then briefly continues running before exit-cleanup revokes the token — must not reset the activity clock for a row whose lifecycle is already over. Resolved by the `status NOT IN (...)` clause. The terminal-states set matches `bridge.dispatcher._TERMINAL_STATES`.
+2. Tokens whose dispatch row is in a terminal state. A subprocess making a final MCP call after termination — for example, a sub-agent that calls `complete_dispatch` and then briefly continues running before exit-cleanup revokes the token — must not reset the activity clock for a row whose lifecycle is already over. Resolved by the `status NOT IN (...)` clause. The terminal-states set matches `bridge.dispatcher._TERMINAL_STATES` exactly: `completed`, `declined`, `failed`, `timed_out`, `cancelled`, `compacted`.
 
-The middleware is the only writer of `last_activity_at`. Direct writes from MCP tool handlers are forbidden — single ownership simplifies reasoning about the column's semantics.
+`dispatches.last_tool_called` ships in migration `0006_dispatches_last_tool_called.sql` at M4c-supervisor-base (ALTER TABLE ADD COLUMN; default NULL for existing rows). The audit action `dispatch.last_activity` (audit-action table line 252) remains M5-spec'd and `record_api_call`-specific — it is a separate concept from these activity-writer column updates. The watchdog never queries `audit_log` for last-tool/last-activity purposes; current state lives on the row.
 
 **Watchdog logic.** The supervisor checks every 60 seconds. The effective last-activity moment is `COALESCE(last_activity_at, started_at)` — on initial launch (or the first 30 minutes after a respawn before the new supervisor instance has made any MCP call), `last_activity_at` is NULL and the watchdog falls back to `started_at`. This catches a silently-crashed supervisor that dies before its first MCP call; without the fallback, NULL `last_activity_at` would never trip the timeout. If `now - COALESCE(last_activity_at, started_at) > 30 minutes`, the supervisor subprocess is presumed hung:
 
-1. Audit `dispatch.heartbeat_timeout` with `idle_seconds`, `last_tool_called`, `role`, and the dispatch_id. `last_tool_called` is captured at this moment (the watchdog reads `details_json` of the most recent `dispatch.last_activity` audit row for this dispatch, or NULL if no MCP call has landed); it is then **passed as a parameter into `respawn()`** rather than retrieved later from in-process state. (Same moment in practice, but source matters: the value belongs to the timeout-detection event, not the respawn event.)
+1. Audit `dispatch.heartbeat_timeout` with `idle_seconds`, `last_tool_called`, `role`, and the dispatch_id. `last_tool_called` is read from `dispatches.last_tool_called` (the column the writer helper maintains; see § `last_activity_at` and `last_tool_called` writer above) — the same SELECT that establishes the row is hung also reads `last_tool_called`. The captured value is then **passed as a parameter into `respawn()`** rather than having `respawn()` retrieve it later from in-process or DB state. (Same moment in practice, but source matters: the value belongs to the timeout-detection event, not the respawn event.) NULL indicates no MCP call from this dispatch has landed yet.
 2. Standard timeout sequence: SIGTERM the subprocess, 10-second grace period, SIGKILL if still alive.
 3. `TokenStore.revoke(token_id)`. Audit `dispatch.token_revoked` with `reason='heartbeat_timeout'`.
 4. Audit `dispatch.subprocess_terminated` with exit code (or signal).

@@ -1,0 +1,21 @@
+-- Migration 0006_dispatches_last_tool_called.sql (M4c-supervisor-base).
+--
+-- Adds dispatches.last_tool_called: the most recent MCP tool name the
+-- dispatch's subprocess invoked. Updated alongside last_activity_at by
+-- the writer helper bridge.activity.record_mcp_call (single call site
+-- for both columns; see 11-engineer-bridge.md § `last_activity_at` and
+-- `last_tool_called` writer).
+--
+-- Read by the watchdog at timeout-detection time to populate the
+-- dispatch.heartbeat_timeout audit row's last_tool_called field;
+-- captured value is forwarded into respawn() and ultimately into the
+-- dispatch.heartbeat_timeout_cap audit row's details_json when the
+-- three-respawns-per-hour cap fires.
+--
+-- Stored as current state on the row rather than derived from audit_log
+-- because last_tool_called is a current-state property of the dispatch,
+-- not a historical event. Querying audit_log to derive current state
+-- would be a category error and would make the watchdog hot path pay
+-- an unbounded scan on every poll.
+
+ALTER TABLE dispatches ADD COLUMN last_tool_called TEXT;
