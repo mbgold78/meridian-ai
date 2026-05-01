@@ -79,11 +79,12 @@ async def _run() -> None:
         if hasattr(signal, "SIGBREAK"):
             signal.signal(signal.SIGBREAK, lambda *_: _on_signal())
 
-    async with _lifespan(settings):
+    async with _lifespan(settings) as storage:
         registry = AgentRegistry(settings.agents_dir)
         async with registry.lifespan():
             mcp_task = asyncio.create_task(
-                serve_mcp(settings, registry=registry), name="mcp-server"
+                serve_mcp(settings, registry=registry, storage=storage),
+                name="mcp-server",
             )
             logger.info(
                 "startup.complete",

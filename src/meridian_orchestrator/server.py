@@ -40,11 +40,13 @@ from pydantic import AnyHttpUrl, BaseModel
 
 from meridian_orchestrator.agents.permissions import PermissionResolver
 from meridian_orchestrator.agents.registry import AgentRegistry
-from meridian_orchestrator.auth import TokenStore
+from meridian_orchestrator.auth import TokenStore, _parse_token
+from meridian_orchestrator.bridge.activity import record_mcp_call
 from meridian_orchestrator.config import Settings
 from meridian_orchestrator.errors import AuthError, NotFoundError
 from meridian_orchestrator.errors import PermissionError as OrchestratorPermissionError
 from meridian_orchestrator.oauth import MeridianOAuthProvider, make_approval_routes
+from meridian_orchestrator.storage.interface import Storage
 from meridian_orchestrator.tools.agents import (
     GetAgentConfigInput,
     GetAgentConfigOutput,
@@ -76,10 +78,37 @@ def _resolve_agent_id() -> str:
     return access.client_id
 
 
+async def _record_caller_activity(
+    storage: Storage | None, tool_name: str
+) -> None:
+    """Resolve the caller's token from the request context and update
+    ``dispatches.last_activity_at`` + ``dispatches.last_tool_called``
+    via :func:`bridge.activity.record_mcp_call`.
+
+    Skipped silently when ``storage`` is None (test fixtures that don't
+    need activity tracking) or when the access context lacks a parseable
+    token. Two further skip cases are handled inside ``record_mcp_call``
+    itself (no matching dispatch row; row in terminal state) — both
+    produce zero updated rows. See ``11-engineer-bridge.md`` § `last_activity_at`
+    and `last_tool_called` writer for the full contract.
+    """
+    if storage is None:
+        return
+    access = get_access_token()
+    if access is None:
+        return
+    parsed = _parse_token(access.token)
+    if parsed is None:
+        return
+    token_id, _ = parsed
+    await record_mcp_call(storage, token_id, tool_name)
+
+
 def build_server(
     settings: Settings,
     store: TokenStore | None = None,
     registry: AgentRegistry | None = None,
+    storage: Storage | None = None,
 ) -> FastMCP:
     """Construct the FastMCP server with auth + the current tool set.
 
@@ -139,6 +168,7 @@ def build_server(
     )
     async def ping(echo: str) -> PingOutput:
         agent_id = _resolve_agent_id()
+        await _record_caller_activity(storage, "ping")
         return PingOutput(
             pong=echo,
             agent_id=agent_id,
@@ -146,7 +176,7 @@ def build_server(
         )
 
     if registry is not None:
-        _register_agent_tools(mcp, registry)
+        _register_agent_tools(mcp, registry, storage)
 
     return mcp
 
@@ -168,12 +198,17 @@ def _resolve_caller_role(registry: AgentRegistry) -> str:
     return ra.config.role
 
 
-def _register_agent_tools(mcp: FastMCP, registry: AgentRegistry) -> None:
+def _register_agent_tools(
+    mcp: FastMCP, registry: AgentRegistry, storage: Storage | None
+) -> None:
     """Register list_agents / get_agent_config / get_org_chart on ``mcp``.
 
     Each tool checks the caller's per-tool allowlist via
     :class:`PermissionResolver` against the current registry snapshot. The
     snapshot is read fresh per call so hot-reloads take effect immediately.
+
+    ``storage`` is threaded through to the activity-writer helper. ``None``
+    skips activity tracking — used by test fixtures that don't need it.
     """
 
     @mcp.tool(
@@ -184,6 +219,7 @@ def _register_agent_tools(mcp: FastMCP, registry: AgentRegistry) -> None:
         role: str | None = None, status: str | None = None
     ) -> ListAgentsOutput:
         caller_role = _resolve_caller_role(registry)
+        await _record_caller_activity(storage, "list_agents")
         resolver = PermissionResolver(registry.configs_by_role())
         resolver.require_tool(caller_role, "list_agents")  # type: ignore[arg-type]
         return list_agents(registry, ListAgentsInput(role=role, status=status))
@@ -194,6 +230,7 @@ def _register_agent_tools(mcp: FastMCP, registry: AgentRegistry) -> None:
     )
     async def _get_agent_config(agent_id: str) -> GetAgentConfigOutput:
         caller_role = _resolve_caller_role(registry)
+        await _record_caller_activity(storage, "get_agent_config")
         resolver = PermissionResolver(registry.configs_by_role())
         resolver.require_tool(caller_role, "get_agent_config")  # type: ignore[arg-type]
         result = get_agent_config(registry, GetAgentConfigInput(agent_id=agent_id))
@@ -207,6 +244,7 @@ def _register_agent_tools(mcp: FastMCP, registry: AgentRegistry) -> None:
     )
     async def _get_org_chart() -> GetOrgChartOutput:
         caller_role = _resolve_caller_role(registry)
+        await _record_caller_activity(storage, "get_org_chart")
         resolver = PermissionResolver(registry.configs_by_role())
         resolver.require_tool(caller_role, "get_org_chart")  # type: ignore[arg-type]
         return get_org_chart(registry, GetOrgChartInput())
@@ -216,6 +254,7 @@ async def serve(
     settings: Settings,
     ready: asyncio.Event | None = None,
     registry: AgentRegistry | None = None,
+    storage: Storage | None = None,
 ) -> None:
     """Run the MCP HTTP server until cancelled.
 
@@ -223,8 +262,11 @@ async def serve(
     ``ready`` to be signalled once the listener is accepting connections (used
     by the integration test). Pass ``registry`` for M3+ tools; ``None`` keeps
     the M2-only ``ping``-tool surface for tests that don't need agent state.
+    Pass ``storage`` to enable the ``last_activity_at`` writer middleware
+    (M4c-supervisor-base); ``None`` is fine for tests that don't exercise
+    dispatch-row state.
     """
-    mcp = build_server(settings, registry=registry)
+    mcp = build_server(settings, registry=registry, storage=storage)
     app = mcp.streamable_http_app()
     config = uvicorn.Config(
         app,
