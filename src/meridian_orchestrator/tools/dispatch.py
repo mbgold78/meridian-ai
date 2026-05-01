@@ -509,25 +509,285 @@ async def _enforce_self_dispatch_access(
         raise OrchestratorPermissionError("caller does not own this dispatch")
 
 
+# ----- M4c-tooling: query tools (get_recent_dispatches, get_dispatch_events) ---
+
+
+_DispatchRoleLiteral = Literal[
+    "implementer", "tester", "pm-continuous", "engineer-supervisor"
+]
+_DispatchStatusLiteral = Literal[
+    "queued",
+    "running",
+    "completed",
+    "declined",
+    "failed",
+    "timed_out",
+    "cancelled",
+    "compacted",
+]
+
+
+class DispatchSummary(BaseModel):
+    id: str
+    task_id: str | None
+    role: str
+    status: str
+    working_directory: str
+    completed_at: str | None
+    actual_touched_files: list[str] = Field(default_factory=list)
+    commit_hash: str | None
+
+
+class GetRecentDispatchesInput(BaseModel):
+    role: _DispatchRoleLiteral | None = None
+    status: list[str] | None = None
+    since: str | None = None  # ISO 8601 UTC; default: 24h ago
+    limit: int = Field(default=50, ge=1, le=500)
+
+
+class GetRecentDispatchesOutput(BaseModel):
+    dispatches: list[DispatchSummary]
+
+
+class AuditEvent(BaseModel):
+    """Mirrors the ``audit_log`` row shape returned by ``get_audit_log``."""
+
+    id: str
+    timestamp: str
+    actor: str
+    action: str
+    target: str | None
+    details_json: str | None
+    success: bool
+    error_message: str | None
+
+
+class GetDispatchEventsInput(BaseModel):
+    dispatch_ids: list[str] = Field(..., min_length=1, max_length=100)
+    since_timestamp: str | None = None  # ISO 8601 UTC; default: no filter
+
+
+class GetDispatchEventsOutput(BaseModel):
+    events: list[AuditEvent]
+
+
+def _scoping_where_clause(
+    caller_role: str, caller_agent_id: str
+) -> tuple[str, list[Any]]:
+    """Return ``(sql_fragment, params)`` expressing the set of dispatches the
+    caller is allowed to see.
+
+    Single source of truth for the M4c subtree-scoping rules per
+    ``11-engineer-bridge.md`` § ``get_recent_dispatches`` Hierarchy check.
+    Both query tools share this helper so future scope broadening (M6
+    dashboard, M5 new role additions) lands in one place.
+
+    Engineer: sub-agent dispatches Engineer initiated (role IN
+    implementer/tester AND dispatches.task_id IN tasks-claimed-by-engineer).
+    PM: same role filter, no claimed_by restriction.
+    Implementer/Tester: rejected — they have ``get_dispatch_status`` /
+    ``get_dispatch_result`` for their own dispatches.
+    Other roles: rejected (defensive).
+
+    Supervisor lifecycle rows (role engineer-supervisor / pm-continuous)
+    are excluded for both Engineer and PM at M4c — see § Supervisor
+    lifecycle rows excluded at M4c.
+    """
+    if caller_role == "engineer":
+        return (
+            "dispatches.role IN ('implementer', 'tester') "
+            "AND dispatches.task_id IN ("
+            "SELECT id FROM tasks WHERE claimed_by = ?"
+            ")",
+            [caller_agent_id],
+        )
+    if caller_role == "pm":
+        return (
+            "dispatches.role IN ('implementer', 'tester')",
+            [],
+        )
+    raise OrchestratorPermissionError(
+        f"caller role {caller_role!r} cannot invoke dispatch query tools"
+    )
+
+
+async def _visible_dispatch_ids(
+    storage: Storage,
+    dispatch_ids: list[str],
+    caller_role: str,
+    caller_agent_id: str,
+) -> list[str]:
+    """Filter a caller-supplied list of dispatch_ids to the subset visible
+    to the caller per the same scoping rules. Used by
+    ``get_dispatch_events`` to gate audit-log access."""
+    if not dispatch_ids:
+        return []
+    where, scoping_params = _scoping_where_clause(caller_role, caller_agent_id)
+    placeholders = ",".join(["?"] * len(dispatch_ids))
+    rows = await storage.fetch_all(
+        f"SELECT id FROM dispatches WHERE id IN ({placeholders}) AND {where}",
+        (*dispatch_ids, *scoping_params),
+    )
+    return [r["id"] for r in rows]
+
+
+async def get_recent_dispatches(
+    *,
+    storage: Storage,
+    request: GetRecentDispatchesInput,
+    caller_agent_id: str,
+    caller_role: str,
+) -> GetRecentDispatchesOutput:
+    """Return recent dispatches the caller is allowed to see, filtered by
+    role/status/since/limit and scoped to the caller's subtree per
+    ``_scoping_where_clause``.
+
+    Read-only; not audited (high-frequency for Engineer's loop). NULL
+    ``actual_touched_files_json`` parses to an empty list.
+    """
+    where_clauses: list[str] = []
+    params: list[Any] = []
+
+    scoping_clause, scoping_params = _scoping_where_clause(
+        caller_role, caller_agent_id
+    )
+    where_clauses.append(scoping_clause)
+    params.extend(scoping_params)
+
+    if request.role is not None:
+        where_clauses.append("dispatches.role = ?")
+        params.append(request.role)
+
+    if request.status:
+        status_placeholders = ",".join(["?"] * len(request.status))
+        where_clauses.append(f"dispatches.status IN ({status_placeholders})")
+        params.extend(request.status)
+
+    if request.since is not None:
+        since_iso = request.since
+    else:
+        # Default: 24h ago, ISO 8601 UTC microseconds.
+        from datetime import UTC, datetime, timedelta
+
+        since_iso = (
+            datetime.now(tz=UTC) - timedelta(hours=24)
+        ).isoformat(timespec="microseconds")
+    where_clauses.append(
+        "(dispatches.completed_at >= ? OR dispatches.issued_at >= ?)"
+    )
+    params.extend([since_iso, since_iso])
+
+    where_sql = " AND ".join(where_clauses)
+    rows = await storage.fetch_all(
+        f"SELECT id, task_id, role, status, working_directory, "
+        f"commit_hash, completed_at, actual_touched_files_json "
+        f"FROM dispatches "
+        f"WHERE {where_sql} "
+        f"ORDER BY COALESCE(dispatches.completed_at, dispatches.issued_at) DESC "
+        f"LIMIT ?",
+        (*params, request.limit),
+    )
+
+    return GetRecentDispatchesOutput(
+        dispatches=[
+            DispatchSummary(
+                id=row["id"],
+                task_id=row["task_id"],
+                role=row["role"],
+                status=row["status"],
+                working_directory=row["working_directory"],
+                completed_at=row["completed_at"],
+                actual_touched_files=(
+                    list(json.loads(row["actual_touched_files_json"]))
+                    if row["actual_touched_files_json"]
+                    else []
+                ),
+                commit_hash=row["commit_hash"],
+            )
+            for row in rows
+        ]
+    )
+
+
+async def get_dispatch_events(
+    *,
+    storage: Storage,
+    request: GetDispatchEventsInput,
+    caller_agent_id: str,
+    caller_role: str,
+) -> GetDispatchEventsOutput:
+    """Return audit events for the requested dispatch_ids, filtered by
+    optional ``since_timestamp`` and scoped to the caller's visibility.
+
+    Read-only; not audited (high-frequency for Engineer's loop).
+    Caller-supplied dispatch_ids are filtered through the scoping helper
+    first; events are then queried by ``target`` column on ``audit_log``
+    (target stores dispatch_id for all dispatch.* / engineer.* audit
+    actions).
+    """
+    visible_ids = await _visible_dispatch_ids(
+        storage, request.dispatch_ids, caller_role, caller_agent_id
+    )
+    if not visible_ids:
+        return GetDispatchEventsOutput(events=[])
+
+    placeholders = ",".join(["?"] * len(visible_ids))
+    sql_parts = [
+        f"SELECT id, timestamp, actor, action, target, details_json, "
+        f"success, error_message FROM audit_log "
+        f"WHERE target IN ({placeholders})"
+    ]
+    params: list[Any] = list(visible_ids)
+    if request.since_timestamp is not None:
+        sql_parts.append("AND timestamp >= ?")
+        params.append(request.since_timestamp)
+    sql_parts.append("ORDER BY timestamp, rowid")
+
+    rows = await storage.fetch_all(" ".join(sql_parts), tuple(params))
+    return GetDispatchEventsOutput(
+        events=[
+            AuditEvent(
+                id=row["id"],
+                timestamp=row["timestamp"],
+                actor=row["actor"],
+                action=row["action"],
+                target=row["target"],
+                details_json=row["details_json"],
+                success=bool(row["success"]),
+                error_message=row["error_message"],
+            )
+            for row in rows
+        ]
+    )
+
+
 # Re-exports for the dispatchable role union and outcome shape, since the
 # server-side wiring composes these with the bridge dispatcher and tests
 # import them from this module for ergonomics.
 __all__ = [
+    "AuditEvent",
     "CompleteDispatchInput",
     "CompleteDispatchOutput",
     "DispatchImplementerInput",
     "DispatchImplementerOutput",
     "DispatchRole",
+    "DispatchSummary",
     "DispatchTesterInput",
     "DispatchTesterOutput",
     "EngineerDecision",
+    "GetDispatchEventsInput",
+    "GetDispatchEventsOutput",
     "GetDispatchResultInput",
     "GetDispatchResultOutput",
     "GetDispatchStatusInput",
     "GetDispatchStatusOutput",
+    "GetRecentDispatchesInput",
+    "GetRecentDispatchesOutput",
     "complete_dispatch",
     "dispatch_implementer",
     "dispatch_tester",
+    "get_dispatch_events",
     "get_dispatch_result",
     "get_dispatch_status",
+    "get_recent_dispatches",
 ]

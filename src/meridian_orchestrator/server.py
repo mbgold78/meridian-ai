@@ -60,6 +60,14 @@ from meridian_orchestrator.tools.agents import (
     get_org_chart,
     list_agents,
 )
+from meridian_orchestrator.tools.dispatch import (
+    GetDispatchEventsInput,
+    GetDispatchEventsOutput,
+    GetRecentDispatchesInput,
+    GetRecentDispatchesOutput,
+    get_dispatch_events,
+    get_recent_dispatches,
+)
 from meridian_orchestrator.tools.supervisor import (
     SignalCompactionInput,
     SignalCompactionOutput,
@@ -186,10 +194,76 @@ def build_server(
     if registry is not None:
         _register_agent_tools(mcp, registry, storage)
 
+    if storage is not None:
+        _register_dispatch_query_tools(mcp, storage)
+
     if storage is not None and get_engineer_supervisor is not None:
         _register_supervisor_tools(mcp, storage, get_engineer_supervisor)
 
     return mcp
+
+
+def _register_dispatch_query_tools(mcp: FastMCP, storage: Storage) -> None:
+    """Register get_recent_dispatches and get_dispatch_events.
+
+    Both tools share the ``_scoping_where_clause`` helper in
+    ``tools/dispatch.py`` (single source of truth for the M4c
+    subtree-scoping rules). PM and Engineer can call; Implementer/Tester
+    are rejected at the handler.
+    """
+
+    @mcp.tool(
+        name="get_recent_dispatches",
+        description=(
+            "Read-only query of recent dispatches in the caller's subtree. "
+            "Engineer sees sub-agent dispatches it initiated; PM sees "
+            "sub-agent dispatches across all tasks. Supervisor lifecycle "
+            "rows are excluded at M4c."
+        ),
+    )
+    async def _get_recent_dispatches(
+        role: str | None = None,
+        status: list[str] | None = None,
+        since: str | None = None,
+        limit: int = 50,
+    ) -> GetRecentDispatchesOutput:
+        agent_id = _resolve_agent_id()
+        await _record_caller_activity(storage, "get_recent_dispatches")
+        caller_role = _resolve_caller_role_via_token()
+        return await get_recent_dispatches(
+            storage=storage,
+            request=GetRecentDispatchesInput(
+                role=role,  # type: ignore[arg-type]
+                status=status,
+                since=since,
+                limit=limit,
+            ),
+            caller_agent_id=agent_id,
+            caller_role=caller_role,
+        )
+
+    @mcp.tool(
+        name="get_dispatch_events",
+        description=(
+            "Read-only query of audit events for the requested dispatch_ids. "
+            "Caller-supplied IDs are filtered through the same subtree-scoping "
+            "as get_recent_dispatches before audit-log access."
+        ),
+    )
+    async def _get_dispatch_events(
+        dispatch_ids: list[str], since_timestamp: str | None = None
+    ) -> GetDispatchEventsOutput:
+        agent_id = _resolve_agent_id()
+        await _record_caller_activity(storage, "get_dispatch_events")
+        caller_role = _resolve_caller_role_via_token()
+        return await get_dispatch_events(
+            storage=storage,
+            request=GetDispatchEventsInput(
+                dispatch_ids=dispatch_ids, since_timestamp=since_timestamp
+            ),
+            caller_agent_id=agent_id,
+            caller_role=caller_role,
+        )
 
 
 def _register_supervisor_tools(

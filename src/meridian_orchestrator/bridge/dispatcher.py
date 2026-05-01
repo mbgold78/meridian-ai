@@ -50,6 +50,7 @@ from meridian_orchestrator.bridge.canonical import (
     CanonicalClone,
     CanonicalDivergedError,
 )
+from meridian_orchestrator.bridge.timeouts import ModelString, calculate_timeout
 from meridian_orchestrator.bridge.worktree import DispatchWorktree, MergeResult
 from meridian_orchestrator.errors import OrchestratorError
 from meridian_orchestrator.storage.interface import Storage
@@ -234,6 +235,7 @@ class BridgeDispatcher:
         spec_path_descriptor: Path | None = None,
         timeout_seconds: int = 300,
         timeout_override_seconds: int | None = None,
+        model: ModelString | None = None,
         keep_worktree_on_failure: bool = False,
         engineer_decisions: list[dict[str, Any]] | None = None,
         actor: str,
@@ -255,6 +257,14 @@ class BridgeDispatcher:
         ``requested_working_directory`` is recorded as advisory in the
         ``dispatch.issued`` audit detail; the actual subprocess cwd is the
         per-dispatch worktree the daemon provisions off ``substrate-canonical``.
+
+        ``model`` is the canonical model string for the dispatched role
+        (e.g., ``claude-sonnet-4-6`` for implementer/tester at default tier).
+        When provided AND ``timeout_override_seconds`` is None, the
+        dispatcher reads ``tasks.estimated_tokens`` from storage and computes
+        the hard timeout via :func:`bridge.timeouts.calculate_timeout`.
+        Precedence: ``timeout_override_seconds`` > ``calculate_timeout(model,
+        estimated_tokens)`` > ``timeout_seconds`` (legacy default 300).
         """
         if role not in ("implementer", "tester"):
             raise DispatcherError(f"unsupported role for dispatch: {role!r}")
@@ -265,7 +275,28 @@ class BridgeDispatcher:
             dispatch_id=dispatch_id,
             worktrees_root=self._worktrees_root,
         )
-        effective_timeout = timeout_override_seconds or timeout_seconds
+
+        # Timeout precedence: explicit override > calculate_timeout(model,
+        # estimated_tokens) > legacy timeout_seconds default. The model-
+        # based path reads estimated_tokens from storage rather than
+        # asking the caller — keeps the timeouts.py dependency localized
+        # in the dispatcher.
+        if timeout_override_seconds is not None:
+            effective_timeout = timeout_override_seconds
+        elif model is not None:
+            task_row = await self._storage.fetch_one(
+                "SELECT estimated_tokens FROM tasks WHERE id = ?", (task_id,)
+            )
+            estimated = (
+                int(task_row["estimated_tokens"])
+                if task_row is not None and task_row["estimated_tokens"] is not None
+                else None
+            )
+            effective_timeout = calculate_timeout(
+                model=model, estimated_tokens=estimated
+            )
+        else:
+            effective_timeout = timeout_seconds
 
         spec_path_str = str(spec_path_descriptor) if spec_path_descriptor else None
         await self._insert_dispatch_row(
