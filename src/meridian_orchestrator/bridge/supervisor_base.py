@@ -213,6 +213,13 @@ class LongRunningSupervisor(ABC):
         self._halted: bool = False
         self._started: bool = False
         self._watchdog_task: asyncio.Task[None] | None = None
+        # Compaction signal: set True by tools.supervisor.signal_compaction
+        # via mark_compaction_pending(); read by the watchdog at subprocess-
+        # exit detection time to distinguish a compaction-driven clean exit
+        # from an unexpected exit. Reset to False on every _spawn() so
+        # respawned supervisors start with a clean slate. See
+        # 11-engineer-bridge.md § Engineer compaction.
+        self._compaction_pending: bool = False
 
     # ---- Subclass hooks ---------------------------------------------------
 
@@ -352,6 +359,38 @@ class LongRunningSupervisor(ABC):
         instance. Recovery requires service restart."""
         return self._halted
 
+    @property
+    def current_dispatch_id(self) -> str | None:
+        """The currently-active dispatch_id, or None during the brief gap
+        between marking a row terminal and inserting the new respawn row.
+        Read by the ``signal_compaction`` MCP tool handler to verify the
+        supervisor has an active dispatch before setting the compaction
+        flag."""
+        return self._current_dispatch_id
+
+    @property
+    def supervisor_agent_id(self) -> str:
+        """The agent_id the supervisor's static token binds to. Subclass-
+        provided via :meth:`_supervisor_agent_id`; exposed as a property
+        for the ``signal_compaction`` MCP tool handler's caller-identity
+        validation."""
+        return self._supervisor_agent_id()
+
+    def mark_compaction_pending(self) -> None:
+        """Mark this supervisor as having a pending compaction.
+
+        Called by the ``signal_compaction`` MCP tool handler after the
+        Engineer subprocess decides to compact. The flag is reset to False
+        on every :meth:`_spawn` (so respawned supervisors start clean). The
+        watchdog reads this flag at subprocess-exit detection time to
+        distinguish compaction (expected, status='compacted') from
+        unexpected exit (status='failed').
+
+        See ``11-engineer-bridge.md`` § Engineer compaction for the full
+        contract and the daemon-restart edge case.
+        """
+        self._compaction_pending = True
+
     # ---- Internal lifecycle -----------------------------------------------
 
     async def _spawn(self) -> None:
@@ -362,6 +401,11 @@ class LongRunningSupervisor(ABC):
         contract).
         """
         dispatch_id = _new_dispatch_id()
+        # Reset the compaction flag for the new dispatch (whether this is
+        # an initial start, a heartbeat-timeout respawn, an unexpected-exit
+        # respawn, or a compaction-completed respawn). The flag belongs to
+        # the just-issued dispatch, not any prior instance.
+        self._compaction_pending = False
 
         await self._storage.execute(
             "INSERT INTO dispatches "
@@ -470,6 +514,13 @@ class LongRunningSupervisor(ABC):
                     # current_dispatch_id assignment. Skip iteration.
                     continue
                 try:
+                    # Subprocess-exit detection runs first. If the
+                    # subprocess has exited, the dispatch is terminal
+                    # one way or another (compacted, unexpected_exit,
+                    # or — in race-prone scenarios — already terminal
+                    # via heartbeat-timeout); skip the timeout check.
+                    if await self._check_and_handle_subprocess_exit():
+                        continue
                     await self._check_and_handle_timeout()
                 except asyncio.CancelledError:
                     raise
@@ -481,6 +532,160 @@ class LongRunningSupervisor(ABC):
                     )
         except asyncio.CancelledError:
             raise
+
+    async def _check_and_handle_subprocess_exit(self) -> bool:
+        """If the supervised subprocess has exited, audit + mark terminal +
+        respawn. Returns True if an exit was handled (caller should skip
+        the timeout check).
+
+        Distinguishes compaction-driven clean exit (``_compaction_pending``
+        is True; row → ``status='compacted'``; respawn does NOT increment
+        the cap counter) from unexpected exit (``_compaction_pending`` is
+        False; row → ``status='failed'``; respawn DOES increment the cap
+        counter, same as a heartbeat timeout).
+
+        See ``11-engineer-bridge.md`` § Engineer compaction.
+        """
+        proc = self._current_proc
+        dispatch_id = self._current_dispatch_id
+        if proc is None or dispatch_id is None:
+            return False
+        if proc.returncode is None:
+            return False  # subprocess still running
+
+        # Subprocess has exited. Determine which path.
+        exit_code = proc.returncode
+        if self._compaction_pending:
+            await self._handle_compaction_completed(dispatch_id, exit_code)
+        else:
+            await self._handle_subprocess_unexpected_exit(dispatch_id, exit_code)
+        return True
+
+    async def _handle_compaction_completed(
+        self, dispatch_id: str, exit_code: int
+    ) -> None:
+        """The supervisor exited cleanly after signal_compaction. Audit
+        compaction_completed, revoke token, mark row 'compacted', respawn
+        without touching the respawn-history (compaction is healthy
+        lifecycle, not failure recovery)."""
+        await write_audit(
+            self._storage,
+            actor="system",
+            action="engineer.compaction_completed",
+            target=dispatch_id,
+            details={
+                "dispatch_id": dispatch_id,
+                "exit_code": exit_code,
+            },
+        )
+
+        if self._current_token is not None:
+            revoked = await asyncio.to_thread(
+                self._token_store.revoke,
+                self._current_token.record.token_id,
+            )
+            if revoked:
+                await write_audit(
+                    self._storage,
+                    actor="system",
+                    action="dispatch.token_revoked",
+                    target=dispatch_id,
+                    details={
+                        "dispatch_id": dispatch_id,
+                        "token_id": self._current_token.record.token_id,
+                        "reason": "compacted",
+                    },
+                )
+
+        await self._storage.execute(
+            "UPDATE dispatches SET status = 'compacted', "
+            "completed_at = ? WHERE id = ?",
+            (_now_iso(), dispatch_id),
+        )
+
+        # Clear in-process state — subprocess is dead, token revoked, row
+        # terminal. Watchdog will skip iterations until _spawn() sets the
+        # new _current_dispatch_id (the (b)-2 atomicity pattern).
+        self._current_proc = None
+        self._current_token = None
+        self._current_dispatch_id = None
+
+        # Respawn fresh. NOTE: no cap-counter increment — compaction is
+        # healthy lifecycle; an Engineer that compacts every iteration is
+        # healthy, not hung. Halting it would be a regression.
+        await self._spawn()
+
+    async def _handle_subprocess_unexpected_exit(
+        self, dispatch_id: str, exit_code: int
+    ) -> None:
+        """The supervisor exited without a prior compaction signal.
+        Treat as a failure (status='failed') and apply the same cap
+        policy as heartbeat-timeout respawns (counts toward the
+        three-respawns-per-hour limit)."""
+        await write_audit(
+            self._storage,
+            actor="system",
+            action="dispatch.subprocess_unexpected_exit",
+            target=dispatch_id,
+            details={
+                "dispatch_id": dispatch_id,
+                "exit_code": exit_code,
+                "signal": None,  # we observed exit; no signal we sent
+            },
+        )
+
+        if self._current_token is not None:
+            revoked = await asyncio.to_thread(
+                self._token_store.revoke,
+                self._current_token.record.token_id,
+            )
+            if revoked:
+                await write_audit(
+                    self._storage,
+                    actor="system",
+                    action="dispatch.token_revoked",
+                    target=dispatch_id,
+                    details={
+                        "dispatch_id": dispatch_id,
+                        "token_id": self._current_token.record.token_id,
+                        "reason": "unexpected_exit",
+                    },
+                )
+
+        await self._storage.execute(
+            "UPDATE dispatches SET status = 'failed', "
+            "completed_at = ?, notes = ? WHERE id = ?",
+            (
+                _now_iso(),
+                f"subprocess exited rc={exit_code} without prior compaction signal",
+                dispatch_id,
+            ),
+        )
+
+        self._current_proc = None
+        self._current_token = None
+        self._current_dispatch_id = None
+
+        # Cap-aware respawn — same policy as heartbeat-timeout.
+        # last_tool_called for this respawn is captured from the row
+        # before we clear in-process state; for unexpected exit, we
+        # don't have a fresh read, so use None (consistent with the
+        # "we don't know what happened" framing).
+        self._prune_respawn_history()
+        if len(self._respawn_history) >= self._respawn_cap:
+            await self._halt(
+                triggering_dispatch_id=dispatch_id,
+                triggering_last_tool=None,
+            )
+        else:
+            self._respawn_history.append(
+                _RespawnEntry(
+                    timestamp=datetime.now(tz=UTC),
+                    triggered_by_dispatch_id=dispatch_id,
+                    last_tool_called=None,
+                )
+            )
+            await self._spawn()
 
     async def _check_and_handle_timeout(self) -> None:
         """One watchdog iteration: read row, check age, fire timeout if hung."""

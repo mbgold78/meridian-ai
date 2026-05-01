@@ -86,12 +86,24 @@ async def _run() -> None:
         registry = AgentRegistry(settings.agents_dir)
         async with registry.lifespan():
             mcp_ready = asyncio.Event()
+            engineer_supervisor: EngineerSupervisor | None = None
+
+            # Lazy lookup callable for the signal_compaction tool wrapper.
+            # The supervisor is constructed AFTER the MCP server starts
+            # (its MCP calls back to the daemon need the server up); a
+            # closure-captured reference would be None at build_server
+            # time. Python closures resolve names at call time, so the
+            # lambda picks up the variable's current value when invoked.
+            def get_engineer_supervisor() -> EngineerSupervisor | None:
+                return engineer_supervisor
+
             mcp_task = asyncio.create_task(
                 serve_mcp(
                     settings,
                     ready=mcp_ready,
                     registry=registry,
                     storage=storage,
+                    get_engineer_supervisor=get_engineer_supervisor,
                 ),
                 name="mcp-server",
             )
@@ -104,7 +116,6 @@ async def _run() -> None:
                 engineer_supervisor_enabled=settings.enable_engineer_supervisor,
             )
 
-            engineer_supervisor: EngineerSupervisor | None = None
             try:
                 # Start the engineer-supervisor only after the MCP server
                 # is accepting connections — its own MCP calls back to the

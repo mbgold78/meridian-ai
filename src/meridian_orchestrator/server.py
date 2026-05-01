@@ -24,6 +24,7 @@ M3 onward registers task/budget/knowledge/etc. tools per ``06-mcp-tools-phase-on
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from datetime import UTC, datetime
 
 import structlog
@@ -42,8 +43,9 @@ from meridian_orchestrator.agents.permissions import PermissionResolver
 from meridian_orchestrator.agents.registry import AgentRegistry
 from meridian_orchestrator.auth import TokenStore, _parse_token
 from meridian_orchestrator.bridge.activity import record_mcp_call
+from meridian_orchestrator.bridge.supervisor_base import LongRunningSupervisor
 from meridian_orchestrator.config import Settings
-from meridian_orchestrator.errors import AuthError, NotFoundError
+from meridian_orchestrator.errors import AuthError, ConflictError, NotFoundError
 from meridian_orchestrator.errors import PermissionError as OrchestratorPermissionError
 from meridian_orchestrator.oauth import MeridianOAuthProvider, make_approval_routes
 from meridian_orchestrator.storage.interface import Storage
@@ -57,6 +59,11 @@ from meridian_orchestrator.tools.agents import (
     get_agent_config,
     get_org_chart,
     list_agents,
+)
+from meridian_orchestrator.tools.supervisor import (
+    SignalCompactionInput,
+    SignalCompactionOutput,
+    signal_compaction,
 )
 
 logger = structlog.get_logger(__name__)
@@ -109,6 +116,7 @@ def build_server(
     store: TokenStore | None = None,
     registry: AgentRegistry | None = None,
     storage: Storage | None = None,
+    get_engineer_supervisor: Callable[[], LongRunningSupervisor | None] | None = None,
 ) -> FastMCP:
     """Construct the FastMCP server with auth + the current tool set.
 
@@ -178,7 +186,74 @@ def build_server(
     if registry is not None:
         _register_agent_tools(mcp, registry, storage)
 
+    if storage is not None and get_engineer_supervisor is not None:
+        _register_supervisor_tools(mcp, storage, get_engineer_supervisor)
+
     return mcp
+
+
+def _register_supervisor_tools(
+    mcp: FastMCP,
+    storage: Storage,
+    get_engineer_supervisor: Callable[[], LongRunningSupervisor | None],
+) -> None:
+    """Register supervisor-lifecycle tools.
+
+    The ``get_engineer_supervisor`` callable is evaluated lazily at each
+    tool invocation. The supervisor is constructed in ``main.py`` AFTER
+    the MCP server starts (the supervisor's MCP calls back to the daemon
+    need the server up), so a closure-captured reference would be stale
+    at build_server time. The callable resolves at call time, returning
+    the current supervisor or None if it hasn't been constructed yet.
+    """
+
+    @mcp.tool(
+        name="signal_compaction",
+        description=(
+            "Engineer-only. Signals an imminent clean exit for compaction. "
+            "Sets the supervisor's compaction-pending flag; the watchdog "
+            "observes the subsequent clean exit and respawns the Engineer "
+            "fresh with status='compacted' (no respawn-cap increment)."
+        ),
+    )
+    async def _signal_compaction(
+        iteration_marker: str, proxy_value: float | None = None
+    ) -> SignalCompactionOutput:
+        agent_id = _resolve_agent_id()
+        await _record_caller_activity(storage, "signal_compaction")
+        caller_role = _resolve_caller_role_via_token()
+        supervisor = get_engineer_supervisor()
+        if supervisor is None:
+            raise ConflictError(
+                "no engineer supervisor is running; signal_compaction "
+                "requires an active supervisor instance"
+            )
+        return await signal_compaction(
+            storage=storage,
+            supervisor=supervisor,
+            request=SignalCompactionInput(
+                iteration_marker=iteration_marker, proxy_value=proxy_value
+            ),
+            caller_agent_id=agent_id,
+            caller_role=caller_role,
+        )
+
+
+def _resolve_caller_role_via_token() -> str:
+    """Resolve the caller's role from the OAuth scope claims on the access
+    token. The OAuth provider sets ``scopes=[f'role:{record.role}']`` per
+    ``oauth.py:_record_to_access_token``; we extract the role from there
+    instead of going through the registry (the registry path requires a
+    YAML config to be loaded, which isn't a guarantee for static-token
+    callers like the engineer-supervisor).
+    """
+    access = get_access_token()
+    if access is None:
+        raise AuthError("no authenticated context for tool call")
+    for scope in access.scopes:
+        if scope.startswith("role:"):
+            return scope.removeprefix("role:")
+    raise AuthError("access token has no role scope")
 
 
 def _resolve_caller_role(registry: AgentRegistry) -> str:
@@ -255,6 +330,7 @@ async def serve(
     ready: asyncio.Event | None = None,
     registry: AgentRegistry | None = None,
     storage: Storage | None = None,
+    get_engineer_supervisor: Callable[[], LongRunningSupervisor | None] | None = None,
 ) -> None:
     """Run the MCP HTTP server until cancelled.
 
@@ -266,7 +342,12 @@ async def serve(
     (M4c-supervisor-base); ``None`` is fine for tests that don't exercise
     dispatch-row state.
     """
-    mcp = build_server(settings, registry=registry, storage=storage)
+    mcp = build_server(
+        settings,
+        registry=registry,
+        storage=storage,
+        get_engineer_supervisor=get_engineer_supervisor,
+    )
     app = mcp.streamable_http_app()
     config = uvicorn.Config(
         app,
