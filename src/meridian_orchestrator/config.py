@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -41,6 +41,29 @@ class Settings(BaseSettings):
     # heartbeat calibration).
     enable_engineer_supervisor: bool = Field(default=False)
 
+    # M5-wrapper-closure: the substrate working tree the daemon discovers
+    # ``origin`` from at canonical-provisioning time. Outside ``data_dir``
+    # because it points at Mike's actual local clone, not daemon state.
+    # No default — daemon fails fast at provisioning if unset and the
+    # supervisor flag is on (validator below).
+    substrate_working_directory: Path | None = Field(default=None)
+
+    @model_validator(mode="after")
+    def _require_substrate_working_directory_when_supervisor_enabled(
+        self,
+    ) -> Settings:
+        """Conditional fail-fast: substrate_working_directory is only
+        required when the engineer-supervisor flag is on (canonical
+        provisioning needs it). M5-wrapper-closure tests run with the
+        supervisor off and don't need the env var."""
+        if self.enable_engineer_supervisor and self.substrate_working_directory is None:
+            raise ValueError(
+                "MERIDIAN_ORCH_SUBSTRATE_WORKING_DIRECTORY must be set when "
+                "MERIDIAN_ORCH_ENABLE_ENGINEER_SUPERVISOR=true; canonical-clone "
+                "provisioning reads `origin` from this path"
+            )
+        return self
+
     @property
     def db_path(self) -> Path:
         return self.data_dir / "data" / "orchestrator.db"
@@ -72,3 +95,17 @@ class Settings(BaseSettings):
         worktree — sub-agents handle code in dispatch worktrees off the
         canonical clone. This is a separate dedicated directory."""
         return self.data_dir / "engineer"
+
+    @property
+    def substrate_canonical_dir(self) -> Path:
+        """Daemon-owned canonical clone path. The dispatcher's
+        BridgeDispatcher reads/writes here; per-dispatch worktrees branch
+        from this clone. See `bridge/canonical.py` § CanonicalClone."""
+        return self.data_dir / "substrate-canonical"
+
+    @property
+    def dispatch_worktrees_root(self) -> Path:
+        """Root directory for per-dispatch worktrees. Each dispatch gets a
+        subdirectory under this root, cleaned up on terminal state unless
+        ``keep_worktree_on_failure`` is set."""
+        return self.data_dir / "dispatch-worktrees"
