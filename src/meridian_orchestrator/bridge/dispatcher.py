@@ -434,7 +434,14 @@ class BridgeDispatcher:
                 and terminate_reason != "completed"
             )
             if not keep:
-                await worktree.cleanup()
+                # cleanup runs `git worktree remove` + `git branch -D`
+                # against canonical; both touch canonical's .git/config
+                # and would race with another dispatch's lock-protected
+                # canonical operations if not serialized through the same
+                # lock. Holding the lock here is brief (worktree remove +
+                # branch delete are fast).
+                async with self._canonical_lock:
+                    await worktree.cleanup()
 
             if proc is not None:
                 await write_audit(
@@ -530,6 +537,7 @@ class BridgeDispatcher:
                     details={
                         "dispatch_id": dispatch_id,
                         "branch": worktree.branch,
+                        "original_commit_hash": merge.original_commit_hash,
                         "conflicting_files": list(merge.conflicting_files),
                         "reason": merge.reason,
                     },
@@ -549,6 +557,7 @@ class BridgeDispatcher:
                 details={
                     "dispatch_id": dispatch_id,
                     "branch": worktree.branch,
+                    "original_commit_hash": merge.original_commit_hash,
                     "new_upstream_head": merge.new_head,
                 },
             )
@@ -563,35 +572,16 @@ class BridgeDispatcher:
                         error=str(exc),
                     )
 
-            touched = await self._diff_touched_files(commit_hash)
             await self._storage.execute(
                 "UPDATE dispatches SET actual_touched_files_json = ? "
                 "WHERE id = ?",
-                (_json.dumps(touched, sort_keys=True), dispatch_id),
+                (_json.dumps(merge.touched_files, sort_keys=True), dispatch_id),
             )
 
             from dataclasses import replace as _replace
-            return _replace(outcome, actual_touched_files=touched)
-
-    async def _diff_touched_files(self, commit_hash: str) -> list[str]:
-        """Return ``git diff --name-only <commit>~1 <commit>`` against canonical.
-
-        On any git failure returns an empty list — the caller treats the
-        substrate touch map cache as empty for this dispatch rather than
-        raising. Engineer's parallelization heuristics tolerate empty cache
-        entries gracefully.
-        """
-        from meridian_orchestrator.bridge.canonical import _run_git as _git
-        rc, stdout, _ = await _git(
-            "diff",
-            "--name-only",
-            f"{commit_hash}~1",
-            commit_hash,
-            cwd=self._canonical.path,
-        )
-        if rc != 0:
-            return []
-        return [line for line in stdout.splitlines() if line.strip()]
+            return _replace(
+                outcome, actual_touched_files=list(merge.touched_files)
+            )
 
     async def _insert_dispatch_row(
         self,
@@ -654,6 +644,20 @@ class BridgeDispatcher:
                 return await self._build_outcome(dispatch_id)
 
             if proc.returncode is not None:
+                # Re-read status before declaring failed: the subprocess can
+                # call complete_dispatch and signal-clean-exit between our
+                # last SELECT and this check, leaving us with a stale
+                # "running" read paired with a fresh non-None returncode.
+                # Without the re-read we'd mark a successful dispatch as
+                # failed because the SELECT happened to land just before
+                # the UPDATE.
+                row = await self._storage.fetch_one(
+                    "SELECT status FROM dispatches WHERE id = ?",
+                    (dispatch_id,),
+                )
+                if row is not None and str(row["status"]) in _TERMINAL_STATES:
+                    return await self._build_outcome(dispatch_id)
+
                 rc = proc.returncode
                 logger.warning(
                     "dispatch.subprocess_exited_without_complete",

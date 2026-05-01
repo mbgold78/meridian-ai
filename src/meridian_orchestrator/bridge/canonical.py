@@ -49,21 +49,58 @@ class CanonicalDivergedError(OrchestratorError):
     code = "CANONICAL_DIVERGED"
 
 
-async def _run_git(*args: str, cwd: Path | None = None) -> tuple[int, str, str]:
-    """Run ``git <args>`` and return ``(returncode, stdout, stderr)``."""
-    proc = await asyncio.create_subprocess_exec(
-        "git",
-        *args,
-        cwd=str(cwd) if cwd is not None else None,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    stdout_b, stderr_b = await proc.communicate()
-    return (
-        proc.returncode if proc.returncode is not None else -1,
-        stdout_b.decode("utf-8", errors="replace"),
-        stderr_b.decode("utf-8", errors="replace"),
-    )
+# Markers in stderr that indicate Windows-specific transient file-handle
+# contention on `.git/config` (or similar lock file). These appear when one
+# git command's stdio buffers haven't fully flushed before another git
+# command tries to read the config — purely a Windows artifact, not a real
+# concurrency bug. Retrying with a short backoff resolves it. On Linux these
+# markers don't appear; if they do, it IS a real concurrency bug — the fix
+# is upstream in dispatcher.py's locking, not here.
+_TRANSIENT_GIT_ERROR_MARKERS = (
+    "could not lock config file",
+    ".git/config.lock",
+    "unable to access '.git/config'",
+    "Permission denied",
+    "File exists",
+)
+
+
+def _is_transient_git_error(stderr: str) -> bool:
+    return any(marker in stderr for marker in _TRANSIENT_GIT_ERROR_MARKERS)
+
+
+async def _run_git(
+    *args: str,
+    cwd: Path | None = None,
+    max_retries: int = 3,
+) -> tuple[int, str, str]:
+    """Run ``git <args>`` and return ``(returncode, stdout, stderr)``.
+
+    On Windows, transient file-handle contention on ``.git/config`` can
+    cause a git invocation to fail even though no other git process is
+    actively writing — the OS hasn't released the prior command's file
+    handle yet. Retry up to ``max_retries`` times with a short backoff on
+    these specific markers; non-transient errors return immediately.
+    """
+    rc = -1
+    stdout = ""
+    stderr = ""
+    for attempt in range(max_retries):
+        proc = await asyncio.create_subprocess_exec(
+            "git",
+            *args,
+            cwd=str(cwd) if cwd is not None else None,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout_b, stderr_b = await proc.communicate()
+        rc = proc.returncode if proc.returncode is not None else -1
+        stdout = stdout_b.decode("utf-8", errors="replace")
+        stderr = stderr_b.decode("utf-8", errors="replace")
+        if rc == 0 or not _is_transient_git_error(stderr):
+            return rc, stdout, stderr
+        await asyncio.sleep(0.05 * (attempt + 1))
+    return rc, stdout, stderr
 
 
 async def discover_upstream_url(substrate_working_directory: Path) -> str:

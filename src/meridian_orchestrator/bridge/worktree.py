@@ -22,7 +22,6 @@ to prevent orphan accumulation across crashes (see
 
 from __future__ import annotations
 
-import asyncio
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,24 +30,6 @@ import structlog
 
 from meridian_orchestrator.bridge.canonical import CanonicalClone, _run_git
 from meridian_orchestrator.errors import OrchestratorError
-
-# git on Windows occasionally leaves `.git/config.lock` or similar lock
-# files briefly after a command returns — the file-handle release isn't
-# synchronous with process exit. The asyncio Lock on the dispatcher's
-# canonical operations is structurally correct: it serializes Python-side
-# calls, and on Linux this is sufficient. The retry below is a Windows
-# accommodation, not a covering for a real concurrency bug. If you ever
-# see one of these markers in stderr on Linux, that IS a real bug — the
-# fix is upstream, not tightening the retry. See M4b checkpoint notes.
-_LOCK_ERROR_MARKERS = (
-    "could not lock config file",
-    ".git/config.lock",
-    "File exists",
-)
-
-
-def _is_lock_contention(stderr: str) -> bool:
-    return any(marker in stderr for marker in _LOCK_ERROR_MARKERS)
 
 logger = structlog.get_logger(__name__)
 
@@ -63,15 +44,29 @@ class WorktreeError(OrchestratorError):
 class MergeResult:
     """Outcome of merging a dispatch branch into canonical's default branch.
 
-    ``ok`` is true on a successful fast-forward. On failure, ``conflicting_files``
-    enumerates paths the dispatch branch touched since divergence — PM uses
-    this to scope the re-dispatch or escalation. ``new_head`` is set on
-    success to the new canonical HEAD sha.
+    ``ok`` is true when ff-rebase + ``--ff-only`` merge both succeeded.
+
+    On success, ``new_head`` is canonical's post-merge HEAD sha and
+    ``touched_files`` lists the paths the merge introduced (computed from
+    ``git diff --name-only`` between pre- and post-merge canonical HEADs —
+    correct under rebase, since the rebase may have rewritten commit hashes
+    but the canonical-HEAD-advance diff captures the actual landed delta).
+
+    On failure, ``conflicting_files`` enumerates paths the dispatch branch
+    touched since divergence — PM's scope for re-dispatch decisions.
+
+    ``original_commit_hash`` is the dispatch branch's HEAD *before* rebase
+    rewrote it (the sub-agent-reported commit). Captured on every result so
+    audit rows can record both the sub-agent's commit and the landed-on-
+    canonical commit (``new_head`` on success). ``None`` only when the
+    branch had no resolvable HEAD at the start.
     """
 
     ok: bool
     new_head: str | None
     conflicting_files: list[str]
+    touched_files: list[str]
+    original_commit_hash: str | None
     reason: str | None = None
 
 
@@ -136,14 +131,19 @@ class DispatchWorktree:
         self._path.parent.mkdir(parents=True, exist_ok=True)
 
         # `--no-track` skips writing branch upstream config to canonical's
-        # `.git/config`. We don't use upstream tracking on dispatch branches
-        # — the daemon manages their lifecycle by branch ref directly — and
-        # skipping the config write reduces a Windows-specific race where
-        # parallel `git worktree add` calls collide on `.git/config.lock`
-        # because the OS hasn't released the lock-file handle from the
-        # prior add by the time the next add tries to create it. A short
-        # retry on the residual race covers the rest.
-        rc, stderr = await self._git_add_with_retry()
+        # `.git/config`, sidestepping a known Windows file-handle race on
+        # `.git/config.lock`. Residual transient lock errors are caught by
+        # the retry inside `_run_git` itself.
+        rc, _, stderr = await _run_git(
+            "worktree",
+            "add",
+            "--no-track",
+            "-b",
+            self._branch,
+            str(self._path),
+            f"origin/{self._canonical.default_branch}",
+            cwd=self._canonical.path,
+        )
         if rc != 0:
             raise WorktreeError(
                 f"git worktree add failed (rc={rc}): {stderr.strip()!r}"
@@ -154,38 +154,6 @@ class DispatchWorktree:
             path=str(self._path),
             branch=self._branch,
         )
-
-    async def _git_add_with_retry(
-        self, max_attempts: int = 3
-    ) -> tuple[int, str]:
-        """Run ``git worktree add`` with a short retry on lock contention."""
-        rc = -1
-        stderr = ""
-        for attempt in range(max_attempts):
-            rc, _, stderr = await _run_git(
-                "worktree",
-                "add",
-                "--no-track",
-                "-b",
-                self._branch,
-                str(self._path),
-                f"origin/{self._canonical.default_branch}",
-                cwd=self._canonical.path,
-            )
-            if rc == 0:
-                return rc, stderr
-            if not _is_lock_contention(stderr):
-                return rc, stderr
-            # Best-effort: clean up any partial worktree directory + branch
-            # the failed add may have left behind, so the retry sees a clean
-            # slate.
-            if self._path.exists():
-                shutil.rmtree(self._path, ignore_errors=True)
-            await _run_git(
-                "branch", "-D", self._branch, cwd=self._canonical.path
-            )
-            await asyncio.sleep(0.05 * (attempt + 1))
-        return rc, stderr
 
     async def cleanup(self) -> None:
         """Remove the worktree and delete its branch. Idempotent.
@@ -253,74 +221,160 @@ class DispatchWorktree:
         return sha or None
 
     async def merge_into_canonical(self) -> MergeResult:
-        """Attempt ``git merge --ff-only dispatch/<id>`` into canonical's default branch.
+        """Land the dispatch branch into canonical's default branch.
 
-        The caller (dispatcher) ensures the canonical clone is fresh by calling
-        :meth:`bridge.canonical.CanonicalClone.fetch_and_fast_forward` first
-        (under the canonical lock so concurrent dispatches serialize their
-        merges).
+        Two-step protocol (M4b.1, resolves spec line 147 vs sequence diagram
+        522-524 tension):
 
-        Returns a :class:`MergeResult`:
+        1. **ff-rebase the dispatch branch onto canonical's main.** ``git
+           rebase main dispatch/<id>`` replays the dispatch's commits on top
+           of canonical's current HEAD. For disjoint-file parallel dispatches
+           the rebase is a no-op-on-content (commits replay cleanly with new
+           hashes), and the subsequent ``--ff-only`` merge succeeds. For
+           real semantic conflicts (two dispatches edited the same lines),
+           rebase aborts; we run ``git rebase --abort`` to leave canonical
+           clean and fall through to the merge_conflict surface.
+        2. **``--ff-only`` merge** of the rebased dispatch branch into
+           canonical's main. Always succeeds when step 1 succeeded (dispatch
+           branch is now a strict descendant of main).
 
-        - On success: ``ok=True``, ``new_head=<sha>``, ``conflicting_files=[]``.
-          Caller pushes canonical to upstream and audits ``dispatch.merged``.
-        - On non-fast-forward failure: ``ok=False``, ``new_head=None``,
-          ``conflicting_files=[<paths>]``. The list contains paths touched on
-          the dispatch branch since the divergence point — PM's scope for
-          re-dispatch decisions. Caller audits ``dispatch.merge_conflict``.
+        The rebase rewrites the dispatch branch's commit hashes. The
+        sub-agent-reported original hash is preserved as
+        :attr:`MergeResult.original_commit_hash`; the post-merge canonical
+        HEAD is :attr:`MergeResult.new_head`. The audit chain records both
+        (``dispatch.merged`` includes both fields; ``dispatch.merge_conflict``
+        records the original).
 
-        Other failure modes (canonical missing, git invocation broke) raise
-        :class:`WorktreeError` so the caller can distinguish "merge worked
-        but didn't fast-forward" from "merge plumbing broke."
+        Caller (dispatcher) holds the canonical lock across this call and
+        has already refreshed canonical via ``fetch_and_fast_forward``.
+
+        Other failure modes (canonical missing) raise :class:`WorktreeError`.
         """
         if not self._canonical.is_provisioned:
             raise WorktreeError(
                 f"canonical clone at {self._canonical.path} is not provisioned"
             )
 
-        # Resolve the dispatch branch's HEAD and the merge base before merging
-        # so we can compute conflicting_files without depending on git's exact
-        # error message on --ff-only failure.
-        branch_head = await self._rev_parse(self._branch)
-        if branch_head is None:
+        pre_canonical_head = await self._canonical.head_sha()
+        branch_head_pre_rebase = await self._rev_parse(self._branch)
+        if branch_head_pre_rebase is None:
             return MergeResult(
                 ok=False,
                 new_head=None,
                 conflicting_files=[],
+                touched_files=[],
+                original_commit_hash=None,
                 reason=f"dispatch branch {self._branch!r} has no resolvable HEAD",
             )
 
+        # Run the rebase from inside the worktree, where dispatch/<id> is
+        # already checked out. Running it from the canonical clone fails with
+        # "branch already used by worktree at ..." because git enforces
+        # branch-exclusivity across worktrees of the same repo.
+        rebase_rc, _, rebase_stderr = await _run_git(
+            "rebase",
+            f"refs/heads/{self._canonical.default_branch}",
+            cwd=self._path,
+        )
+        if rebase_rc != 0:
+            # Abort to restore the worktree's HEAD and the dispatch branch to
+            # their pre-rebase state. The abort itself can fail if rebase
+            # didn't actually start (e.g., rebase rejected the input upfront),
+            # in which case the worktree is already clean — log but don't
+            # propagate.
+            abort_rc, _, abort_stderr = await _run_git(
+                "rebase", "--abort", cwd=self._path
+            )
+            if abort_rc != 0:
+                logger.debug(
+                    "worktree.rebase_abort_skipped",
+                    dispatch_id=self._dispatch_id,
+                    rc=abort_rc,
+                    stderr=abort_stderr.strip(),
+                )
+            conflicting = await self._touched_files_since_base(
+                branch_head_pre_rebase
+            )
+            logger.warning(
+                "worktree.rebase_conflict",
+                dispatch_id=self._dispatch_id,
+                branch=self._branch,
+                conflicting_files=conflicting,
+                stderr=rebase_stderr.strip(),
+            )
+            return MergeResult(
+                ok=False,
+                new_head=None,
+                conflicting_files=conflicting,
+                touched_files=[],
+                original_commit_hash=branch_head_pre_rebase,
+                reason=f"rebase aborted on conflict: {rebase_stderr.strip()}",
+            )
+
+        # Rebase succeeded; ff-only merge into main. By construction this
+        # should succeed since the dispatch branch is now a descendant of
+        # canonical's main. The defensive handling below catches the
+        # unexpected failure (e.g., main moved between rebase and merge,
+        # which the canonical lock prevents in practice but a paranoid
+        # caller might still observe).
         rc, _, stderr = await _run_git(
             "merge", "--ff-only", self._branch, cwd=self._canonical.path
         )
-        if rc == 0:
-            new_head = await self._canonical.head_sha()
-            logger.info(
-                "worktree.merged",
+        if rc != 0:
+            conflicting = await self._touched_files_since_base(
+                branch_head_pre_rebase
+            )
+            logger.warning(
+                "worktree.merge_failed_after_rebase",
                 dispatch_id=self._dispatch_id,
-                new_canonical_head=new_head,
                 branch=self._branch,
+                conflicting_files=conflicting,
+                stderr=stderr.strip(),
             )
             return MergeResult(
-                ok=True,
-                new_head=new_head,
-                conflicting_files=[],
+                ok=False,
+                new_head=None,
+                conflicting_files=conflicting,
+                touched_files=[],
+                original_commit_hash=branch_head_pre_rebase,
+                reason=(
+                    f"--ff-only failed after successful rebase: {stderr.strip()}"
+                ),
             )
 
-        conflicting = await self._touched_files_since_base(branch_head)
-        logger.warning(
-            "worktree.merge_conflict",
+        new_head = await self._canonical.head_sha()
+        touched = await self._diff_canonical_advance(pre_canonical_head, new_head)
+        logger.info(
+            "worktree.merged",
             dispatch_id=self._dispatch_id,
+            original_commit=branch_head_pre_rebase,
+            new_canonical_head=new_head,
             branch=self._branch,
-            conflicting_files=conflicting,
-            stderr=stderr.strip(),
         )
         return MergeResult(
-            ok=False,
-            new_head=None,
-            conflicting_files=conflicting,
-            reason=stderr.strip() or "non-fast-forward merge",
+            ok=True,
+            new_head=new_head,
+            conflicting_files=[],
+            touched_files=touched,
+            original_commit_hash=branch_head_pre_rebase,
         )
+
+    async def _diff_canonical_advance(
+        self, before: str, after: str
+    ) -> list[str]:
+        """Return ``git diff --name-only <before> <after>`` against canonical.
+
+        Captures the actual file delta the dispatch's merge introduced into
+        canonical's main, regardless of whether rebase rewrote commit hashes.
+        """
+        if before == after:
+            return []
+        rc, stdout, _ = await _run_git(
+            "diff", "--name-only", before, after, cwd=self._canonical.path
+        )
+        if rc != 0:
+            return []
+        return [line for line in stdout.splitlines() if line.strip()]
 
     async def _touched_files_since_base(self, branch_head: str) -> list[str]:
         """Return the files touched on the dispatch branch since divergence.

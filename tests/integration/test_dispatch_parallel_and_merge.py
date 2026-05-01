@@ -4,13 +4,14 @@ Builds on the M4a fixture infrastructure (real git tmp upstream, real
 canonical clone, real per-dispatch worktrees, fake subprocess that calls
 ``complete_dispatch`` in-process). Verifies:
 
-- Two parallel Implementer dispatches: per the literal spec
-  (``11-engineer-bridge.md`` § Merge protocol — "daemon does not auto-rebase"),
-  the first merges fast-forward and the second's ``--ff-only`` fails because
-  canonical has advanced. The second dispatch reaches ``status='completed'``
-  with ``merge_conflict_files_json`` populated. **This applies to both
-  disjoint-file and shared-file parallel dispatches** under spec-literal
-  semantics — see M4b checkpoint surface.
+- **Disjoint-file parallel dispatches both merge clean** (M4b.1). After the
+  first dispatch lands, the second's branch is ff-rebased onto the advanced
+  canonical/main and then ``--ff-only`` merges. Canonical contains both
+  commits in linear history; both dispatches audit ``dispatch.merged``.
+- **Same-file parallel dispatches** with semantic conflict: the second
+  dispatch's rebase aborts cleanly, ``merge_conflict_files_json`` populates,
+  ``dispatch.merge_conflict`` audits. The aborted rebase leaves no residue
+  in the worktree.
 - Canonical divergence is detected before dispatch starts and the dispatch
   is failed cleanly with ``dispatch.canonical_diverged`` audit.
 - ``dispatch_tester`` returns structured ``test_results`` from
@@ -142,21 +143,17 @@ def _commit_in_worktree(worktree: Path, file_name: str, content: str) -> str:
 # ----- parallel dispatch ---------------------------------------------------
 
 
-async def test_parallel_dispatches_serialize_via_canonical_lock(
+async def test_parallel_disjoint_dispatches_both_merge_clean(
     storage: SqliteStorage, upstream_repo: Path, tmp_path: Path
 ) -> None:
     """Two parallel Implementer dispatches against disjoint files.
 
-    Per spec § Merge protocol (literal): the daemon does not auto-rebase.
-    The first to call complete_dispatch fast-forwards into canonical/main;
-    the second's --ff-only merge fails because canonical has advanced
-    beyond the dispatch branch's base. Both dispatches reach
-    status='completed'; the second populates merge_conflict_files_json.
-
-    This test asserts the literal spec behavior. The M4b operator acceptance
-    expects both to merge cleanly; resolving that tension (auto-rebase
-    before --ff-only, vs. amending the acceptance) is a checkpoint
-    decision tracked in the M4b notes.
+    Per M4b.1: ``merge_into_canonical`` ff-rebases the dispatch branch onto
+    canonical's current main before ``--ff-only`` merging. For disjoint
+    files the rebase replays cleanly with new commit hashes; the merge
+    fast-forwards. Both dispatches end with ``actual_touched_files`` set
+    and audit ``dispatch.merged``. Canonical's main contains both commits
+    in linear history.
     """
     canonical = CanonicalClone(
         path=tmp_path / "data" / "substrate-canonical",
@@ -241,30 +238,56 @@ async def test_parallel_dispatches_serialize_via_canonical_lock(
     statuses = sorted(o.status for o in outcomes)
     assert statuses == ["completed", "completed"]
 
-    # Exactly one merged cleanly (actual_touched_files set, no conflict);
-    # the other has merge_conflict_files set and actual_touched_files empty.
-    merged = [o for o in outcomes if o.actual_touched_files]
-    conflicted = [o for o in outcomes if o.merge_conflict_files]
-    assert len(merged) == 1, f"expected exactly 1 clean merge, got {len(merged)}"
-    assert len(conflicted) == 1, (
-        f"expected exactly 1 merge_conflict, got {len(conflicted)}"
-    )
+    # Both merged cleanly — actual_touched_files populated for each, none
+    # have merge_conflict_files set.
+    for o in outcomes:
+        assert o.actual_touched_files, (
+            f"dispatch {o.dispatch_id} should have touched files; got empty list"
+        )
+        assert not o.merge_conflict_files, (
+            f"dispatch {o.dispatch_id} unexpectedly has merge_conflict_files: "
+            f"{o.merge_conflict_files}"
+        )
 
-    merged_files = merged[0].actual_touched_files
-    conflict_files = conflicted[0].merge_conflict_files
-    assert merged_files in (["foo.py"], ["bar.py"])
-    assert conflict_files in (["foo.py"], ["bar.py"])
-    # The two should be the disjoint files.
-    assert set(merged_files) != set(conflict_files)
+    # The touched files cover foo.py and bar.py (disjoint by construction).
+    all_touched = sorted(f for o in outcomes for f in o.actual_touched_files)
+    assert all_touched == ["bar.py", "foo.py"]
 
-    # Audit chain: a dispatch.merged for the winner, dispatch.merge_conflict
-    # for the loser.
+    # Two dispatch.merged audits, no dispatch.merge_conflict.
     audit_actions = await storage.fetch_all(
         "SELECT action FROM audit_log WHERE action IN "
         "('dispatch.merged', 'dispatch.merge_conflict')"
     )
     actions = sorted(a["action"] for a in audit_actions)
-    assert actions == ["dispatch.merge_conflict", "dispatch.merged"]
+    assert actions == ["dispatch.merged", "dispatch.merged"]
+
+    # Canonical's main contains both files in its working tree (whichever
+    # merged first contributes one file, the rebased + merged second
+    # contributes the other; linear history under ff-only after rebase).
+    canonical_path = tmp_path / "data" / "substrate-canonical"
+    assert (canonical_path / "foo.py").exists()
+    assert (canonical_path / "bar.py").exists()
+
+    # The second dispatch's rebase rewrote its commit hash. Confirm the
+    # original (sub-agent-reported) and merged (post-rebase) hashes are
+    # both recorded in the dispatch.merged audit details for at least one
+    # of the two dispatches — exactly the dispatch whose branch had to
+    # rebase. (The first-merging dispatch's rebase is a no-op since
+    # canonical is at the dispatch's base.)
+    merged_audits = await storage.fetch_all(
+        "SELECT details_json FROM audit_log WHERE action = 'dispatch.merged'"
+    )
+    import json as _json
+    rebased_count = 0
+    for a in merged_audits:
+        details = _json.loads(a["details_json"])
+        assert "original_commit_hash" in details
+        assert "new_upstream_head" in details
+        if details["original_commit_hash"] != details["new_upstream_head"]:
+            rebased_count += 1
+    assert rebased_count >= 1, (
+        "expected at least one dispatch's rebase to rewrite the commit hash"
+    )
 
 
 async def test_parallel_dispatches_same_file_records_conflict(
@@ -346,6 +369,103 @@ async def test_parallel_dispatches_same_file_records_conflict(
     assert conflicted[0].merge_conflict_files == ["shared.py"]
     assert len(merged) == 1
     assert merged[0].actual_touched_files == ["shared.py"]
+
+
+async def test_rebase_aborts_cleanly_no_residue(
+    storage: SqliteStorage, upstream_repo: Path, tmp_path: Path
+) -> None:
+    """When rebase fails on real semantic conflict, ``git rebase --abort``
+    leaves the worktree clean — no ``.git/rebase-merge/`` directory, no
+    detached HEAD, no leftover REBASE_HEAD ref. The conflicted dispatch's
+    cleanup() then runs normally on terminal-state.
+
+    The test forces a same-file conflict by running two parallel dispatches
+    that both edit ``shared.py``, then asserts the canonical clone's git
+    state shows no rebase residue after both dispatches reach terminal
+    state. This catches the regression where ``git rebase --abort`` was
+    not called on the right cwd.
+    """
+    canonical = CanonicalClone(
+        path=tmp_path / "data" / "substrate-canonical",
+        upstream_url=str(upstream_repo),
+        default_branch="main",
+    )
+    await canonical.ensure_provisioned()
+    token_store = TokenStore()
+    background: list[asyncio.Task[None]] = []
+
+    async def launcher(ctx: DispatchLaunchContext) -> SubprocessHandle:
+        proc = _FakeSubprocess()
+
+        async def simulate() -> None:
+            await asyncio.sleep(0.05)
+            sha = await asyncio.to_thread(
+                _commit_in_worktree,
+                ctx.working_directory,
+                "shared.py",
+                f"# from {ctx.dispatch_id}\n",
+            )
+            await complete_dispatch(
+                storage=storage,
+                token_store=token_store,
+                request=CompleteDispatchInput(
+                    dispatch_id=ctx.dispatch_id,
+                    status="completed",
+                    commit_hash=sha,
+                    artifacts=["shared.py"],
+                ),
+                caller_agent_id="impl-agent-id",
+                caller_role="implementer",
+            )
+            proc.signal_clean_exit()
+
+        background.append(asyncio.create_task(simulate()))
+        return proc
+
+    dispatcher = BridgeDispatcher(
+        storage=storage,
+        token_store=token_store,
+        canonical=canonical,
+        worktrees_root=tmp_path / "data" / "dispatch-worktrees",
+        subprocess_launcher=launcher,
+        poll_interval_seconds=0.02,
+    )
+
+    await asyncio.gather(
+        dispatcher.dispatch(
+            task_id="task-A",
+            role="implementer",
+            role_agent_id="impl-agent-id",
+            prompt="edit shared",
+            actor="eng-agent-id",
+        ),
+        dispatcher.dispatch(
+            task_id="task-B",
+            role="implementer",
+            role_agent_id="impl-agent-id",
+            prompt="also edit shared",
+            actor="eng-agent-id",
+        ),
+    )
+
+    # No rebase-in-progress marker on canonical or in any leftover worktree.
+    canonical_git = canonical.path / ".git"
+    assert not (canonical_git / "rebase-merge").exists(), (
+        "canonical .git/rebase-merge/ persisted after abort"
+    )
+    assert not (canonical_git / "rebase-apply").exists(), (
+        "canonical .git/rebase-apply/ persisted after abort"
+    )
+    # Worktree-side rebase state under .git/worktrees/<name>/ — both worktrees
+    # have been removed by cleanup() on terminal state, so this is implicit:
+    # the directories shouldn't exist at all.
+    worktrees_dir = tmp_path / "data" / "dispatch-worktrees"
+    leftover_worktrees = (
+        list(worktrees_dir.iterdir()) if worktrees_dir.exists() else []
+    )
+    assert not leftover_worktrees, (
+        f"dispatch worktrees not cleaned: {leftover_worktrees}"
+    )
 
 
 # ----- canonical divergence -----------------------------------------------
