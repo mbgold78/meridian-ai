@@ -37,9 +37,15 @@ class Settings(BaseSettings):
     # M4c-engineer-supervisor: ships dormant. Flag flip is M5's behavioral
     # milestone (alongside PMSupervisor's analogous flag). See
     # `project_m5_engineer_supervisor_flag_flip` memory for the M5
-    # verification checklist (premium-bucket attribution, compaction-at-80%,
+    # verification checklist (subscription_5h attribution, compaction-at-80%,
     # heartbeat calibration).
     enable_engineer_supervisor: bool = Field(default=False)
+
+    # M5-pm-supervisor-base: ships dormant. Flag flip is M5-flag-flips
+    # alongside enable_engineer_supervisor. PMSupervisor doesn't need a
+    # substrate working tree (no canonical-clone analog) — the
+    # substrate_working_directory validator above is engineer-only.
+    enable_pm_supervisor: bool = Field(default=False)
 
     # M5-wrapper-closure: the substrate working tree the daemon discovers
     # ``origin`` from at canonical-provisioning time. Outside ``data_dir``
@@ -95,6 +101,15 @@ class Settings(BaseSettings):
         worktree — sub-agents handle code in dispatch worktrees off the
         canonical clone. This is a separate dedicated directory."""
         return self.data_dir / "engineer"
+
+    @property
+    def pm_continuous_dir(self) -> Path:
+        """The PM continuous-mode subprocess cwd. Per spec
+        (`11-engineer-bridge.md` § Long-running supervisors): no git, no
+        worktree — PM's writes land via MCP tools (knowledge writes,
+        task notes), not filesystem. Symmetric with
+        engineer_supervisor_dir."""
+        return self.data_dir / "pm-continuous"
 
     @property
     def substrate_canonical_dir(self) -> Path:

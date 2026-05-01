@@ -125,6 +125,42 @@ and no expiry until revoked.
 OAuth automatically; manually pasting a static token wouldn't fit the flow.
 Static tokens are for non-interactive M3+ daemon-launched agents.
 
+### Long-running supervisor preconditions (M4c+)
+
+Two long-running supervisors run inside the daemon at flag-flip time:
+`EngineerSupervisor` (M4c, dormant by default) and `PMSupervisor` (M5,
+dormant by default). Both follow the same operator-setup pattern: a
+**static seeding token issued once** before the daemon starts, used by
+the `AgentRegistry` at startup to resolve the supervisor's `agent_id`.
+The supervisor itself issues a separate per-spawn token at launch time
+with a distinguishing `label` — the seed token is for registry
+resolution only, never used for actual MCP calls.
+
+```bash
+# Required once before enabling MERIDIAN_ORCH_ENABLE_ENGINEER_SUPERVISOR=true
+uv run python scripts/issue-token.py --role engineer --label "engineer-seed"
+
+# Required once before enabling MERIDIAN_ORCH_ENABLE_PM_SUPERVISOR=true
+uv run python scripts/issue-token.py --role pm --label "pm-seed"
+```
+
+The `--label` is operator-facing only — anything that distinguishes it
+from a future supervisor-issued token is fine. The supervisors mint
+their own per-spawn tokens labeled `engineer-supervisor` and
+`pm-continuous` respectively at `start()` time; those are the tokens the
+subprocess actually authenticates with.
+
+If the registry can't resolve a supervisor's role at daemon startup
+(seed token missing or revoked), construction raises a `ValidationError`
+naming the missing role. The daemon refuses to start with the supervisor
+flag enabled until the operator issues the token.
+
+| Setting                                  | Default | Description                                              |
+|------------------------------------------|---------|----------------------------------------------------------|
+| `MERIDIAN_ORCH_ENABLE_ENGINEER_SUPERVISOR` | `false` | Engineer supervisor on. Requires `engineer` seed token. |
+| `MERIDIAN_ORCH_ENABLE_PM_SUPERVISOR`     | `false` | PM continuous supervisor on. Requires `pm` seed token.   |
+| `MERIDIAN_ORCH_SUBSTRATE_WORKING_DIRECTORY` | (unset) | Path to operator's substrate clone. Required when engineer supervisor flag is on (canonical-clone provisioning reads `origin` from here). |
+
 ## Test
 
 ```bash
