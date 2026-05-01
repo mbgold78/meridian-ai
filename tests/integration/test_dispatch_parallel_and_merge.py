@@ -592,6 +592,7 @@ async def test_dispatch_tester_returns_structured_test_results(
 
     out = await dispatch_tester(
         dispatcher=dispatcher,
+        registry=None,
         request=DispatchTesterInput(
             task_id="task-T",
             commit_hash="0" * 40,

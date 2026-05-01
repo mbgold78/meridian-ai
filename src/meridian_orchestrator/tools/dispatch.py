@@ -29,6 +29,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from meridian_orchestrator.agents.registry import AgentRegistry
 from meridian_orchestrator.audit.logger import write_audit
 from meridian_orchestrator.auth import TokenStore
 from meridian_orchestrator.bridge.dispatcher import (
@@ -36,6 +37,7 @@ from meridian_orchestrator.bridge.dispatcher import (
     DispatchOutcome,
     DispatchRole,
 )
+from meridian_orchestrator.bridge.timeouts import ModelString, model_for_tier
 from meridian_orchestrator.errors import (
     ConflictError,
     NotFoundError,
@@ -174,6 +176,7 @@ def _require_role(caller_role: str, *allowed: str) -> None:
 async def dispatch_implementer(
     *,
     dispatcher: BridgeDispatcher,
+    registry: AgentRegistry | None,
     request: DispatchImplementerInput,
     caller_agent_id: str,
     caller_role: str,
@@ -186,6 +189,13 @@ async def dispatch_implementer(
     full flow — this handler is a thin wrapper that reads the spec file,
     resolves permissions, and threads inputs into
     :meth:`BridgeDispatcher.dispatch`.
+
+    ``registry`` is consulted to resolve the dispatched role's
+    ``model_tier_default`` → canonical model string for the timeouts.py
+    tps-driven hard-timeout calculation (M4c-tooling). When ``None`` (or
+    when the role has no registered config), the dispatcher falls back to
+    the legacy ``timeout_seconds`` default of 300s — used by tests that
+    don't construct a registry.
 
     Returns the terminal-state DispatchOutcome flattened into the public
     output schema. Tester-specific fields (``test_results``) are not exposed
@@ -206,6 +216,8 @@ async def dispatch_implementer(
             f"could not read spec_path={request.spec_path!r}: {exc}"
         ) from exc
 
+    model = _resolve_model_for_role(registry, "implementer")
+
     outcome = await dispatcher.dispatch(
         task_id=request.task_id,
         role="implementer",
@@ -213,12 +225,33 @@ async def dispatch_implementer(
         prompt=prompt,
         spec_path_descriptor=spec_path,
         timeout_override_seconds=request.timeout_override_seconds,
+        model=model,
         keep_worktree_on_failure=request.keep_worktree_on_failure,
         engineer_decisions=[d.model_dump() for d in request.engineer_decisions],
         actor=caller_agent_id,
         requested_working_directory=request.working_directory,
     )
     return _outcome_to_implementer_output(outcome)
+
+
+def _resolve_model_for_role(
+    registry: AgentRegistry | None, role: str
+) -> ModelString | None:
+    """Resolve the canonical model string for a dispatched role via the
+    registry's ``model_tier_default`` field.
+
+    Returns ``None`` when ``registry`` is ``None`` or when the role has no
+    registered config — caller treats ``None`` as "use dispatcher's legacy
+    timeout default" rather than failing. Production paths always pass a
+    populated registry; lightweight tests pass ``None`` to skip the
+    timeouts.py wiring.
+    """
+    if registry is None:
+        return None
+    agent = registry.get(role)  # type: ignore[arg-type]
+    if agent is None:
+        return None
+    return model_for_tier(agent.config.model_tier_default)
 
 
 def _outcome_to_implementer_output(
@@ -240,6 +273,7 @@ def _outcome_to_implementer_output(
 async def dispatch_tester(
     *,
     dispatcher: BridgeDispatcher,
+    registry: AgentRegistry | None,
     request: DispatchTesterInput,
     caller_agent_id: str,
     caller_role: str,
@@ -253,12 +287,10 @@ async def dispatch_tester(
     verify; it is recorded on the dispatch row's ``commit_hash`` column up
     front so PM/Engineer queries surface what's under verification.
 
-    M4b scope: the dispatch lifecycle works end-to-end against a fake
-    subprocess that returns stub ``test_results`` via ``complete_dispatch``.
-    Wiring the real Playwright MCP into the Tester subprocess at launch time
-    happens at M4c when MCP-server-side dispatch tool registration goes
-    live; until then the operator runs Playwright manually for the
-    integration acceptance.
+    ``registry`` is consulted to resolve the tester role's
+    ``model_tier_default`` → canonical model string for the tps-driven
+    timeout. ``None`` means "use legacy timeout default" — see
+    :func:`dispatch_implementer` for the full contract.
     """
     _require_role(caller_role, "engineer")
     if not request.task_id:
@@ -268,6 +300,8 @@ async def dispatch_tester(
             "commit_hash must be non-empty for tester dispatches"
         )
 
+    model = _resolve_model_for_role(registry, "tester")
+
     outcome = await dispatcher.dispatch(
         task_id=request.task_id,
         role="tester",
@@ -275,6 +309,7 @@ async def dispatch_tester(
         prompt=request.assertion_spec,
         spec_path_descriptor=None,
         timeout_override_seconds=request.timeout_override_seconds,
+        model=model,
         keep_worktree_on_failure=request.keep_worktree_on_failure,
         engineer_decisions=[d.model_dump() for d in request.engineer_decisions],
         actor=caller_agent_id,
