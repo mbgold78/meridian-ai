@@ -33,6 +33,22 @@ class CanonicalCloneError(OrchestratorError):
     code = "CANONICAL_CLONE_ERROR"
 
 
+class CanonicalDivergedError(OrchestratorError):
+    """Raised when canonical's HEAD is not an ancestor of upstream/<branch>.
+
+    Per ``11-engineer-bridge.md`` this should never happen — the daemon is
+    the only writer of the canonical clone, and every merge is ``--ff-only``
+    against either upstream or a dispatch branch. Surfacing this error means
+    something has touched canonical out-of-band (operator manually committed
+    in there, a partial recovery from a previous crash that left a wedged
+    merge state, etc.). Recovery is manual: operator inspects, resets, or
+    deletes-and-reclones canonical. Auto-healing is intentionally not
+    implemented — the right move is "stop and call a human."
+    """
+
+    code = "CANONICAL_DIVERGED"
+
+
 async def _run_git(*args: str, cwd: Path | None = None) -> tuple[int, str, str]:
     """Run ``git <args>`` and return ``(returncode, stdout, stderr)``."""
     proc = await asyncio.create_subprocess_exec(
@@ -151,13 +167,18 @@ class CanonicalClone:
     async def fetch_and_fast_forward(self) -> None:
         """Refresh the canonical clone against upstream.
 
-        Runs ``git fetch origin`` then ``git merge --ff-only origin/<branch>``.
-        Raises :class:`CanonicalCloneError` if either step fails.
+        Runs ``git fetch origin``, verifies canonical's HEAD is an ancestor of
+        ``origin/<branch>`` (or equal to it), then ``git merge --ff-only
+        origin/<branch>``.
 
-        M4a behavior: surfaces the failure unconditionally. M4b will distinguish
-        the canonical-divergence case (upstream rewrote history, canonical is
-        no longer fast-forwardable) and emit the ``dispatch.canonical_diverged``
-        audit event with manual operator recovery.
+        Raises :class:`CanonicalDivergedError` if HEAD is *not* an ancestor of
+        ``origin/<branch>`` — i.e., canonical has commits upstream doesn't,
+        which should never happen because the daemon is the only writer of
+        canonical. Caller (the dispatcher) audits ``dispatch.canonical_diverged``
+        and halts the dispatch.
+
+        Raises :class:`CanonicalCloneError` for any other failure (fetch
+        failed, merge step itself fails despite the ancestry check passing).
         """
         if not self.is_provisioned:
             raise CanonicalCloneError(
@@ -169,6 +190,24 @@ class CanonicalClone:
             raise CanonicalCloneError(
                 f"git fetch origin failed (rc={rc}): {stderr.strip()!r}"
             )
+
+        canonical_head = await self._rev_parse("HEAD")
+        upstream_head = await self._rev_parse(f"origin/{self._default_branch}")
+
+        rc, _, _ = await _run_git(
+            "merge-base",
+            "--is-ancestor",
+            "HEAD",
+            f"origin/{self._default_branch}",
+            cwd=self._path,
+        )
+        if rc != 0:
+            raise CanonicalDivergedError(
+                "canonical HEAD is not an ancestor of "
+                f"origin/{self._default_branch}: canonical_head={canonical_head}, "
+                f"upstream_head={upstream_head}. Manual recovery required."
+            )
+
         rc, _, stderr = await _run_git(
             "merge", "--ff-only", f"origin/{self._default_branch}", cwd=self._path
         )
@@ -178,3 +217,36 @@ class CanonicalClone:
                 f"{stderr.strip()!r}"
             )
         logger.debug("canonical.refreshed", path=str(self._path))
+
+    async def push_to_upstream(self) -> None:
+        """Push canonical's default branch to ``origin``.
+
+        Called by the dispatcher after a successful ``--ff-only`` merge of a
+        dispatch branch into canonical's main. Raises :class:`CanonicalCloneError`
+        on push failure (which surfaces the original landed commit but blocks
+        the upstream catch-up; operator follow-up).
+        """
+        if not self.is_provisioned:
+            raise CanonicalCloneError(
+                f"canonical clone at {self._path} is not provisioned"
+            )
+        rc, _, stderr = await _run_git(
+            "push", "origin", self._default_branch, cwd=self._path
+        )
+        if rc != 0:
+            raise CanonicalCloneError(
+                f"git push origin {self._default_branch} failed (rc={rc}): "
+                f"{stderr.strip()!r}"
+            )
+
+    async def head_sha(self) -> str:
+        """Return the current HEAD sha of the canonical clone."""
+        return await self._rev_parse("HEAD")
+
+    async def _rev_parse(self, ref: str) -> str:
+        rc, stdout, stderr = await _run_git("rev-parse", ref, cwd=self._path)
+        if rc != 0:
+            raise CanonicalCloneError(
+                f"git rev-parse {ref!r} failed (rc={rc}): {stderr.strip()!r}"
+            )
+        return stdout.strip()

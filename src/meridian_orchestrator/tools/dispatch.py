@@ -77,6 +77,39 @@ class DispatchImplementerOutput(BaseModel):
     queue_items_raised: list[str] = Field(default_factory=list)
     artifacts: list[str] = Field(default_factory=list)
     notes: str | None = None
+    merge_conflict_files: list[str] = Field(default_factory=list)
+    actual_touched_files: list[str] = Field(default_factory=list)
+
+
+class DispatchTesterInput(BaseModel):
+    """Engineer's request to verify a commit per ``11-engineer-bridge.md`` line 348.
+
+    ``assertion_spec`` is the verification instructions Engineer composes —
+    the Tester subprocess receives it as the ``claude -p`` prompt rather
+    than reading from a file (Implementer reads ``spec_path``; Tester does
+    not). ``commit_hash`` identifies the commit the Tester should verify
+    (typically the commit a prior Implementer dispatch landed); the Tester's
+    worktree is branched off the same canonical default branch and the
+    Tester's first read is ``git checkout <commit_hash>`` or equivalent.
+    """
+
+    task_id: str
+    commit_hash: str
+    working_directory: str
+    assertion_spec: str
+    timeout_override_seconds: int | None = None
+    keep_worktree_on_failure: bool = False
+    engineer_decisions: list[EngineerDecision] = Field(default_factory=list)
+
+
+class DispatchTesterOutput(BaseModel):
+    dispatch_id: str
+    status: str
+    test_results: dict[str, Any] | None = None
+    decline_reason: str | None = None
+    queue_items_raised: list[str] = Field(default_factory=list)
+    artifacts: list[str] = Field(default_factory=list)
+    notes: str | None = None
 
 
 class CompleteDispatchInput(BaseModel):
@@ -150,8 +183,9 @@ async def dispatch_implementer(
 
     ``implementer_agent_id`` is the registry-resolved Implementer agent UUID
     used to mint the per-dispatch token. The dispatcher's lifecycle owns the
-    full flow — this handler is a thin wrapper that resolves permissions and
-    threads inputs into :meth:`BridgeDispatcher.dispatch`.
+    full flow — this handler is a thin wrapper that reads the spec file,
+    resolves permissions, and threads inputs into
+    :meth:`BridgeDispatcher.dispatch`.
 
     Returns the terminal-state DispatchOutcome flattened into the public
     output schema. Tester-specific fields (``test_results``) are not exposed
@@ -161,13 +195,23 @@ async def dispatch_implementer(
     if not request.task_id:
         raise OrchestratorValidationError("task_id must be non-empty")
 
+    import asyncio
     from pathlib import Path
+
+    spec_path = Path(request.spec_path)
+    try:
+        prompt = await asyncio.to_thread(spec_path.read_text, encoding="utf-8")
+    except OSError as exc:
+        raise OrchestratorValidationError(
+            f"could not read spec_path={request.spec_path!r}: {exc}"
+        ) from exc
 
     outcome = await dispatcher.dispatch(
         task_id=request.task_id,
         role="implementer",
         role_agent_id=implementer_agent_id,
-        spec_path=Path(request.spec_path),
+        prompt=prompt,
+        spec_path_descriptor=spec_path,
         timeout_override_seconds=request.timeout_override_seconds,
         keep_worktree_on_failure=request.keep_worktree_on_failure,
         engineer_decisions=[d.model_dump() for d in request.engineer_decisions],
@@ -184,6 +228,62 @@ def _outcome_to_implementer_output(
         dispatch_id=outcome.dispatch_id,
         status=outcome.status,
         commit_hash=outcome.commit_hash,
+        decline_reason=outcome.decline_reason,
+        queue_items_raised=list(outcome.queue_items_raised),
+        artifacts=list(outcome.artifacts),
+        notes=outcome.notes,
+        merge_conflict_files=list(outcome.merge_conflict_files),
+        actual_touched_files=list(outcome.actual_touched_files),
+    )
+
+
+async def dispatch_tester(
+    *,
+    dispatcher: BridgeDispatcher,
+    request: DispatchTesterInput,
+    caller_agent_id: str,
+    caller_role: str,
+    tester_agent_id: str,
+) -> DispatchTesterOutput:
+    """Engineer-only. Run a Tester dispatch through to a terminal state.
+
+    ``tester_agent_id`` is the registry-resolved Tester agent UUID. The
+    Tester subprocess receives ``request.assertion_spec`` as its prompt
+    (no spec_path indirection). ``commit_hash`` identifies the commit to
+    verify; it is recorded on the dispatch row's ``commit_hash`` column up
+    front so PM/Engineer queries surface what's under verification.
+
+    M4b scope: the dispatch lifecycle works end-to-end against a fake
+    subprocess that returns stub ``test_results`` via ``complete_dispatch``.
+    Wiring the real Playwright MCP into the Tester subprocess at launch time
+    happens at M4c when MCP-server-side dispatch tool registration goes
+    live; until then the operator runs Playwright manually for the
+    integration acceptance.
+    """
+    _require_role(caller_role, "engineer")
+    if not request.task_id:
+        raise OrchestratorValidationError("task_id must be non-empty")
+    if not request.commit_hash:
+        raise OrchestratorValidationError(
+            "commit_hash must be non-empty for tester dispatches"
+        )
+
+    outcome = await dispatcher.dispatch(
+        task_id=request.task_id,
+        role="tester",
+        role_agent_id=tester_agent_id,
+        prompt=request.assertion_spec,
+        spec_path_descriptor=None,
+        timeout_override_seconds=request.timeout_override_seconds,
+        keep_worktree_on_failure=request.keep_worktree_on_failure,
+        engineer_decisions=[d.model_dump() for d in request.engineer_decisions],
+        actor=caller_agent_id,
+        requested_working_directory=request.working_directory,
+    )
+    return DispatchTesterOutput(
+        dispatch_id=outcome.dispatch_id,
+        status=outcome.status,
+        test_results=outcome.test_results,
         decline_reason=outcome.decline_reason,
         queue_items_raised=list(outcome.queue_items_raised),
         artifacts=list(outcome.artifacts),
@@ -418,6 +518,8 @@ __all__ = [
     "DispatchImplementerInput",
     "DispatchImplementerOutput",
     "DispatchRole",
+    "DispatchTesterInput",
+    "DispatchTesterOutput",
     "EngineerDecision",
     "GetDispatchResultInput",
     "GetDispatchResultOutput",
@@ -425,6 +527,7 @@ __all__ = [
     "GetDispatchStatusOutput",
     "complete_dispatch",
     "dispatch_implementer",
+    "dispatch_tester",
     "get_dispatch_result",
     "get_dispatch_status",
 ]

@@ -46,8 +46,11 @@ import structlog
 
 from meridian_orchestrator.audit.logger import write_audit
 from meridian_orchestrator.auth import IssuedToken, TokenStore
-from meridian_orchestrator.bridge.canonical import CanonicalClone
-from meridian_orchestrator.bridge.worktree import DispatchWorktree
+from meridian_orchestrator.bridge.canonical import (
+    CanonicalClone,
+    CanonicalDivergedError,
+)
+from meridian_orchestrator.bridge.worktree import DispatchWorktree, MergeResult
 from meridian_orchestrator.errors import OrchestratorError
 from meridian_orchestrator.storage.interface import Storage
 
@@ -64,6 +67,13 @@ _TERMINAL_STATES: frozenset[str] = frozenset(
 )
 
 _GRACE_SECONDS = 10
+
+# Process-wide guard: at most one BridgeDispatcher per canonical clone. The
+# asyncio Lock on canonical-mutating operations is per-instance, so two
+# dispatchers against the same canonical would race on `git worktree add`,
+# `merge --ff-only`, and `push origin`. Production has one dispatcher per
+# daemon, so this is convention; the guard makes the convention enforceable.
+_dispatcher_owned_canonicals: set[Path] = set()
 
 
 def _now_iso() -> str:
@@ -122,6 +132,11 @@ class DispatchOutcome:
     Mirrors the subset of the ``dispatches`` row a caller (Engineer's
     ``get_dispatch_result``, the test harness) needs to drive its own state
     progression.
+
+    ``merge_conflict_files`` is populated when an Implementer dispatch
+    completed cleanly on its branch but the ``--ff-only`` merge into
+    canonical/main failed (M4b). PM uses this list to scope re-dispatch
+    decisions; the dispatch's ``status`` remains ``completed``.
     """
 
     dispatch_id: str
@@ -133,6 +148,7 @@ class DispatchOutcome:
     artifacts: list[str] = field(default_factory=list)
     notes: str | None = None
     actual_touched_files: list[str] = field(default_factory=list)
+    merge_conflict_files: list[str] = field(default_factory=list)
 
 
 async def _default_launcher(ctx: DispatchLaunchContext) -> SubprocessHandle:
@@ -181,7 +197,15 @@ class BridgeDispatcher:
         worktrees_root: Path,
         subprocess_launcher: SubprocessLauncher | None = None,
         poll_interval_seconds: float = 0.1,
+        push_after_merge: bool = True,
     ) -> None:
+        if canonical.path in _dispatcher_owned_canonicals:
+            raise RuntimeError(
+                "BridgeDispatcher: another dispatcher already targets canonical "
+                f"at {canonical.path}; per-instance asyncio.Lock on canonical "
+                "operations would race. Production has one dispatcher per daemon."
+            )
+        _dispatcher_owned_canonicals.add(canonical.path)
         self._storage = storage
         self._token_store = token_store
         self._canonical = canonical
@@ -192,6 +216,13 @@ class BridgeDispatcher:
             else _default_launcher
         )
         self._poll = poll_interval_seconds
+        self._push_after_merge = push_after_merge
+        # Serializes canonical-clone operations across concurrent dispatches:
+        # the pre-dispatch fetch+ff-only refresh, and the post-completion
+        # merge of the dispatch branch into canonical/main + push to upstream.
+        # Per-dispatch subprocess work runs in parallel — only canonical
+        # mutation is serialized.
+        self._canonical_lock = asyncio.Lock()
 
     async def dispatch(
         self,
@@ -199,7 +230,8 @@ class BridgeDispatcher:
         task_id: str,
         role: DispatchRole,
         role_agent_id: str,
-        spec_path: Path,
+        prompt: str,
+        spec_path_descriptor: Path | None = None,
         timeout_seconds: int = 300,
         timeout_override_seconds: int | None = None,
         keep_worktree_on_failure: bool = False,
@@ -213,6 +245,12 @@ class BridgeDispatcher:
         the registry; it goes on the issued token so the subprocess's MCP
         calls resolve to that agent. ``actor`` is the Engineer's agent_id —
         the audit ``actor`` for ``dispatch.issued``.
+
+        ``prompt`` is what gets passed to ``claude -p``. The Implementer
+        handler reads it from ``DispatchImplementerInput.spec_path``; the
+        Tester handler uses ``DispatchTesterInput.assertion_spec`` directly.
+        ``spec_path_descriptor`` is stored on the dispatch row for audit
+        cross-reference; ``None`` is fine (Tester has no spec file).
 
         ``requested_working_directory`` is recorded as advisory in the
         ``dispatch.issued`` audit detail; the actual subprocess cwd is the
@@ -229,16 +267,13 @@ class BridgeDispatcher:
         )
         effective_timeout = timeout_override_seconds or timeout_seconds
 
-        prompt = await asyncio.to_thread(
-            spec_path.read_text, encoding="utf-8"
-        )
-
+        spec_path_str = str(spec_path_descriptor) if spec_path_descriptor else None
         await self._insert_dispatch_row(
             dispatch_id=dispatch_id,
             task_id=task_id,
             role=role,
             working_directory=str(worktree.path),
-            spec_path=str(spec_path),
+            spec_path=spec_path_str,
             timeout_seconds=effective_timeout,
             timeout_override_seconds=timeout_override_seconds,
             keep_worktree_on_failure=keep_worktree_on_failure,
@@ -254,7 +289,7 @@ class BridgeDispatcher:
                 "task_id": task_id,
                 "role": role,
                 "working_directory": str(worktree.path),
-                "spec_path": str(spec_path),
+                "spec_path": spec_path_str,
                 "timeout_seconds": effective_timeout,
                 "engineer_decisions": engineer_decisions or [],
                 "requested_working_directory": requested_working_directory,
@@ -286,8 +321,43 @@ class BridgeDispatcher:
                 },
             )
 
-            await self._canonical.fetch_and_fast_forward()
-            await worktree.provision()
+            try:
+                # Hold the canonical lock across both fetch_and_fast_forward
+                # AND worktree.provision: `git worktree add` writes to the
+                # canonical clone's `.git/config`, and on Windows two
+                # concurrent provisions race for `.git/config.lock`. Releasing
+                # the lock between fetch and provision is what surfaces the
+                # race intermittently. Subprocess execution runs in parallel
+                # under the lock-free middle of the lifecycle; only canonical-
+                # mutating operations are serialized.
+                async with self._canonical_lock:
+                    await self._canonical.fetch_and_fast_forward()
+                    await worktree.provision()
+            except CanonicalDivergedError as exc:
+                await write_audit(
+                    self._storage,
+                    actor="system",
+                    action="dispatch.canonical_diverged",
+                    target=dispatch_id,
+                    details={
+                        "dispatch_id": dispatch_id,
+                        "canonical_head": await self._canonical.head_sha(),
+                        "error": str(exc),
+                    },
+                    success=False,
+                    error_message=str(exc),
+                )
+                await self._storage.execute(
+                    "UPDATE dispatches SET status = 'failed', "
+                    "completed_at = ?, notes = ? WHERE id = ?",
+                    (
+                        _now_iso(),
+                        f"canonical diverged before dispatch could begin: {exc}",
+                        dispatch_id,
+                    ),
+                )
+                terminate_reason = "failed"
+                raise
 
             ctx = DispatchLaunchContext(
                 dispatch_id=dispatch_id,
@@ -315,6 +385,12 @@ class BridgeDispatcher:
             )
 
             outcome = await self._await_terminal(dispatch_id, proc)
+            if outcome.status == "completed" and outcome.commit_hash:
+                outcome = await self._merge_and_record(
+                    dispatch_id=dispatch_id,
+                    outcome=outcome,
+                    worktree=worktree,
+                )
             terminate_reason = outcome.status
             return outcome
         finally:
@@ -375,6 +451,148 @@ class BridgeDispatcher:
                     },
                 )
 
+    async def _merge_and_record(
+        self,
+        *,
+        dispatch_id: str,
+        outcome: DispatchOutcome,
+        worktree: DispatchWorktree,
+    ) -> DispatchOutcome:
+        """Merge the dispatch branch into canonical and record the result.
+
+        Holds :attr:`_canonical_lock` so concurrent dispatches serialize
+        their canonical-mutating operations. Performs a fresh
+        ``fetch_and_fast_forward`` (so a parallel dispatch's earlier merge is
+        visible) and then attempts ``--ff-only`` of the dispatch branch.
+
+        On successful merge:
+        - pushes canonical to upstream if ``push_after_merge`` is set
+        - populates ``dispatches.actual_touched_files_json`` from
+          ``git diff --name-only <commit>~1 <commit>`` against canonical
+        - audits ``dispatch.merged``
+        - returns an updated outcome with ``actual_touched_files`` set
+
+        On merge conflict:
+        - populates ``dispatches.merge_conflict_files_json`` with paths the
+          dispatch touched since divergence
+        - audits ``dispatch.merge_conflict``
+        - returns an updated outcome whose ``status`` is still ``completed``
+          (the work landed on the dispatch branch; the merge surface is a
+          separate signal). PM uses ``merge_conflict_files_json`` to scope
+          re-dispatch.
+
+        On canonical divergence mid-flight:
+        - audits ``dispatch.canonical_diverged``
+        - leaves the dispatch row as ``completed`` (the work is on the
+          branch) but the upstream catchup is broken; operator recovery.
+        """
+        import json as _json
+
+        commit_hash = outcome.commit_hash
+        if not commit_hash:
+            return outcome
+
+        async with self._canonical_lock:
+            try:
+                await self._canonical.fetch_and_fast_forward()
+            except CanonicalDivergedError as exc:
+                await write_audit(
+                    self._storage,
+                    actor="system",
+                    action="dispatch.canonical_diverged",
+                    target=dispatch_id,
+                    details={
+                        "dispatch_id": dispatch_id,
+                        "canonical_head": await self._canonical.head_sha(),
+                        "error": str(exc),
+                    },
+                    success=False,
+                    error_message=str(exc),
+                )
+                return outcome
+
+            merge: MergeResult = await worktree.merge_into_canonical()
+
+            if not merge.ok:
+                conflict_json = _json.dumps(
+                    list(merge.conflicting_files), sort_keys=True
+                )
+                await self._storage.execute(
+                    "UPDATE dispatches SET merge_conflict_files_json = ? "
+                    "WHERE id = ?",
+                    (conflict_json, dispatch_id),
+                )
+                await write_audit(
+                    self._storage,
+                    actor="system",
+                    action="dispatch.merge_conflict",
+                    target=dispatch_id,
+                    details={
+                        "dispatch_id": dispatch_id,
+                        "branch": worktree.branch,
+                        "conflicting_files": list(merge.conflicting_files),
+                        "reason": merge.reason,
+                    },
+                )
+                from dataclasses import replace as _replace
+                return _replace(
+                    outcome,
+                    actual_touched_files=[],
+                    merge_conflict_files=list(merge.conflicting_files),
+                )
+
+            await write_audit(
+                self._storage,
+                actor="system",
+                action="dispatch.merged",
+                target=dispatch_id,
+                details={
+                    "dispatch_id": dispatch_id,
+                    "branch": worktree.branch,
+                    "new_upstream_head": merge.new_head,
+                },
+            )
+
+            if self._push_after_merge:
+                try:
+                    await self._canonical.push_to_upstream()
+                except OrchestratorError as exc:
+                    logger.warning(
+                        "dispatch.push_failed",
+                        dispatch_id=dispatch_id,
+                        error=str(exc),
+                    )
+
+            touched = await self._diff_touched_files(commit_hash)
+            await self._storage.execute(
+                "UPDATE dispatches SET actual_touched_files_json = ? "
+                "WHERE id = ?",
+                (_json.dumps(touched, sort_keys=True), dispatch_id),
+            )
+
+            from dataclasses import replace as _replace
+            return _replace(outcome, actual_touched_files=touched)
+
+    async def _diff_touched_files(self, commit_hash: str) -> list[str]:
+        """Return ``git diff --name-only <commit>~1 <commit>`` against canonical.
+
+        On any git failure returns an empty list — the caller treats the
+        substrate touch map cache as empty for this dispatch rather than
+        raising. Engineer's parallelization heuristics tolerate empty cache
+        entries gracefully.
+        """
+        from meridian_orchestrator.bridge.canonical import _run_git as _git
+        rc, stdout, _ = await _git(
+            "diff",
+            "--name-only",
+            f"{commit_hash}~1",
+            commit_hash,
+            cwd=self._canonical.path,
+        )
+        if rc != 0:
+            return []
+        return [line for line in stdout.splitlines() if line.strip()]
+
     async def _insert_dispatch_row(
         self,
         *,
@@ -382,7 +600,7 @@ class BridgeDispatcher:
         task_id: str,
         role: DispatchRole,
         working_directory: str,
-        spec_path: str,
+        spec_path: str | None,
         timeout_seconds: int,
         timeout_override_seconds: int | None,
         keep_worktree_on_failure: bool,
@@ -461,7 +679,8 @@ class BridgeDispatcher:
         row = await self._storage.fetch_one(
             "SELECT status, commit_hash, decline_reason, test_results_json, "
             "queue_items_raised_json, artifacts_json, notes, "
-            "actual_touched_files_json FROM dispatches WHERE id = ?",
+            "actual_touched_files_json, merge_conflict_files_json "
+            "FROM dispatches WHERE id = ?",
             (dispatch_id,),
         )
         if row is None:
@@ -489,6 +708,7 @@ class BridgeDispatcher:
             artifacts=_maybe_list(row["artifacts_json"]),
             notes=row["notes"],
             actual_touched_files=_maybe_list(row["actual_touched_files_json"]),
+            merge_conflict_files=_maybe_list(row["merge_conflict_files_json"]),
         )
 
     async def _terminate_subprocess(

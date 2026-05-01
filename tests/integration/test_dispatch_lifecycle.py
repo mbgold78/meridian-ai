@@ -1,4 +1,4 @@
-"""End-to-end serial-dispatch lifecycle test (M4a).
+"""End-to-end serial-dispatch lifecycle test (M4a; exercises M4b merge protocol via single-dispatch path).
 
 Drives :class:`BridgeDispatcher` through one Implementer dispatch using:
 
@@ -9,10 +9,14 @@ Drives :class:`BridgeDispatcher` through one Implementer dispatch using:
   the worktree and then calls ``complete_dispatch`` via the in-process pure
   handler. The fake exits with rc=0 once ``complete_dispatch`` has landed.
 
-The point of the test is the full lifecycle: dispatch row transitions
-queued → running → completed; canonical clone is provisioned and refreshed;
-worktree is provisioned and cleaned up; per-dispatch token is issued and then
-revoked; full audit chain is written.
+The full lifecycle covered: dispatch row transitions queued → running →
+completed; canonical clone provisioned and refreshed; worktree provisioned
+and cleaned up; per-dispatch token issued and then revoked; full audit
+chain written. With M4b shipping the merge protocol, the happy-path test
+also exercises ``--ff-only`` merge into canonical, push to upstream, and
+``actual_touched_files_json`` population — so this file is broader than its
+M4a name implies. Parallel-dispatch and merge-conflict scenarios live in
+``test_dispatch_parallel_and_merge.py``.
 
 Skipped if ``git`` is not on PATH on the host running the test.
 """
@@ -199,7 +203,8 @@ async def test_serial_implementer_dispatch_completes(
         task_id="task-1",
         role="implementer",
         role_agent_id="impl-agent-id",
-        spec_path=spec_path,
+        prompt=spec_path.read_text(encoding="utf-8"),
+        spec_path_descriptor=spec_path,
         actor="eng-agent-id",
         requested_working_directory=str(upstream_repo),
     )
@@ -290,7 +295,8 @@ async def test_subprocess_exits_without_complete_dispatch_marks_failed(
         task_id="task-1",
         role="implementer",
         role_agent_id="impl-agent-id",
-        spec_path=spec_path,
+        prompt=spec_path.read_text(encoding="utf-8"),
+        spec_path_descriptor=spec_path,
         actor="eng-agent-id",
     )
 
