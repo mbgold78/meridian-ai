@@ -383,7 +383,9 @@ class GetDispatchEventsOutput(BaseModel):
 
 Returns the same audit rows that `get_audit_log` returns, filtered by `dispatch_id` (the rows whose `details_json.dispatch_id` is in the input list) and optionally by timestamp. The tool is read-only and not itself audited — query traffic on observability tools would dwarf the actual dispatch lifecycle audit signal.
 
-**Hierarchy check.** Engineer can only query events for dispatches Engineer initiated (the audit row's `actor` is in Engineer's subtree, OR the dispatch row's `task_id` was claimed by Engineer). PM can query any dispatch (subtree includes all dispatches). Mike can query all.
+**Hierarchy check.** Engineer can only query events for sub-agent dispatches Engineer initiated (the dispatch row's `task_id` was claimed by Engineer — verified via the `dispatch.issued` audit row's `actor`). PM can query events for any sub-agent dispatch in its subtree (`role IN ('implementer', 'tester')`). Mike can query all.
+
+**Supervisor lifecycle rows excluded at M4c.** Engineer's and PM's view EXCLUDES audit events for `role='engineer-supervisor'` and `role='pm-continuous'` dispatches — supervisor lifecycle observability is dashboard-shaped concern that ships at M6 alongside `get_dashboard_summary`. Operator-only inspection of supervisor lifecycle audit chains uses `get_audit_log` (Mike-only). Reading rationale: supervisor rows are *infrastructure state* (when did the supervisor start, when did it timeout, when did it compact); Engineer's and PM's queries reason about *work state* (what dispatches did sub-agents run; what did they touch). Mixing the two surfaces at M4c would expose lifecycle metadata to subprocess callers prematurely.
 
 **Allowed for PM, Engineer.** Implementer/Tester see only their own dispatch events via `get_dispatch_status` / `get_dispatch_result`; they don't need the audit-event polling surface.
 
@@ -414,7 +416,9 @@ class GetRecentDispatchesOutput(BaseModel):
 
 Read-only; not audited (high-frequency for Engineer's loop).
 
-**Hierarchy check.** Same scoping as `get_dispatch_events`. Engineer sees its own dispatches and its sub-agents' dispatches; PM sees everything in its subtree (Engineer + Implementer + Tester); Mike sees all. Implementer/Tester see only their own dispatches via `get_dispatch_status` / `get_dispatch_result`.
+**Hierarchy check.** Same scoping as `get_dispatch_events`. Engineer sees sub-agent dispatches it initiated (`role IN ('implementer', 'tester')` AND `dispatches.task_id IN (SELECT id FROM tasks WHERE claimed_by = engineer_agent_id)`); PM sees the same sub-agent dispatches across all tasks in its subtree (`role IN ('implementer', 'tester')`); Mike sees all. **Supervisor lifecycle rows excluded from Engineer's and PM's view at M4c**, same justification as `get_dispatch_events` above. Implementer/Tester see only their own dispatches via `get_dispatch_status` / `get_dispatch_result`.
+
+**Implementation note (M4c-tooling).** Both query tools share a single `_filter_dispatches_for_caller` helper. `get_recent_dispatches` uses the join-based filter shown above (cheap, indexed via `idx_dispatches_task` + `idx_dispatches_role_status`). `get_dispatch_events` uses an audit-log filter — for each dispatch_id in the input, verify the `dispatch.issued` audit row's `actor` matches the caller (one row read per dispatch_id; small N since the input is bounded). Storage pattern matches query shape: tools return current state for `get_recent_dispatches`, historical events for `get_dispatch_events`. If scoping rules broaden later (M6 dashboard surfacing, M5 new role additions), the change happens in the shared helper, not duplicated across tool handlers.
 
 **Allowed for PM, Engineer.**
 

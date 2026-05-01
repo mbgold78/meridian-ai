@@ -611,8 +611,14 @@ class LongRunningSupervisor(ABC):
         self._current_dispatch_id = None
 
         # Respawn fresh. NOTE: no cap-counter increment — compaction is
-        # healthy lifecycle; an Engineer that compacts every iteration is
-        # healthy, not hung. Halting it would be a regression.
+        # healthy lifecycle, not failure recovery. The cap exists for
+        # hung-supervisor detection (auto-respawn alone isn't a fix for
+        # a deeper bug). An Engineer that compacts three times in an
+        # hour is healthy under load; halting it would defeat the point
+        # of compaction. Heartbeat-timeout and unexpected-exit respawns
+        # DO increment the cap counter (see _handle_heartbeat_timeout
+        # and _handle_subprocess_unexpected_exit) — those are failure
+        # modes, not lifecycle.
         await self._spawn()
 
     async def _handle_subprocess_unexpected_exit(
