@@ -26,6 +26,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from datetime import UTC, datetime
+from typing import Any
 
 import structlog
 import uvicorn
@@ -43,6 +44,7 @@ from meridian_orchestrator.agents.permissions import PermissionResolver
 from meridian_orchestrator.agents.registry import AgentRegistry
 from meridian_orchestrator.auth import TokenStore, _parse_token
 from meridian_orchestrator.bridge.activity import record_mcp_call
+from meridian_orchestrator.bridge.dispatcher import BridgeDispatcher
 from meridian_orchestrator.bridge.supervisor_base import LongRunningSupervisor
 from meridian_orchestrator.config import Settings
 from meridian_orchestrator.errors import AuthError, ConflictError, NotFoundError
@@ -61,11 +63,27 @@ from meridian_orchestrator.tools.agents import (
     list_agents,
 )
 from meridian_orchestrator.tools.dispatch import (
+    CompleteDispatchInput,
+    CompleteDispatchOutput,
+    DispatchImplementerInput,
+    DispatchImplementerOutput,
+    DispatchTesterInput,
+    DispatchTesterOutput,
+    EngineerDecision,
     GetDispatchEventsInput,
     GetDispatchEventsOutput,
+    GetDispatchResultInput,
+    GetDispatchResultOutput,
+    GetDispatchStatusInput,
+    GetDispatchStatusOutput,
     GetRecentDispatchesInput,
     GetRecentDispatchesOutput,
+    complete_dispatch,
+    dispatch_implementer,
+    dispatch_tester,
     get_dispatch_events,
+    get_dispatch_result,
+    get_dispatch_status,
     get_recent_dispatches,
 )
 from meridian_orchestrator.tools.supervisor import (
@@ -125,6 +143,7 @@ def build_server(
     registry: AgentRegistry | None = None,
     storage: Storage | None = None,
     get_engineer_supervisor: Callable[[], LongRunningSupervisor | None] | None = None,
+    get_dispatcher: Callable[[], BridgeDispatcher | None] | None = None,
 ) -> FastMCP:
     """Construct the FastMCP server with auth + the current tool set.
 
@@ -196,11 +215,253 @@ def build_server(
 
     if storage is not None:
         _register_dispatch_query_tools(mcp, storage)
+        _register_dispatch_completion_tools(mcp, storage, token_store)
+
+    if storage is not None and get_dispatcher is not None and registry is not None:
+        _register_dispatch_initiation_tools(
+            mcp, storage, registry, get_dispatcher
+        )
 
     if storage is not None and get_engineer_supervisor is not None:
         _register_supervisor_tools(mcp, storage, get_engineer_supervisor)
 
     return mcp
+
+
+def _register_dispatch_initiation_tools(
+    mcp: FastMCP,
+    storage: Storage,
+    registry: AgentRegistry,
+    get_dispatcher: Callable[[], BridgeDispatcher | None],
+) -> None:
+    """Register dispatch_implementer and dispatch_tester (engineer-only).
+
+    The ``get_dispatcher`` callable is evaluated lazily at each tool
+    invocation. The dispatcher is constructed in ``main.py`` AFTER the
+    MCP server's ready signal fires (the canonical clone provisioning
+    is synchronous in the lifespan, so by the time the server accepts
+    connections the dispatcher is up). The lazy callable is symmetric
+    with ``get_engineer_supervisor`` and protects against early-call
+    races during startup ordering.
+
+    Permission enforcement is single-gate at handler ``_require_role``;
+    wrapper layer does not double-check via PermissionResolver. Pattern
+    matches query tools and supervisor tools from M4c-tooling.
+    Static-token paths resolve role from OAuth scopes via
+    ``_resolve_caller_role_via_token``; do not require registry.
+    """
+
+    @mcp.tool(
+        name="dispatch_implementer",
+        description=(
+            "Engineer-only. Dispatches an Implementer sub-agent against the "
+            "given spec. Runs the dispatch lifecycle through to a terminal "
+            "state and returns the structured outcome. spec_path is read by "
+            "the daemon at dispatch time and passed to the subprocess as "
+            "its prompt."
+        ),
+    )
+    async def _dispatch_implementer(
+        task_id: str,
+        spec_path: str,
+        working_directory: str,
+        timeout_override_seconds: int | None = None,
+        keep_worktree_on_failure: bool = False,
+        engineer_decisions: list[dict[str, Any]] | None = None,
+    ) -> DispatchImplementerOutput:
+        agent_id = _resolve_agent_id()
+        await _record_caller_activity(storage, "dispatch_implementer")
+        caller_role = _resolve_caller_role_via_token()
+        dispatcher = get_dispatcher()
+        if dispatcher is None:
+            raise ConflictError(
+                "no dispatcher is running; dispatch_implementer requires the "
+                "daemon's BridgeDispatcher to be constructed (canonical clone "
+                "provisioning may still be in progress)"
+            )
+        implementer = registry.get("implementer")
+        if implementer is None:
+            raise ConflictError(
+                "no implementer agent is registered; cannot mint a per-dispatch "
+                "token. Issue an implementer keyring token via "
+                "scripts/issue-token.py before enabling Engineer dispatch."
+            )
+        decisions = [EngineerDecision(**d) for d in (engineer_decisions or [])]
+        return await dispatch_implementer(
+            dispatcher=dispatcher,
+            registry=registry,
+            request=DispatchImplementerInput(
+                task_id=task_id,
+                spec_path=spec_path,
+                working_directory=working_directory,
+                timeout_override_seconds=timeout_override_seconds,
+                keep_worktree_on_failure=keep_worktree_on_failure,
+                engineer_decisions=decisions,
+            ),
+            caller_agent_id=agent_id,
+            caller_role=caller_role,
+            implementer_agent_id=implementer.agent_id,
+        )
+
+    @mcp.tool(
+        name="dispatch_tester",
+        description=(
+            "Engineer-only. Dispatches a Tester sub-agent to verify the "
+            "specified commit_hash against the assertion_spec prompt. Runs "
+            "the dispatch lifecycle through to a terminal state and returns "
+            "the structured test_results."
+        ),
+    )
+    async def _dispatch_tester(
+        task_id: str,
+        commit_hash: str,
+        working_directory: str,
+        assertion_spec: str,
+        timeout_override_seconds: int | None = None,
+        keep_worktree_on_failure: bool = False,
+        engineer_decisions: list[dict[str, Any]] | None = None,
+    ) -> DispatchTesterOutput:
+        agent_id = _resolve_agent_id()
+        await _record_caller_activity(storage, "dispatch_tester")
+        caller_role = _resolve_caller_role_via_token()
+        dispatcher = get_dispatcher()
+        if dispatcher is None:
+            raise ConflictError(
+                "no dispatcher is running; dispatch_tester requires the "
+                "daemon's BridgeDispatcher to be constructed"
+            )
+        tester = registry.get("tester")
+        if tester is None:
+            raise ConflictError(
+                "no tester agent is registered; cannot mint a per-dispatch "
+                "token. Issue a tester keyring token via "
+                "scripts/issue-token.py before enabling Engineer dispatch."
+            )
+        decisions = [EngineerDecision(**d) for d in (engineer_decisions or [])]
+        return await dispatch_tester(
+            dispatcher=dispatcher,
+            registry=registry,
+            request=DispatchTesterInput(
+                task_id=task_id,
+                commit_hash=commit_hash,
+                working_directory=working_directory,
+                assertion_spec=assertion_spec,
+                timeout_override_seconds=timeout_override_seconds,
+                keep_worktree_on_failure=keep_worktree_on_failure,
+                engineer_decisions=decisions,
+            ),
+            caller_agent_id=agent_id,
+            caller_role=caller_role,
+            tester_agent_id=tester.agent_id,
+        )
+
+
+def _register_dispatch_completion_tools(
+    mcp: FastMCP,
+    storage: Storage,
+    token_store: TokenStore,
+) -> None:
+    """Register complete_dispatch / get_dispatch_status / get_dispatch_result.
+
+    These three handlers don't need a dispatcher or registry — they read
+    and update the dispatches row directly using the token store for
+    self-access enforcement. complete_dispatch is implementer/tester
+    only; the status/result reads enforce subtree-scoped visibility per
+    handler.
+
+    Permission enforcement is single-gate at handler ``_require_role``
+    (and ``_enforce_self_dispatch_access`` for the read tools); wrapper
+    layer does not double-check via PermissionResolver. Pattern matches
+    query tools and supervisor tools from M4c-tooling. Static-token
+    paths resolve role from OAuth scopes via
+    ``_resolve_caller_role_via_token``; do not require registry.
+    """
+
+    @mcp.tool(
+        name="complete_dispatch",
+        description=(
+            "Implementer/Tester only. Sub-agent's structured callback to "
+            "report the dispatch's terminal state. Writes status, "
+            "commit_hash, test_results, queue_items_raised, decline_reason, "
+            "artifacts, and notes to the dispatches row; the dispatcher's "
+            "await loop observes the row update and exits cleanly."
+        ),
+    )
+    async def _complete_dispatch(
+        dispatch_id: str,
+        status: str,
+        commit_hash: str | None = None,
+        test_results: dict[str, Any] | None = None,
+        queue_items_raised: list[str] | None = None,
+        decline_reason: str | None = None,
+        artifacts: list[str] | None = None,
+        notes: str | None = None,
+    ) -> CompleteDispatchOutput:
+        agent_id = _resolve_agent_id()
+        await _record_caller_activity(storage, "complete_dispatch")
+        caller_role = _resolve_caller_role_via_token()
+        return await complete_dispatch(
+            storage=storage,
+            token_store=token_store,
+            request=CompleteDispatchInput(
+                dispatch_id=dispatch_id,
+                status=status,  # type: ignore[arg-type]
+                commit_hash=commit_hash,
+                test_results=test_results,
+                queue_items_raised=queue_items_raised or [],
+                decline_reason=decline_reason,
+                artifacts=artifacts or [],
+                notes=notes,
+            ),
+            caller_agent_id=agent_id,
+            caller_role=caller_role,
+        )
+
+    @mcp.tool(
+        name="get_dispatch_status",
+        description=(
+            "Subtree-scoped read of a dispatch's in-flight lifecycle "
+            "fields. Implementer/Tester see only their own dispatches; "
+            "PM/Engineer see the full subtree."
+        ),
+    )
+    async def _get_dispatch_status(
+        dispatch_id: str,
+    ) -> GetDispatchStatusOutput:
+        agent_id = _resolve_agent_id()
+        await _record_caller_activity(storage, "get_dispatch_status")
+        caller_role = _resolve_caller_role_via_token()
+        return await get_dispatch_status(
+            storage=storage,
+            token_store=token_store,
+            request=GetDispatchStatusInput(dispatch_id=dispatch_id),
+            caller_agent_id=agent_id,
+            caller_role=caller_role,
+        )
+
+    @mcp.tool(
+        name="get_dispatch_result",
+        description=(
+            "Subtree-scoped read of a dispatch's terminal-state result "
+            "(commit_hash, decline_reason, test_results, queue items, "
+            "artifacts, notes, actual_touched_files). "
+            "Implementer/Tester see only their own dispatches; PM/Engineer "
+            "see the full subtree."
+        ),
+    )
+    async def _get_dispatch_result(
+        dispatch_id: str,
+    ) -> GetDispatchResultOutput:
+        agent_id = _resolve_agent_id()
+        await _record_caller_activity(storage, "get_dispatch_result")
+        caller_role = _resolve_caller_role_via_token()
+        return await get_dispatch_result(
+            storage=storage,
+            token_store=token_store,
+            request=GetDispatchResultInput(dispatch_id=dispatch_id),
+            caller_agent_id=agent_id,
+            caller_role=caller_role,
+        )
 
 
 def _register_dispatch_query_tools(mcp: FastMCP, storage: Storage) -> None:
@@ -405,6 +666,7 @@ async def serve(
     registry: AgentRegistry | None = None,
     storage: Storage | None = None,
     get_engineer_supervisor: Callable[[], LongRunningSupervisor | None] | None = None,
+    get_dispatcher: Callable[[], BridgeDispatcher | None] | None = None,
 ) -> None:
     """Run the MCP HTTP server until cancelled.
 
@@ -414,13 +676,17 @@ async def serve(
     the M2-only ``ping``-tool surface for tests that don't need agent state.
     Pass ``storage`` to enable the ``last_activity_at`` writer middleware
     (M4c-supervisor-base); ``None`` is fine for tests that don't exercise
-    dispatch-row state.
+    dispatch-row state. Pass ``get_dispatcher`` to register the M5
+    dispatch-initiation wrappers (dispatch_implementer, dispatch_tester);
+    ``None`` keeps those tools unregistered for tests that don't need
+    them.
     """
     mcp = build_server(
         settings,
         registry=registry,
         storage=storage,
         get_engineer_supervisor=get_engineer_supervisor,
+        get_dispatcher=get_dispatcher,
     )
     app = mcp.streamable_http_app()
     config = uvicorn.Config(
