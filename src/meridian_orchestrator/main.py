@@ -11,6 +11,7 @@ import contextlib
 import logging
 import signal
 import sys
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -18,6 +19,11 @@ import structlog
 
 from meridian_orchestrator.agents.registry import AgentRegistry
 from meridian_orchestrator.auth import TokenStore
+from meridian_orchestrator.bridge.canonical import (
+    CanonicalClone,
+    discover_upstream_url,
+)
+from meridian_orchestrator.bridge.dispatcher import BridgeDispatcher
 from meridian_orchestrator.bridge.engineer_supervisor import EngineerSupervisor
 from meridian_orchestrator.config import Settings
 from meridian_orchestrator.errors import ValidationError
@@ -85,6 +91,51 @@ async def _run() -> None:
     async with _lifespan(settings) as storage:
         registry = AgentRegistry(settings.agents_dir)
         async with registry.lifespan():
+            # M5-wrapper-closure: provision the canonical clone and
+            # construct the BridgeDispatcher synchronously before the MCP
+            # server starts accepting connections. Synchronous-in-lifespan
+            # rather than async-after-ready avoids the
+            # dispatcher-not-ready window during which dispatch_*
+            # wrappers would return ConflictError; first-boot is slow but
+            # predictable. Skipped when substrate_working_directory is
+            # unset (the M5-wrapper-closure default state for tests that
+            # don't exercise dispatch).
+            dispatcher: BridgeDispatcher | None = None
+            if settings.substrate_working_directory is not None:
+                logger.info(
+                    "canonical.provisioning_begin",
+                    canonical_path=str(settings.substrate_canonical_dir),
+                    substrate_working_directory=str(
+                        settings.substrate_working_directory
+                    ),
+                )
+                provision_start = time.monotonic()
+                upstream_url = await discover_upstream_url(
+                    settings.substrate_working_directory
+                )
+                canonical = CanonicalClone(
+                    path=settings.substrate_canonical_dir,
+                    upstream_url=upstream_url,
+                )
+                await canonical.ensure_provisioned()
+                settings.dispatch_worktrees_root.mkdir(
+                    parents=True, exist_ok=True
+                )
+                dispatcher = BridgeDispatcher(
+                    storage=storage,
+                    token_store=TokenStore(),
+                    canonical=canonical,
+                    worktrees_root=settings.dispatch_worktrees_root,
+                )
+                logger.info(
+                    "canonical.provisioning_complete",
+                    canonical_path=str(settings.substrate_canonical_dir),
+                    upstream_url=upstream_url,
+                    elapsed_seconds=round(
+                        time.monotonic() - provision_start, 2
+                    ),
+                )
+
             mcp_ready = asyncio.Event()
             engineer_supervisor: EngineerSupervisor | None = None
 
@@ -97,6 +148,14 @@ async def _run() -> None:
             def get_engineer_supervisor() -> EngineerSupervisor | None:
                 return engineer_supervisor
 
+            # Symmetric lazy lookup for dispatch_implementer / dispatch_tester
+            # wrappers. The dispatcher is constructed before mcp serve
+            # starts (above), so the closure resolves immediately to a
+            # populated value in production paths; the late-binding shape
+            # is symmetric with get_engineer_supervisor for consistency.
+            def get_dispatcher() -> BridgeDispatcher | None:
+                return dispatcher
+
             mcp_task = asyncio.create_task(
                 serve_mcp(
                     settings,
@@ -104,6 +163,7 @@ async def _run() -> None:
                     registry=registry,
                     storage=storage,
                     get_engineer_supervisor=get_engineer_supervisor,
+                    get_dispatcher=get_dispatcher,
                 ),
                 name="mcp-server",
             )
@@ -114,6 +174,7 @@ async def _run() -> None:
                     ra.config.role for ra in registry.all_agents()
                 ),
                 engineer_supervisor_enabled=settings.enable_engineer_supervisor,
+                dispatcher_constructed=dispatcher is not None,
             )
 
             try:
