@@ -15,9 +15,10 @@ from meridian_orchestrator.storage.sqlite import SqliteStorage
 #   0002_task_planning.sql                    (M4a)
 #   0005_dispatches.sql                       (M4a)
 #   0006_dispatches_last_tool_called.sql      (M4c-supervisor-base)
+#   0007_dispatches_task_id_nullable.sql      (M4c-supervisor-base)
 # The reservation gap (0003 ships at M5; 0004 at M6) is intentional; the
 # migrations are independent so out-of-ship-order numbering is safe.
-EXPECTED_VERSIONS = [1, 2, 5, 6]
+EXPECTED_VERSIONS = [1, 2, 5, 6, 7]
 
 
 @pytest_asyncio.fixture
