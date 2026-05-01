@@ -17,7 +17,10 @@ from contextlib import asynccontextmanager
 import structlog
 
 from meridian_orchestrator.agents.registry import AgentRegistry
+from meridian_orchestrator.auth import TokenStore
+from meridian_orchestrator.bridge.engineer_supervisor import EngineerSupervisor
 from meridian_orchestrator.config import Settings
+from meridian_orchestrator.errors import ValidationError
 from meridian_orchestrator.server import serve as serve_mcp
 from meridian_orchestrator.storage.migrations import run_migrations
 from meridian_orchestrator.storage.sqlite import SqliteStorage
@@ -82,8 +85,14 @@ async def _run() -> None:
     async with _lifespan(settings) as storage:
         registry = AgentRegistry(settings.agents_dir)
         async with registry.lifespan():
+            mcp_ready = asyncio.Event()
             mcp_task = asyncio.create_task(
-                serve_mcp(settings, registry=registry, storage=storage),
+                serve_mcp(
+                    settings,
+                    ready=mcp_ready,
+                    registry=registry,
+                    storage=storage,
+                ),
                 name="mcp-server",
             )
             logger.info(
@@ -92,8 +101,55 @@ async def _run() -> None:
                 agents_loaded=sorted(
                     ra.config.role for ra in registry.all_agents()
                 ),
+                engineer_supervisor_enabled=settings.enable_engineer_supervisor,
             )
+
+            engineer_supervisor: EngineerSupervisor | None = None
             try:
+                # Start the engineer-supervisor only after the MCP server
+                # is accepting connections — its own MCP calls back to the
+                # daemon need the server up. Gated on the
+                # MERIDIAN_ORCH_ENABLE_ENGINEER_SUPERVISOR flag (default
+                # off at M4c; flipped on at M5 alongside PMSupervisor —
+                # see project_m5_engineer_supervisor_flag_flip memory).
+                if settings.enable_engineer_supervisor:
+                    ready_or_crash = asyncio.create_task(
+                        mcp_ready.wait(), name="mcp-ready-wait"
+                    )
+                    await asyncio.wait(
+                        {mcp_task, ready_or_crash},
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    if mcp_task.done():
+                        ready_or_crash.cancel()
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await ready_or_crash
+                        mcp_exc = mcp_task.exception()
+                        if mcp_exc is not None:
+                            raise mcp_exc
+                    else:
+                        try:
+                            settings.engineer_supervisor_dir.mkdir(
+                                parents=True, exist_ok=True
+                            )
+                            engineer_supervisor = EngineerSupervisor(
+                                registry=registry,
+                                working_directory=settings.engineer_supervisor_dir,
+                                storage=storage,
+                                token_store=TokenStore(),
+                            )
+                            await engineer_supervisor.start()
+                            logger.info(
+                                "engineer_supervisor.started",
+                                dispatch_id=engineer_supervisor._current_dispatch_id,
+                            )
+                        except ValidationError as start_exc:
+                            logger.error(
+                                "engineer_supervisor.start_failed",
+                                error=str(start_exc),
+                            )
+                            raise
+
                 done, _ = await asyncio.wait(
                     {
                         mcp_task,
@@ -103,12 +159,18 @@ async def _run() -> None:
                 )
                 for t in done:
                     if t.get_name() == "mcp-server":
-                        exc = t.exception()
-                        if exc is not None:
-                            logger.error("mcp.crashed", error=str(exc))
-                            raise exc
+                        crash_exc = t.exception()
+                        if crash_exc is not None:
+                            logger.error("mcp.crashed", error=str(crash_exc))
+                            raise crash_exc
                 logger.info("shutdown.begin")
             finally:
+                # Shutdown order: supervisor first (its in-flight MCP
+                # calls land while the server still accepts them), then
+                # MCP server.
+                if engineer_supervisor is not None:
+                    with contextlib.suppress(Exception):
+                        await engineer_supervisor.shutdown()
                 if not mcp_task.done():
                     mcp_task.cancel()
                     with contextlib.suppress(asyncio.CancelledError, Exception):

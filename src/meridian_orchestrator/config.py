@@ -34,6 +34,13 @@ class Settings(BaseSettings):
     mcp_port: int = Field(default=8765, ge=1, le=65535)
     mcp_allow_non_loopback: bool = Field(default=False)
 
+    # M4c-engineer-supervisor: ships dormant. Flag flip is M5's behavioral
+    # milestone (alongside PMSupervisor's analogous flag). See
+    # `project_m5_engineer_supervisor_flag_flip` memory for the M5
+    # verification checklist (premium-bucket attribution, compaction-at-80%,
+    # heartbeat calibration).
+    enable_engineer_supervisor: bool = Field(default=False)
+
     @property
     def db_path(self) -> Path:
         return self.data_dir / "data" / "orchestrator.db"
@@ -57,3 +64,11 @@ class Settings(BaseSettings):
     @property
     def agents_dir(self) -> Path:
         return self.data_dir / "config" / "agents"
+
+    @property
+    def engineer_supervisor_dir(self) -> Path:
+        """The engineer-supervisor's subprocess cwd. Per spec
+        (`11-engineer-bridge.md` § Long-running supervisors): no git, no
+        worktree — sub-agents handle code in dispatch worktrees off the
+        canonical clone. This is a separate dedicated directory."""
+        return self.data_dir / "engineer"

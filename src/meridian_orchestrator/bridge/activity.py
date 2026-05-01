@@ -25,6 +25,8 @@ automatically extends this guard.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from meridian_orchestrator.bridge.dispatcher import _TERMINAL_STATES
 from meridian_orchestrator.storage.interface import Storage
 
@@ -33,12 +35,32 @@ from meridian_orchestrator.storage.interface import Storage
 # deterministic for diffability.
 _TERMINAL_STATES_SQL_LIST = ",".join(f"'{s}'" for s in sorted(_TERMINAL_STATES))
 
+# Timestamp is generated Python-side as a tz-aware ISO string rather
+# than via SQL `datetime('now')` (which produces a naive string like
+# '2026-05-01 09:53:34'). The supervisor watchdog parses this column
+# with `datetime.fromisoformat` and compares against `datetime.now(tz=UTC)`;
+# mixing naive + aware datetimes raises TypeError. Other dispatches.*
+# timestamp columns (issued_at default, etc.) use SQL `datetime('now')`
+# and are read by code that doesn't compare across that boundary, so
+# they keep their existing format. The watchdog also has a defensive
+# fallback (treats naive timestamps as UTC) — see supervisor_base.py
+# `_check_and_handle_timeout`.
 _UPDATE_SQL = (
     "UPDATE dispatches "
-    "SET last_activity_at = datetime('now'), last_tool_called = ? "
+    "SET last_activity_at = ?, last_tool_called = ? "
     "WHERE token_id = ? "
     f"AND status NOT IN ({_TERMINAL_STATES_SQL_LIST})"
 )
+
+
+def _now_iso() -> str:
+    """Tz-aware ISO 8601 timestamp with microsecond precision.
+
+    Matches :func:`bridge.supervisor_base._now_iso`. Microsecond precision
+    (rather than seconds) is required so the watchdog's age comparison
+    resolves activity updates within the same wall-clock second.
+    """
+    return datetime.now(tz=UTC).isoformat(timespec="microseconds")
 
 
 async def record_mcp_call(
@@ -60,4 +82,4 @@ async def record_mcp_call(
     `last_tool_called` writer for the full rationale (current-state
     columns, not audit-log derivation).
     """
-    await storage.execute(_UPDATE_SQL, (tool_name, token_id))
+    await storage.execute(_UPDATE_SQL, (_now_iso(), tool_name, token_id))

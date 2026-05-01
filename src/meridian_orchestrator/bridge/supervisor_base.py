@@ -67,7 +67,16 @@ class HaltedSupervisorError(OrchestratorError):
 
 
 def _now_iso() -> str:
-    return datetime.now(tz=UTC).isoformat(timespec="seconds")
+    """Tz-aware ISO 8601 with microsecond precision.
+
+    Microseconds (rather than ``timespec="seconds"``) so the watchdog's
+    age comparison resolves activity updates within the same wall-clock
+    second. With second-precision the ``last_activity_at`` column would
+    not change for sub-second-spaced activity bursts, and the watchdog's
+    `now - effective_dt` would walk forward from the second boundary,
+    spuriously firing the timeout for a busy supervisor.
+    """
+    return datetime.now(tz=UTC).isoformat(timespec="microseconds")
 
 
 def _new_dispatch_id() -> str:
@@ -497,6 +506,17 @@ class LongRunningSupervisor(ABC):
             effective_dt = datetime.fromisoformat(effective)
         except ValueError:
             return  # unparseable timestamp; defensive
+
+        # Defensive: tolerate naive timestamps by treating them as UTC.
+        # The activity writer (bridge.activity._UPDATE_SQL) uses
+        # tz-aware ISO strings, and supervisor_base's _now_iso() does
+        # the same. But other dispatches.* timestamp columns are SQL
+        # `datetime('now')` (naive). If a future code path writes the
+        # last_activity_at column via SQL `datetime('now')` instead of
+        # routing through record_mcp_call, the watchdog should still
+        # work — naive == UTC convention is enforced here as a backstop.
+        if effective_dt.tzinfo is None:
+            effective_dt = effective_dt.replace(tzinfo=UTC)
 
         idle_float = (datetime.now(tz=UTC) - effective_dt).total_seconds()
         if idle_float <= self._timeout_seconds:
