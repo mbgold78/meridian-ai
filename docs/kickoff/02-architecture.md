@@ -88,19 +88,23 @@ Full list and rationale in `06-mcp-tools-phase-one.md`.
 
 Tool calls are safe to retry. State transitions check current state before applying. Deterministic IDs are used where they make sense (e.g., audit_log entries are UUIDs but seeded such that the same logical event produces the same hash if needed). `claim_task` uses a conditional UPDATE (`WHERE status = 'pending'`) to make double-claim a no-op rather than a corruption.
 
-## Premium-first cost model
+## Subscription-first cost model
 
-Phase 1 runs entirely on Mike's Claude subscription tiers — Opus 20x premium (primary) and standard Pro/Max (fallback). The Engineer↔subagent bridge architecture chosen at M3 must be subscription-compatible by default. The chosen path is Option A (subprocess Claude Code), which inherits the subscription via Claude Code's existing auth and consumes whichever bucket Claude Code is currently routing to.
+Phase 1 runs entirely on Mike's Claude Code OAuth subscription. The Engineer↔subagent bridge architecture chosen at M3 must be subscription-compatible by default. The chosen path is Option A (subprocess Claude Code), which inherits the subscription via Claude Code's existing OAuth auth.
 
-API credits remain available as overflow for specific high-token dispatches but are not required for Phase 1 completion. Rate-limit handling is graceful: log the event, surface to PM, surface to Mike via session report, do not silently retry. Bucket-routing details are in § Premium-first utilization model below.
+Subscription state is exposed via `https://api.anthropic.com/api/oauth/usage` (header `anthropic-beta: oauth-2025-04-20`) as normalized 0-100% utilization counters: a 5-hour cycle counter, a 7-day cycle counter, and per-model 7-day counters (`subscription_7d_opus`, `subscription_7d_sonnet`). Per-call attribution is daemon-side: a background task polls the endpoint at 30s cadence and stamps `api_usage` rows from the cached snapshot at write time. See `project_subscription_first_architecture` memory for the field-mapping table and the polling backoff schedule.
 
-## Premium-first utilization model
+API-key billing is available as explicit overflow when `extra_usage.is_enabled: true` on the OAuth account. Off by default for Phase 1; the daemon strips `ANTHROPIC_API_KEY` from subprocess env unless overflow is explicitly enabled (per [anthropics/claude-code#12352](https://github.com/anthropics/claude-code/issues/12352): with the API key in env, all calls bill against the key and ignore the OAuth subscription).
 
-Mike runs Claude Opus 20x premium plus a standard Pro/Max subscription (revised 2026-04-30 from the original subscription-first framing). The Orchestrator's cost model treats premium as the primary capacity to be drained first, with standard subscription as fallback for overflow.
+Rate-limit handling is graceful: log the event, surface to PM, surface to Mike via session report, do not silently retry. Bucket-routing details are in § Subscription-first utilization model below.
 
-**Operational principle:** burn premium aggressively. When premium has capacity, all dispatchable work routes there. Premium depletion triggers fallback to standard subscription. Reserving premium for "important" work is an anti-pattern — it creates idle premium capacity while standard windows hit rate limits.
+## Subscription-first utilization model
 
-The two reasons premium gets primary treatment: (a) it's paid-for capacity that doesn't compound across windows the way standard subscription does — unused premium time is gone; (b) reserving it for "important" work creates a hoarding pattern where premium goes unused while standard windows hit rate limits.
+The orchestrator burns the subscription deliberately. When `subscription_5h` has capacity, all dispatchable work routes against it. The 5-hour cycle is the primary pacing constraint; the 7-day cycle and per-model 7-day counters are routing inputs that drive tier downgrades (Opus → Sonnet) before the weekly counters saturate.
+
+**Operational principle:** subscription utilization should run 70–90% during Mike's work hours. Idle subscription capacity is wasted capacity. Reserving capacity for "important" work creates a hoarding pattern where subscription windows hit reset with unused budget — the cycle resets and the unused capacity is gone.
+
+API-key overflow is a **last resort**, gated on the `extra_usage.is_enabled` flag and Mike's explicit decision (M6 `notify_human` surface). Default state: orchestrator refuses dispatch when subscription is saturated and surfaces `urgent`-urgency to Mike rather than silently routing to a paid bucket.
 
 ### PM operating modes
 
@@ -113,7 +117,7 @@ PM has two first-class operating modes:
 
 ### Window-aware burn (per bucket)
 
-`get_window_state` returns per-bucket state — premium and standard are tracked separately. PM consumes `get_window_state(bucket="premium")` on every planning iteration as the primary signal; standard-bucket state is the fallback signal. The pace recommendations apply within a bucket; cross-bucket behavior is overlaid below.
+`get_window_state` returns per-bucket state for the requested counter. PM consumes `get_window_state(bucket="subscription_5h")` on every planning iteration as the primary pacing signal; per-model 7-day counters (`subscription_7d_opus`, `subscription_7d_sonnet`) drive routing-tier decisions. The pace recommendations apply within a bucket; cross-bucket behavior is overlaid below.
 
 | Window state (within a bucket) | Pace | Behavior |
 |---|---|---|
@@ -125,13 +129,14 @@ PM has two first-class operating modes:
 
 **Cross-bucket overlay:**
 
-- **Premium normal/upgrade.** All dispatchable work routes to premium. Most common state.
-- **Premium conserve (< 20% remaining).** Premium is nearly exhausted. New dispatches fall back to **standard** subscription; in-flight dispatches finish on whichever bucket they started.
-- **Premium rate_limited.** Rare under 20x premium; if it happens, fall back to standard. Surface to Mike as `info`-urgency (uncommon enough to be diagnostic, not actionable).
-- **Standard rate_limited (after premium fallback).** Worth surfacing as `question`-urgency — both buckets under pressure simultaneously is meaningful signal.
-- **Both depleted.** Surface as `urgent` — the autonomous chain is genuinely capacity-constrained and Mike should know.
+- **`subscription_5h` normal/upgrade.** All dispatchable work routes against the subscription. Most common state.
+- **`subscription_7d_opus` high.** Per-task tier downgrade Opus → Sonnet for non-critical work; Opus reserved for critical-priority tasks until the 7-day Opus counter recovers. The 5-hour counter continues to gate immediate pacing; the 7-day counter only changes routing tier choices.
+- **`subscription_5h` conserve (< 20% remaining).** New dispatches paused; in-flight finish. PM compaction pre-staged; Engineer compacts at 80% per `11-engineer-bridge.md` § Engineer compaction.
+- **`subscription_5h` rate_limited.** Surface to Mike as `info`-urgency. Resume aggressively at window reset (resets_at on the cached snapshot).
+- **Subscription saturated, `extra_usage.is_enabled: false`.** Queue task; surface `urgent`-urgency to Mike — autonomous chain is genuinely capacity-constrained. Operator decides whether to enable overflow.
+- **Subscription saturated, `extra_usage.is_enabled: true`.** Route to `api_key_overflow`. Surface `info`-urgency to Mike per call (overflow billing is real money; visibility matters).
 
-The `upgrade` transition remains the load-bearing behavior, scoped to whichever bucket is active — PM actively looks for work to promote into windows with unused capacity rather than passively waiting for reset.
+The `upgrade` transition remains the load-bearing behavior, scoped to the 5-hour cycle — PM actively looks for work to promote into windows with unused capacity rather than passively waiting for reset.
 
 ### Parallel sub-agent dispatch
 
@@ -141,13 +146,11 @@ The bridge architecture (M3) must support: concurrent subprocess invocations, is
 
 ### Utilization targets
 
-The 70–90% target applies to **premium** specifically, not to total capacity. Standard-subscription utilization is whatever it ends up being — used as overflow when premium throttles, no target.
+During Mike's work hours (8 AM – 6 PM ET, weekdays), `subscription_5h` utilization should run 70–90% of available capacity. Lower utilization is acceptable when (a) Mike is interactive heavily, (b) the queue has genuinely no dispatchable work, (c) Engineer is rate-limited on substrate codebase work, or (d) PM is paused on a legitimate `question` to Mike with no other independent work. Lower utilization for any other reason is surfaced to Mike as `question`-urgency.
 
-During Mike's work hours (8 AM – 6 PM ET, weekdays), **premium utilization** should run 70–90% of available capacity. Lower premium utilization is acceptable when (a) Mike is interactive heavily, (b) the queue has genuinely no dispatchable work, (c) Engineer is rate-limited on substrate codebase work, or (d) PM is paused on a legitimate `question` to Mike with no other independent work. Lower premium utilization for any other reason is surfaced to Mike as `question`-urgency.
+End-of-session reports include per-window utilization broken down by counter: `subscription_5h` (primary pacing metric), `subscription_7d` and per-model 7-day counters (routing-tier inputs), `api_key_overflow` (only when `is_enabled: true`). PM is honest about under-utilization — if the autonomous chain isn't delivering on the "burn the subscription" promise, Mike sees it.
 
-End-of-session reports include per-window utilization broken down by bucket — premium first (the primary metric), standard second (the overflow indicator). PM is honest about under-utilization — if the autonomous chain isn't delivering on the "burn premium" promise, Mike sees it.
-
-The critical reframe from the pre-2026-04-30 model: **idle premium capacity is what's wasted, not idle subscription capacity in general.** Burn premium first; standard subscription is the relief valve, not the primary fuel.
+The reframe from the (now-superseded) premium-first model: subscription budget is the binding constraint and `subscription_5h` is its primary expression. Idle subscription capacity is what's wasted, not "idle premium." Burn the subscription deliberately within the 5-hour cycle; per-model 7-day counters protect against weekly saturation via tier downgrades.
 
 ## Notifications (M6)
 
