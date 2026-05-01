@@ -1,6 +1,46 @@
 # Addendum: Aggressive subscription utilization
 
-## Premium-first revision (2026-04-30)
+## Subscription-first revision (2026-05-01)
+
+The Premium-first revision (2026-04-30) below is **superseded**. Experiment 4 (operator-run `curl https://api.anthropic.com/api/oauth/usage`) confirmed there is no two-tier "Opus 20x premium / standard Pro/Max" plan structure — the naming in the prior revision was a pre-research artifact. The actual subscription-side telemetry exposes:
+
+- A 5-hour cycle counter (`five_hour.utilization`) — primary pacing constraint
+- A 7-day cycle counter (`seven_day.utilization`) — overall weekly state
+- Per-model 7-day counters (`seven_day_opus.utilization`, `seven_day_sonnet.utilization`) — drive routing-tier decisions
+- An `extra_usage` block with `is_enabled: bool` flag — gates API-key overflow billing
+
+**Canonical bucket names** (replace all uses of "premium" / "standard" in current-state spec text):
+
+| Old name | New name | Source field |
+|---|---|---|
+| `premium` | `subscription_5h` | `five_hour.utilization` |
+| `standard` | DEPRECATED | misunderstanding |
+| (new) | `subscription_7d` | `seven_day.utilization` |
+| (new) | `subscription_7d_opus` | `seven_day_opus.utilization` |
+| (new) | `subscription_7d_sonnet` | `seven_day_sonnet.utilization` |
+| (new) | `api_key_overflow` | `extra_usage.utilization` (gated on `is_enabled: true`) |
+
+**The aggressive-utilization commitment is unchanged.** PM continuous mode burns the subscription deliberately; idle subscription capacity is wasted capacity. The 70–90% target now applies to `subscription_5h` (the primary pacing counter). The two-bucket "premium drains first / standard is overflow" mental model is replaced with: subscription is primary, API-key overflow is the gated last-resort, per-model 7-day counters protect against weekly saturation via routing-tier downgrades upstream of compaction.
+
+**Architectural shifts vs the prior revision:**
+
+- Bucket attribution moves from subprocess self-report to daemon-side query-time derivation. The `record_api_call.bucket` field is dropped from the schema; the daemon polls `/api/oauth/usage` (`anthropic-beta: oauth-2025-04-20`) at 30s cadence with 60→120→240→480→600s exponential backoff on 429 ([Issue #31021](https://github.com/anthropics/claude-code/issues/31021)). Per-bucket aggregation lands in `get_token_usage` and `get_utilization_report` at query time.
+- Compaction triggers on `subscription_5h >= 80%`, not premium. The 5-hour cycle drives compaction; per-model 7-day counters drive routing-tier downgrades only. The design separation is intentional — mixing the two collapses the upstream/downstream distinction between routing and compaction (see `project_subscription_first_architecture` memory § B-2).
+- Subprocess env sanitization: the daemon strips `ANTHROPIC_API_KEY` from launched subprocesses unless `extra_usage.is_enabled: true`, per [anthropics/claude-code#12352](https://github.com/anthropics/claude-code/issues/12352) (with API key in env, all calls bill against the key and ignore the OAuth subscription).
+- Subscription tier identification gap: `/api/oauth/usage` does not expose a `plan` field; absolute ceilings are not directly readable. Utilization is normalized 0-100% per counter, which is sufficient for routing decisions. Tracked on `BACKLOG.md` for M7+ deployment surfacing.
+
+**Where the current spec lives.** The dated revision sections below preserve the audit chain — both the 2026-04-30 premium-first framing and the original pre-2026-04-30 framing are preserved as-authored. **They are superseded**; treat their references to `premium` / `standard` / "Opus 20x premium" / "standard Pro/Max" as deprecated. Current-state spec lives in:
+
+- `02-architecture.md` § Subscription-first cost model + § Subscription-first utilization model
+- `06-mcp-tools-phase-one.md` § `record_api_call`, § `check_budget_for_task`, § `get_window_state`, § `get_utilization_report`
+- `07-agent-configs-phase-one.md` PM YAML § Subscription-first utilization expectations
+- `08-implementation-plan.md` § M5 § Deliverables
+- `11-engineer-bridge.md` § Engineer compaction at 80% subscription_5h utilization
+- `project_subscription_first_architecture` memory (canonical reference)
+
+---
+
+## Premium-first revision (2026-04-30) [SUPERSEDED — see 2026-05-01 above]
 
 Mike upgraded to Claude Opus 20x premium. The cost model inverts: premium is the primary capacity, standard Pro/Max subscription becomes overflow. The behavioral specifications below still apply — the *aggressive utilization* commitment is unchanged — but the bucket targeting changes:
 
@@ -16,7 +56,7 @@ See `02-architecture.md` § Premium-first utilization model and `06-mcp-tools-ph
 
 ---
 
-## Original addendum (pre-2026-04-30)
+## Original addendum (pre-2026-04-30) [SUPERSEDED — see 2026-05-01 above]
 
 The current kickoff is defensively scoped on rate-limit handling — graceful degradation, no silent retry, surface to Mike. That's correct for *not breaking* but insufficient for what Mike actually wants: full utilization of the Claude Pro/Max subscription window so the Orchestrator delivers meaningful Meridian work continuously, not just when Mike is at the keyboard.
 
