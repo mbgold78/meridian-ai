@@ -131,6 +131,39 @@ Mike: (a) edits `pm.yaml` to remove `get_dashboard_summary` from the allowlist, 
 
 Mike walks through a real PM→Engineer→Implementer→Engineer→PM cycle in his interactive Claude Code session, observes the work happening in `meridian-homepoc` (via the daemon's substrate-canonical clone fast-forwarded to upstream main, which Mike's working tree pulls from), queries the audit log, sees the chain. **This is Phase 1's load-bearing demo: the company actually staffs itself.**
 
+### M4 trajectory (closed 2026-05-01)
+
+M4 shipped in eight commits across four sub-milestones plus one mid-milestone fix:
+
+- **M4a** (storage + dispatch lifecycle, `15ec0eb`): `0002_task_planning.sql`, `0005_dispatches.sql`, `BridgeDispatcher` serial path, four dispatch MCP tool handlers (`dispatch_implementer`, `complete_dispatch`, `get_dispatch_status`, `get_dispatch_result`), audit chain.
+- **M4b** (parallel + merge protocol, `cb9277c`): `--ff-only` post-dispatch merge, `CanonicalDivergedError`, `dispatch_tester`, asyncio.Lock canonical operations, Windows `.git/config.lock` mitigation.
+- **M4b.1** (rebase-before-ff-only fix, `f3e0f52`): resolved spec line 147 vs sequence-diagram line 522-524 contradiction; parallel disjoint dispatches both merge cleanly via rebase before ff-only.
+- **`test(M4b)` race window backfill** (`e431005`): forced SELECT-before-returncode race + regression-verification dance closing the M4b.1 defensive re-read coverage gap.
+- **M4c-supervisor-base** (`af0695c` + `0b50e66` test): `LongRunningSupervisor` ABC, watchdog (60s check / 30min timeout / three-respawns-per-hour cap with `halt`), `bridge/activity.py` writer helper, MCP middleware integration via `_record_caller_activity`, end-to-end activity-recording test.
+- **M4c-engineer-supervisor** (`c6da070`): `EngineerSupervisor` extending the base, `Settings.engineer_supervisor_dir` + `enable_engineer_supervisor` flag (default off), main.py wiring with the lazy-supervisor-lookup closure pattern. Surfaced two real datetime bugs in production-shape integration tests (naive-vs-aware, second-precision truncation).
+- **M4c-compaction** (`ab99f88`): `signal_compaction` MCP tool in new `tools/supervisor.py`, subprocess-exit detection branch in the watchdog, `_compaction_pending` in-process flag, `dispatches.status` CHECK constraint via migration `0008`, six new audit actions.
+- **M4c-tooling** (`8667098`): `bridge/timeouts.py` (model→tps + `calculate_timeout`), `get_recent_dispatches` and `get_dispatch_events` query tools with shared `_scoping_where_clause` helper, BridgeDispatcher's `model` parameter for tps-driven timeout.
+
+Six migrations shipped: `0001_initial`, `0002_task_planning`, `0005_dispatches`, `0006_dispatches_last_tool_called`, `0007_dispatches_task_id_nullable`, `0008_dispatches_status_check`. Reservation gap (`0003_pm_mode` at M5, `0004_notifications` at M6) preserved.
+
+**Final test count:** 155 passed (M2 had ~30; M3 added ~30; M4 added ~95). ruff check clean. mypy --strict src/ clean (31 source files). Suite runtime ~28s.
+
+### M4-accumulated BACKLOG items (deferred to post-M4 milestones)
+
+Surfaced during M4c prep checkpoints; tracked in `BACKLOG.md` and dedicated project memories:
+
+- **Manual `supervisor.halt()` clear without service restart** (`BACKLOG.md`) — admin command to clear the halt flag in-place. Phase 1 acceptable as service restart; future operability improvement.
+- **Supervisor respawn paths to single-SQL-transaction atomicity** (`BACKLOG.md`) — current respawn uses in-process `_current_dispatch_id is None` to gate the watchdog; retrofit to single-transaction when external readers of supervisor state are introduced (M5 PMSupervisor lifecycle visualization or M6 `notify_human` surfacing).
+- **`MERIDIAN_ORCH_ENABLE_ENGINEER_SUPERVISOR` flag flip** (M5; project memory: `m5_engineer_supervisor_flag_flip`) — verify premium-bucket attribution, compaction-at-80% firing, heartbeat calibration before flipping.
+- **Production dispatch wrapper closure** (M5; project memory: `m5_dispatch_wrapper_gap_closure`) — five MCP wrappers + BridgeDispatcher construction in main.py + end-to-end MCP integration tests.
+- **Engineer compaction production trigger wiring** (M5) — amend `engineer.yaml` system_prompt to call `signal_compaction` when `get_window_state(bucket='premium') >= 80%`.
+- **`bridge/timeouts.py` calibration** (M4-acceptance follow-up) — Mike's manual integration test measures observed tps for at least one real Sonnet and one real Opus dispatch; updates the table before M5 closes. Per spec § Hard timeout calculation calibration note.
+- **`signal_compaction` tool wrapper for sub-agent dispatch tools** (M5; part of the dispatch wrapper closure) — currently signal_compaction has its MCP wrapper, but the M4 dispatch tools (dispatch_implementer/dispatch_tester/complete_dispatch/get_dispatch_status/get_dispatch_result) do not. Closes alongside the wrapper closure work.
+
+### Pattern observation: M4 built; M5 wires
+
+M4 shipped complete machinery. M5's task is to wire the machinery into production-exercisable paths. Every M5 deliverable should be evaluable against this lens — what M4 piece does this enable to actually run? See M5 § Deliverables for the explicit forward-references (production dispatch wrapper closure, engineer-supervisor flag flip, engineer compaction production trigger wiring).
+
 ---
 
 ## M5 — Budget & usage tools, window-aware planner, continuous-mode driver
