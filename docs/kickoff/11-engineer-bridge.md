@@ -253,7 +253,8 @@ Per-dispatch lifecycle writes the following `audit_log` rows. All rows include `
 | `dispatch.soft_warning` | 2 minutes since last activity, budget remaining | `idle_seconds`, `tokens_used_so_far`, `tokens_estimated` |
 | `dispatch.complete_called` | Subprocess calls `complete_dispatch` | full `CompleteDispatchInput` payload |
 | `dispatch.timeout` | Hard timeout fires (sub-agent dispatches) | `elapsed_seconds`, `record_api_call_count` |
-| `dispatch.heartbeat_timeout` | Continuous-mode PM idle > 30 min | `idle_seconds`, `last_tool_called` |
+| `dispatch.heartbeat_timeout` | Long-running supervisor (engineer-supervisor at M4c, pm-continuous at M5) idle > 30 min per the watchdog | `idle_seconds`, `last_tool_called`, `role` |
+| `dispatch.heartbeat_timeout_cap` | Three respawns within 1 hour for the same role; supervisor enters terminal halted state | `role`, `respawn_dispatch_ids` (last 3, ordered oldest → newest), `last_tool_called_per_dispatch` (list aligned with `respawn_dispatch_ids`) |
 | `dispatch.token_revoked` | `TokenStore.revoke` returns | `token_id`, `reason` (`completed`, `declined`, `failed`, `timeout`, `heartbeat_timeout`, `cancelled`) |
 | `dispatch.subprocess_terminated` | Process exit captured | `exit_code`, `signal`, `total_elapsed_seconds`, `worktree_retained` |
 | `dispatch.merged` | Dispatch branch fast-forwarded into canonical main and pushed | `branch`, `new_upstream_head` |
@@ -434,11 +435,30 @@ Long-running supervisors (continuous PM and Engineer) have no natural completion
 
 **Shared implementation.** The watchdog logic lives in `bridge.supervisor_base.LongRunningSupervisor`, an abstract base class shipped at M4c. `EngineerSupervisor` (M4c) and `PMSupervisor` (M5) both subclass it. Subclass hooks: subprocess command construction, working directory, token role/label, and post-respawn state reconstruction. Shared behavior: `start()` (subclass-driven launch), `terminate()` (SIGTERM/grace/SIGKILL chain), `respawn()` (terminate + fresh start with new dispatch row), the watchdog loop itself, and audit emission for `dispatch.heartbeat_timeout`, `dispatch.token_revoked`, `dispatch.subprocess_terminated`, and `dispatch.issued` on respawns. The watchdog gets exercised end-to-end at M4c via the engineer-supervisor acceptance test; M5's `PMSupervisor` is the second consumer of already-verified code.
 
-**Expected cadence.** A long-running supervisor is expected to make at least one MCP call (any MCP tool the supervisor is permitted to call — for both supervisors: `get_window_state`, `get_queue`, `record_api_call`, `claim_task`, `update_task_status`; PM-continuous additionally: `set_pm_mode`, `submit_task`; engineer-supervisor additionally: `dispatch_implementer`, `dispatch_tester`, `get_dispatch_status`, `get_dispatch_events`, etc.) within every **15-minute** window during normal operation. Each MCP call updates `dispatches.last_activity_at` for the supervisor's dispatch row, the same column used for sub-agent dispatch tracking.
+**Expected cadence.** A long-running supervisor is expected to make at least one MCP call (any MCP tool the supervisor is permitted to call — for both supervisors: `get_window_state`, `get_queue`, `record_api_call`, `claim_task`, `update_task_status`; PM-continuous additionally: `set_pm_mode`, `submit_task`; engineer-supervisor additionally: `dispatch_implementer`, `dispatch_tester`, `get_dispatch_status`, `get_dispatch_events`, etc.) within every **15-minute** window during normal operation. Each MCP call updates `dispatches.last_activity_at` for the supervisor's dispatch row (see § `last_activity_at` writer below).
 
-**Watchdog logic.** The supervisor checks `last_activity_at` every 60 seconds. If `now - last_activity_at > 30 minutes`, the supervisor subprocess is presumed hung:
+#### `last_activity_at` writer (MCP middleware)
 
-1. Audit `dispatch.heartbeat_timeout` with `idle_seconds`, `last_tool_called`, and the dispatch_id.
+`dispatches.last_activity_at` is the general "subprocess is alive and making progress" signal across **all** dispatched subprocesses — sub-agent dispatches (Implementer, Tester) and long-running supervisors (engineer-supervisor at M4c, pm-continuous at M5). It is **not** supervisor-specific. Future liveness-derived behaviors (the soft-warning threshold at `dispatch.soft_warning`; potential M5+ stall detection on sub-agent dispatches; etc.) read from this same column.
+
+**Writer contract.** Every authenticated MCP call lands through the daemon's MCP server. Middleware in the auth-resolved-token path runs:
+
+```sql
+UPDATE dispatches
+   SET last_activity_at = datetime('now')
+ WHERE token_id = ?
+   AND status NOT IN ('completed','declined','failed','timed_out','cancelled','compacted')
+```
+
+**Skip cases (both produce zero updated rows):**
+1. Tokens with no associated dispatch row (e.g., the operator's interactive OAuth-sourced PM token; static admin tokens not bound to a dispatch). Resolved by the `token_id = ?` clause matching nothing.
+2. Tokens whose dispatch row is in a terminal state. A subprocess making a final MCP call after termination — for example, a sub-agent that calls `complete_dispatch` and then briefly continues running before exit-cleanup revokes the token — must not reset the activity clock for a row whose lifecycle is already over. Resolved by the `status NOT IN (...)` clause. The terminal-states set matches `bridge.dispatcher._TERMINAL_STATES`.
+
+The middleware is the only writer of `last_activity_at`. Direct writes from MCP tool handlers are forbidden — single ownership simplifies reasoning about the column's semantics.
+
+**Watchdog logic.** The supervisor checks every 60 seconds. The effective last-activity moment is `COALESCE(last_activity_at, started_at)` — on initial launch (or the first 30 minutes after a respawn before the new supervisor instance has made any MCP call), `last_activity_at` is NULL and the watchdog falls back to `started_at`. This catches a silently-crashed supervisor that dies before its first MCP call; without the fallback, NULL `last_activity_at` would never trip the timeout. If `now - COALESCE(last_activity_at, started_at) > 30 minutes`, the supervisor subprocess is presumed hung:
+
+1. Audit `dispatch.heartbeat_timeout` with `idle_seconds`, `last_tool_called`, `role`, and the dispatch_id. `last_tool_called` is captured at this moment (the watchdog reads `details_json` of the most recent `dispatch.last_activity` audit row for this dispatch, or NULL if no MCP call has landed); it is then **passed as a parameter into `respawn()`** rather than retrieved later from in-process state. (Same moment in practice, but source matters: the value belongs to the timeout-detection event, not the respawn event.)
 2. Standard timeout sequence: SIGTERM the subprocess, 10-second grace period, SIGKILL if still alive.
 3. `TokenStore.revoke(token_id)`. Audit `dispatch.token_revoked` with `reason='heartbeat_timeout'`.
 4. Audit `dispatch.subprocess_terminated` with exit code (or signal).
@@ -450,7 +470,11 @@ Long-running supervisors (continuous PM and Engineer) have no natural completion
 
 When the three-respawns-per-hour cap fires, `supervisor.halt()` writes a `dispatch.heartbeat_timeout_cap` audit row whose `details_json` carries the last 3 dispatch_ids and each respawn's `last_tool_called` (forwarded from the per-respawn `dispatch.heartbeat_timeout` rows). The same event is also logged at `structlog` level **`ERROR`** — three respawns in an hour means the underlying issue is not transient and operator attention is required, so `ERROR`-level ensures the event surfaces in any default structlog filter and any future log-aggregation pipeline without per-action filtering. The audit row carries the structured details; the structlog ERROR is for operator visibility.
 
+**Cap details_json source — in-process tracking.** The supervisor maintains `_respawn_history: deque[(dispatch_id, last_tool_called)]` in-process, capped at 3 entries (oldest evicted). Each `respawn()` call appends to it; `halt()` reads the deque to populate the cap audit row. No audit-log query at halt time — the in-process state is authoritative. Daemon restart resets the deque (and the cap counter), which is consistent with "service restart is the recovery signal" semantics: the new process starts fresh, no halt persistence.
+
 After `supervisor.halt()` fires, the `EngineerSupervisor` enters a terminal **halted** state. The Engineer subprocess is dead. The daemon does **NOT** attempt automatic re-launch. Recovery requires service restart, which serves as the operator's explicit signal that the underlying cause has been investigated. Manual halt-clear without restart is deferred (BACKLOG.md item; not blocking M4c).
+
+**Programming contract on halted instances.** `supervisor.start()` raises `bridge.supervisor_base.HaltedSupervisorError` (a typed exception, not a generic `RuntimeError`) when called on a halted instance. This is a programming bug or a misunderstanding of the recovery contract — calling `start()` on a halted supervisor must fail loudly so callers (e.g., a daemon-startup orchestrator that re-checks supervisor liveness) can distinguish "halted, do not retry" from other transient errors. Service restart provides a fresh supervisor instance with `_halted=False` and an empty `_respawn_history`; the typed exception is for the in-process callers, not the operator.
 
 **Push to Mike via `notify_human` is deferred to M6.** `notify_human`, the `outbound_messages` table, and the Telegram bot wrapper all ship at M6 (see `08-implementation-plan.md` § M6 deliverables). M4c writes the `dispatch.heartbeat_timeout_cap` audit row and the structlog `ERROR` only; M6 amends `supervisor.halt()` to additionally call `notify_human(urgency='urgent', subject='Engineer supervisor halted: 3 respawns in 1 hour', body=<last 3 dispatch_ids and each respawn's last_tool_called>)`. M4c-era operational monitoring of the cap event is via `tail -f` on `audit_log` filtered to `action='dispatch.heartbeat_timeout_cap'` plus the `ERROR`-level structlog entry. Mike runs the daemon attended during M4c integration testing; the unattended-cap-fires gap between M4c and M6 is acknowledged and accepted.
 

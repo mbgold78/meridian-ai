@@ -19,6 +19,7 @@ Sketched in `docs/kickoff/12-phase-two-engineering-team.md`.
 - SAVEPOINT-based nested transactions in storage (Phase 1 has reentrant flat transactions)
 - TLS for the MCP server (Phase 1 binds loopback only and runs plain HTTP — no over-the-wire threat on `127.0.0.1`. When Phase 2 deploys to a non-loopback bind, generate or import a properly-trusted cert and re-enable TLS in the uvicorn config.)
 - Claude Desktop GUI Custom Connector support (Phase 1 targets Claude Code's connector flow because it uses RFC 8252 loopback redirects against a localhost daemon. Claude Desktop's GUI Custom Connectors are cloud-mediated — Anthropic's `160.79.104.0/21` traffic does the discovery — and cannot reach a local-only daemon. If Phase 2 needs Claude Desktop UX, the path is either a stdio-bridge subprocess in `claude_desktop_config.json` or a public ingress.)
+- Manual `supervisor.halt()` clear without service restart (M4c+; supervisor.halt() currently requires service restart for recovery — adequate for Phase 1 since the operator is in the loop, but a future admin command to clear the halt without restart would improve operability when the underlying cause is well-understood and a full restart is heavyweight. Spec home: `docs/kickoff/11-engineer-bridge.md` § Cap escalation surface.)
 
 ## Open questions deferred to later milestones
 
