@@ -10,7 +10,7 @@ Sketched in `docs/kickoff/12-phase-two-engineering-team.md`.
 
 ## Deferred
 
-- Anthropic usage API polling (Phase 2+; agents self-report via `record_api_call` in Phase 1)
+- Subscription tier identification (M7+ deployment surface). The `/api/oauth/usage` endpoint exposes utilization normalized 0-100% per counter but does not expose a `plan` field — the absolute capacity ceilings of the operator's subscription are not directly readable. Not blocking M5: routing decisions need normalized utilization, not absolute ceilings, and the `subscription_first_architecture` memory's polled-snapshot mechanism works without tier identification. Becomes relevant if/when the orchestrator surfaces tier info to end-user-facing dashboards, upgrade-path nudges, or absolute-token reporting (none in Phase 1 scope). Spec home: `project_subscription_first_architecture` memory § Subscription tier identification gap.
 - Web dashboard UI (Claude Code is the only Phase 1 operator interface)
 - Cloud deployment (architecture is cloud-portable but Phase 1 is local-only)
 - Multi-user support
