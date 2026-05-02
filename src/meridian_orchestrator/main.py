@@ -25,6 +25,7 @@ from meridian_orchestrator.bridge.canonical import (
 )
 from meridian_orchestrator.bridge.dispatcher import BridgeDispatcher
 from meridian_orchestrator.bridge.engineer_supervisor import EngineerSupervisor
+from meridian_orchestrator.bridge.pm_supervisor import PMSupervisor
 from meridian_orchestrator.config import Settings
 from meridian_orchestrator.errors import ValidationError
 from meridian_orchestrator.server import serve as serve_mcp
@@ -32,6 +33,15 @@ from meridian_orchestrator.storage.migrations import run_migrations
 from meridian_orchestrator.storage.sqlite import SqliteStorage
 
 logger = structlog.get_logger(__name__)
+
+# Wall-clock timeout for each supervisor's shutdown() coroutine. Worst-
+# case terminate/grace/SIGKILL ~20s + headroom for audit log writes,
+# token revocation, dispatch-row update, straggling subprocess output
+# capture. A wedged supervisor (e.g., audit-log write blocked on a
+# stalled SQLite connection) won't block daemon shutdown beyond this;
+# force-close after timeout. The subprocess gets SIGKILL via the OS
+# when the daemon process exits.
+SUPERVISOR_SHUTDOWN_TIMEOUT_SECONDS = 90
 
 
 def _configure_logging(settings: Settings) -> None:
@@ -138,6 +148,7 @@ async def _run() -> None:
 
             mcp_ready = asyncio.Event()
             engineer_supervisor: EngineerSupervisor | None = None
+            pm_supervisor: PMSupervisor | None = None
 
             # Lazy lookup callable for the signal_compaction tool wrapper.
             # The supervisor is constructed AFTER the MCP server starts
@@ -155,6 +166,14 @@ async def _run() -> None:
             # is symmetric with get_engineer_supervisor for consistency.
             def get_dispatcher() -> BridgeDispatcher | None:
                 return dispatcher
+
+            # No get_pm_supervisor closure threaded through serve_mcp at
+            # M5-pm-supervisor-base — no MCP tool consumes a PM
+            # supervisor reference yet (signal_compaction is engineer-
+            # only). M5-continuous-pm-driver adds the closure when a PM-
+            # facing tool wrapper actually needs it. The pm_supervisor
+            # variable above is held in lifespan scope for shutdown
+            # coordination only.
 
             mcp_task = asyncio.create_task(
                 serve_mcp(
@@ -174,17 +193,22 @@ async def _run() -> None:
                     ra.config.role for ra in registry.all_agents()
                 ),
                 engineer_supervisor_enabled=settings.enable_engineer_supervisor,
+                pm_supervisor_enabled=settings.enable_pm_supervisor,
                 dispatcher_constructed=dispatcher is not None,
             )
 
             try:
-                # Start the engineer-supervisor only after the MCP server
-                # is accepting connections — its own MCP calls back to the
-                # daemon need the server up. Gated on the
-                # MERIDIAN_ORCH_ENABLE_ENGINEER_SUPERVISOR flag (default
-                # off at M4c; flipped on at M5 alongside PMSupervisor —
-                # see project_m5_engineer_supervisor_flag_flip memory).
-                if settings.enable_engineer_supervisor:
+                # Start supervisors only after the MCP server is accepting
+                # connections — their own MCP calls back to the daemon need
+                # the server up. Gated on per-supervisor enable flags
+                # (defaults off; flipped on at M5-flag-flips after the
+                # verification checklist passes per
+                # project_m5_engineer_supervisor_flag_flip memory).
+                #
+                # Start order: PM first, then Engineer. Causality match
+                # (PM is upstream of Engineer in the dispatch chain) and
+                # symmetric with the shutdown order below.
+                if settings.enable_engineer_supervisor or settings.enable_pm_supervisor:
                     ready_or_crash = asyncio.create_task(
                         mcp_ready.wait(), name="mcp-ready-wait"
                     )
@@ -200,27 +224,51 @@ async def _run() -> None:
                         if mcp_exc is not None:
                             raise mcp_exc
                     else:
-                        try:
-                            settings.engineer_supervisor_dir.mkdir(
-                                parents=True, exist_ok=True
-                            )
-                            engineer_supervisor = EngineerSupervisor(
-                                registry=registry,
-                                working_directory=settings.engineer_supervisor_dir,
-                                storage=storage,
-                                token_store=TokenStore(),
-                            )
-                            await engineer_supervisor.start()
-                            logger.info(
-                                "engineer_supervisor.started",
-                                dispatch_id=engineer_supervisor._current_dispatch_id,
-                            )
-                        except ValidationError as start_exc:
-                            logger.error(
-                                "engineer_supervisor.start_failed",
-                                error=str(start_exc),
-                            )
-                            raise
+                        if settings.enable_pm_supervisor:
+                            try:
+                                settings.pm_continuous_dir.mkdir(
+                                    parents=True, exist_ok=True
+                                )
+                                pm_supervisor = PMSupervisor(
+                                    registry=registry,
+                                    working_directory=settings.pm_continuous_dir,
+                                    storage=storage,
+                                    token_store=TokenStore(),
+                                )
+                                await pm_supervisor.start()
+                                logger.info(
+                                    "pm_supervisor.started",
+                                    dispatch_id=pm_supervisor._current_dispatch_id,
+                                )
+                            except ValidationError as start_exc:
+                                logger.error(
+                                    "pm_supervisor.start_failed",
+                                    error=str(start_exc),
+                                )
+                                raise
+
+                        if settings.enable_engineer_supervisor:
+                            try:
+                                settings.engineer_supervisor_dir.mkdir(
+                                    parents=True, exist_ok=True
+                                )
+                                engineer_supervisor = EngineerSupervisor(
+                                    registry=registry,
+                                    working_directory=settings.engineer_supervisor_dir,
+                                    storage=storage,
+                                    token_store=TokenStore(),
+                                )
+                                await engineer_supervisor.start()
+                                logger.info(
+                                    "engineer_supervisor.started",
+                                    dispatch_id=engineer_supervisor._current_dispatch_id,
+                                )
+                            except ValidationError as start_exc:
+                                logger.error(
+                                    "engineer_supervisor.start_failed",
+                                    error=str(start_exc),
+                                )
+                                raise
 
                 done, _ = await asyncio.wait(
                     {
@@ -237,12 +285,37 @@ async def _run() -> None:
                             raise crash_exc
                 logger.info("shutdown.begin")
             finally:
-                # Shutdown order: supervisor first (its in-flight MCP
-                # calls land while the server still accepts them), then
-                # MCP server.
+                # Shutdown order: PM → Engineer → MCP. Causality match —
+                # PM is upstream of Engineer in the dispatch chain;
+                # stopping PM stops the upstream cause of new Engineer
+                # work and lets Engineer drain its in-flight subagent
+                # dispatches naturally. Each supervisor's shutdown() gets
+                # a wall-clock timeout (SUPERVISOR_SHUTDOWN_TIMEOUT_SECONDS)
+                # so a wedged supervisor doesn't block daemon shutdown;
+                # force-close after timeout, log the failure, continue
+                # the shutdown sequence.
+                if pm_supervisor is not None:
+                    try:
+                        await asyncio.wait_for(
+                            pm_supervisor.shutdown(),
+                            timeout=SUPERVISOR_SHUTDOWN_TIMEOUT_SECONDS,
+                        )
+                    except Exception as exc:
+                        logger.error(
+                            "pm_supervisor.shutdown_force_close",
+                            error=str(exc),
+                        )
                 if engineer_supervisor is not None:
-                    with contextlib.suppress(Exception):
-                        await engineer_supervisor.shutdown()
+                    try:
+                        await asyncio.wait_for(
+                            engineer_supervisor.shutdown(),
+                            timeout=SUPERVISOR_SHUTDOWN_TIMEOUT_SECONDS,
+                        )
+                    except Exception as exc:
+                        logger.error(
+                            "engineer_supervisor.shutdown_force_close",
+                            error=str(exc),
+                        )
                 if not mcp_task.done():
                     mcp_task.cancel()
                     with contextlib.suppress(asyncio.CancelledError, Exception):
