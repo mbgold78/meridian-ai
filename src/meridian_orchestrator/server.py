@@ -43,7 +43,10 @@ from pydantic import AnyHttpUrl, BaseModel
 from meridian_orchestrator.agents.permissions import PermissionResolver
 from meridian_orchestrator.agents.registry import AgentRegistry
 from meridian_orchestrator.auth import TokenStore, _parse_token
-from meridian_orchestrator.bridge.activity import record_mcp_call
+from meridian_orchestrator.bridge.activity import (
+    record_mcp_call,
+    record_oauth_pm_auto_flip,
+)
 from meridian_orchestrator.bridge.dispatcher import BridgeDispatcher
 from meridian_orchestrator.bridge.supervisor_base import LongRunningSupervisor
 from meridian_orchestrator.config import Settings
@@ -147,21 +150,52 @@ def _resolve_caller_token_id() -> str:
     return token_id
 
 
-async def _record_caller_activity(
-    storage: Storage | None, tool_name: str
+async def _observe_caller(
+    storage: Storage | None,
+    token_store: TokenStore | None,
+    tool_name: str,
 ) -> None:
-    """Resolve the caller's token from the request context and update
-    ``dispatches.last_activity_at`` + ``dispatches.last_tool_called``
-    via :func:`bridge.activity.record_mcp_call`.
+    """Single observation hook called by every MCP tool wrapper right
+    after :func:`_resolve_agent_id` resolves the caller's identity.
 
-    Skipped silently when ``storage`` is None (test fixtures that don't
-    need activity tracking) or when the access context lacks a parseable
-    token. Two further skip cases are handled inside ``record_mcp_call``
-    itself (no matching dispatch row; row in terminal state) — both
-    produce zero updated rows. See ``11-engineer-bridge.md`` § `last_activity_at`
-    and `last_tool_called` writer for the full contract.
+    Fans out to two writers in a single transaction (atomicity per the
+    M5-pm-mode-and-window-state commit 5 disposition — both writes
+    land or neither):
+
+    1. :func:`bridge.activity.record_mcp_call` — updates
+       ``dispatches.last_activity_at`` + ``dispatches.last_tool_called``
+       for dispatch-bound tokens. No-ops silently when the caller's
+       token isn't bound to a dispatch row (operator OAuth tokens;
+       static admin tokens) or when the bound dispatch is terminal.
+    2. :func:`bridge.activity.record_oauth_pm_auto_flip` — writes a
+       ``pm_mode_log`` row with ``mode='interactive',
+       triggered_by='mike_message'`` when the caller is an oauth-pm
+       token and the current mode warrants the transition. No-ops on
+       non-oauth-pm callers, on already-interactive state, and on
+       paused states.
+
+    Per ``project_mcp_tool_wrapper_activity_recording`` memory: every
+    new MCP tool wrapper in ``server.py`` must call this helper right
+    after ``_resolve_agent_id``; no exceptions. The single-call-site
+    invariant means future observation concerns extend this helper's
+    fan-out rather than adding new wrapper-side calls — keeps the
+    discipline at one site, not N.
+
+    Skipped silently when ``storage`` or ``token_store`` is None
+    (test fixtures that don't exercise the writers) or when the
+    access context lacks a parseable token.
+
+    Atomicity rationale: per the M5-pm-mode-and-window-state commit 5
+    prep, both writes are wrapped in a single transaction. A failure
+    in the auto-flip rolls back the activity update too — partial
+    success would leave operator-visible state inconsistent (activity
+    timestamp updated but auto-flip not recorded, or vice versa).
+    Worth noting: ``bridge.activity.record_oauth_pm_auto_flip`` opens
+    its own ``storage.transaction()`` for direct-call paths;
+    SqliteStorage's transaction is reentrant, so the inner is a no-op
+    when called from this outer transaction.
     """
-    if storage is None:
+    if storage is None or token_store is None:
         return
     access = get_access_token()
     if access is None:
@@ -170,7 +204,13 @@ async def _record_caller_activity(
     if parsed is None:
         return
     token_id, _ = parsed
-    await record_mcp_call(storage, token_id, tool_name)
+
+    record = token_store.lookup_by_token_id(token_id)
+
+    async with storage.transaction():
+        await record_mcp_call(storage, token_id, tool_name)
+        if record is not None:
+            await record_oauth_pm_auto_flip(storage, record)
 
 
 def build_server(
@@ -239,7 +279,7 @@ def build_server(
     )
     async def ping(echo: str) -> PingOutput:
         agent_id = _resolve_agent_id()
-        await _record_caller_activity(storage, "ping")
+        await _observe_caller(storage, token_store,"ping")
         return PingOutput(
             pong=echo,
             agent_id=agent_id,
@@ -247,21 +287,23 @@ def build_server(
         )
 
     if registry is not None:
-        _register_agent_tools(mcp, registry, storage)
+        _register_agent_tools(mcp, registry, storage, token_store)
 
     if storage is not None:
-        _register_dispatch_query_tools(mcp, storage)
+        _register_dispatch_query_tools(mcp, storage, token_store)
         _register_dispatch_completion_tools(mcp, storage, token_store)
-        _register_budget_tools(mcp, storage)
-        _register_pm_mode_tools(mcp, storage)
+        _register_budget_tools(mcp, storage, token_store)
+        _register_pm_mode_tools(mcp, storage, token_store)
 
     if storage is not None and get_dispatcher is not None and registry is not None:
         _register_dispatch_initiation_tools(
-            mcp, storage, registry, get_dispatcher
+            mcp, storage, registry, token_store, get_dispatcher
         )
 
     if storage is not None and get_engineer_supervisor is not None:
-        _register_supervisor_tools(mcp, storage, get_engineer_supervisor)
+        _register_supervisor_tools(
+            mcp, storage, token_store, get_engineer_supervisor
+        )
 
     return mcp
 
@@ -270,6 +312,7 @@ def _register_dispatch_initiation_tools(
     mcp: FastMCP,
     storage: Storage,
     registry: AgentRegistry,
+    token_store: TokenStore,
     get_dispatcher: Callable[[], BridgeDispatcher | None],
 ) -> None:
     """Register dispatch_implementer and dispatch_tester (engineer-only).
@@ -308,7 +351,7 @@ def _register_dispatch_initiation_tools(
         engineer_decisions: list[dict[str, Any]] | None = None,
     ) -> DispatchImplementerOutput:
         agent_id = _resolve_agent_id()
-        await _record_caller_activity(storage, "dispatch_implementer")
+        await _observe_caller(storage, token_store,"dispatch_implementer")
         caller_role = _resolve_caller_role_via_token()
         dispatcher = get_dispatcher()
         if dispatcher is None:
@@ -360,7 +403,7 @@ def _register_dispatch_initiation_tools(
         engineer_decisions: list[dict[str, Any]] | None = None,
     ) -> DispatchTesterOutput:
         agent_id = _resolve_agent_id()
-        await _record_caller_activity(storage, "dispatch_tester")
+        await _observe_caller(storage, token_store,"dispatch_tester")
         caller_role = _resolve_caller_role_via_token()
         dispatcher = get_dispatcher()
         if dispatcher is None:
@@ -394,7 +437,9 @@ def _register_dispatch_initiation_tools(
         )
 
 
-def _register_budget_tools(mcp: FastMCP, storage: Storage) -> None:
+def _register_budget_tools(
+    mcp: FastMCP, storage: Storage, token_store: TokenStore
+) -> None:
     """Register budget/usage tools.
 
     Currently ships ``record_api_call`` (M5-record-api-call commit 4).
@@ -436,7 +481,7 @@ def _register_budget_tools(mcp: FastMCP, storage: Storage) -> None:
         task_id: str | None = None,
     ) -> RecordApiCallOutput:
         agent_id = _resolve_agent_id()
-        await _record_caller_activity(storage, "record_api_call")
+        await _observe_caller(storage, token_store,"record_api_call")
         token_id = _resolve_caller_token_id()
         return await record_api_call(
             storage=storage,
@@ -451,7 +496,9 @@ def _register_budget_tools(mcp: FastMCP, storage: Storage) -> None:
         )
 
 
-def _register_pm_mode_tools(mcp: FastMCP, storage: Storage) -> None:
+def _register_pm_mode_tools(
+    mcp: FastMCP, storage: Storage, token_store: TokenStore
+) -> None:
     """Register set_pm_mode (M5-pm-mode-and-window-state commit 4).
 
     Currently ships ``set_pm_mode`` only — the daemon-side auto-flip
@@ -488,7 +535,7 @@ def _register_pm_mode_tools(mcp: FastMCP, storage: Storage) -> None:
         reason: str | None = None,
     ) -> SetPmModeOutput:
         agent_id = _resolve_agent_id()
-        await _record_caller_activity(storage, "set_pm_mode")
+        await _observe_caller(storage, token_store,"set_pm_mode")
         caller_role = _resolve_caller_role_via_token()
         return await set_pm_mode(
             storage=storage,
@@ -540,7 +587,7 @@ def _register_dispatch_completion_tools(
         notes: str | None = None,
     ) -> CompleteDispatchOutput:
         agent_id = _resolve_agent_id()
-        await _record_caller_activity(storage, "complete_dispatch")
+        await _observe_caller(storage, token_store,"complete_dispatch")
         caller_role = _resolve_caller_role_via_token()
         return await complete_dispatch(
             storage=storage,
@@ -571,7 +618,7 @@ def _register_dispatch_completion_tools(
         dispatch_id: str,
     ) -> GetDispatchStatusOutput:
         agent_id = _resolve_agent_id()
-        await _record_caller_activity(storage, "get_dispatch_status")
+        await _observe_caller(storage, token_store,"get_dispatch_status")
         caller_role = _resolve_caller_role_via_token()
         return await get_dispatch_status(
             storage=storage,
@@ -595,7 +642,7 @@ def _register_dispatch_completion_tools(
         dispatch_id: str,
     ) -> GetDispatchResultOutput:
         agent_id = _resolve_agent_id()
-        await _record_caller_activity(storage, "get_dispatch_result")
+        await _observe_caller(storage, token_store,"get_dispatch_result")
         caller_role = _resolve_caller_role_via_token()
         return await get_dispatch_result(
             storage=storage,
@@ -606,7 +653,9 @@ def _register_dispatch_completion_tools(
         )
 
 
-def _register_dispatch_query_tools(mcp: FastMCP, storage: Storage) -> None:
+def _register_dispatch_query_tools(
+    mcp: FastMCP, storage: Storage, token_store: TokenStore
+) -> None:
     """Register get_recent_dispatches and get_dispatch_events.
 
     Both tools share the ``_scoping_where_clause`` helper in
@@ -631,7 +680,7 @@ def _register_dispatch_query_tools(mcp: FastMCP, storage: Storage) -> None:
         limit: int = 50,
     ) -> GetRecentDispatchesOutput:
         agent_id = _resolve_agent_id()
-        await _record_caller_activity(storage, "get_recent_dispatches")
+        await _observe_caller(storage, token_store,"get_recent_dispatches")
         caller_role = _resolve_caller_role_via_token()
         return await get_recent_dispatches(
             storage=storage,
@@ -657,7 +706,7 @@ def _register_dispatch_query_tools(mcp: FastMCP, storage: Storage) -> None:
         dispatch_ids: list[str], since_timestamp: str | None = None
     ) -> GetDispatchEventsOutput:
         agent_id = _resolve_agent_id()
-        await _record_caller_activity(storage, "get_dispatch_events")
+        await _observe_caller(storage, token_store,"get_dispatch_events")
         caller_role = _resolve_caller_role_via_token()
         return await get_dispatch_events(
             storage=storage,
@@ -672,6 +721,7 @@ def _register_dispatch_query_tools(mcp: FastMCP, storage: Storage) -> None:
 def _register_supervisor_tools(
     mcp: FastMCP,
     storage: Storage,
+    token_store: TokenStore,
     get_engineer_supervisor: Callable[[], LongRunningSupervisor | None],
 ) -> None:
     """Register supervisor-lifecycle tools.
@@ -697,7 +747,7 @@ def _register_supervisor_tools(
         iteration_marker: str, proxy_value: float | None = None
     ) -> SignalCompactionOutput:
         agent_id = _resolve_agent_id()
-        await _record_caller_activity(storage, "signal_compaction")
+        await _observe_caller(storage, token_store,"signal_compaction")
         caller_role = _resolve_caller_role_via_token()
         supervisor = get_engineer_supervisor()
         if supervisor is None:
@@ -751,7 +801,10 @@ def _resolve_caller_role(registry: AgentRegistry) -> str:
 
 
 def _register_agent_tools(
-    mcp: FastMCP, registry: AgentRegistry, storage: Storage | None
+    mcp: FastMCP,
+    registry: AgentRegistry,
+    storage: Storage | None,
+    token_store: TokenStore | None,
 ) -> None:
     """Register list_agents / get_agent_config / get_org_chart on ``mcp``.
 
@@ -771,7 +824,7 @@ def _register_agent_tools(
         role: str | None = None, status: str | None = None
     ) -> ListAgentsOutput:
         caller_role = _resolve_caller_role(registry)
-        await _record_caller_activity(storage, "list_agents")
+        await _observe_caller(storage, token_store,"list_agents")
         resolver = PermissionResolver(registry.configs_by_role())
         resolver.require_tool(caller_role, "list_agents")  # type: ignore[arg-type]
         return list_agents(registry, ListAgentsInput(role=role, status=status))
@@ -782,7 +835,7 @@ def _register_agent_tools(
     )
     async def _get_agent_config(agent_id: str) -> GetAgentConfigOutput:
         caller_role = _resolve_caller_role(registry)
-        await _record_caller_activity(storage, "get_agent_config")
+        await _observe_caller(storage, token_store,"get_agent_config")
         resolver = PermissionResolver(registry.configs_by_role())
         resolver.require_tool(caller_role, "get_agent_config")  # type: ignore[arg-type]
         result = get_agent_config(registry, GetAgentConfigInput(agent_id=agent_id))
@@ -796,7 +849,7 @@ def _register_agent_tools(
     )
     async def _get_org_chart() -> GetOrgChartOutput:
         caller_role = _resolve_caller_role(registry)
-        await _record_caller_activity(storage, "get_org_chart")
+        await _observe_caller(storage, token_store,"get_org_chart")
         resolver = PermissionResolver(registry.configs_by_role())
         resolver.require_tool(caller_role, "get_org_chart")  # type: ignore[arg-type]
         return get_org_chart(registry, GetOrgChartInput())

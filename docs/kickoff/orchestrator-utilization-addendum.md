@@ -170,6 +170,12 @@ Specifically:
 - In interactive mode, PM completes any in-flight Engineer dispatches but does not initiate new high-token dispatches.
 - When 30 minutes pass with no Mike message, PM returns to continuous mode and resumes aggressive dispatch.
 
+> **Phase 1 implementation note (M5-pm-mode-and-window-state, 2026-05-02):** the daemon-side auto-flip writer in `bridge/activity.py:record_oauth_pm_auto_flip` implements the sliding-window as **transition-based** ("30 min from the most recent stretch-start") rather than per-message ("30 min from last message"). Reading B at the M5-pm-mode-and-window-state commit 5 prep chose write-on-transition semantics for the auto-flip writer to keep `pm_mode_log` write volume bounded; per-message freshness would write a row on every Mike MCP request.
+>
+> The transition-based approximation self-corrects: when PM (via `set_pm_mode`) flips back to `continuous` at the 30-min mark, the next Mike message lands as a fresh interactive transition. A heavy-chat Mike experiences periodic 30-min throttle cycles rather than continuous throttling.
+>
+> Phase 2 may refine to per-message freshness via a daemon-side `_last_oauth_pm_activity_at` cache exposed through a new `get_window_state` output field, if operational data shows the approximation produces visible problems. Tracked in `BACKLOG.md`.
+
 This isn't conservation — it's making sure Mike's conversation feels responsive instead of stalling because the subscription window is saturated by background work.
 
 ---

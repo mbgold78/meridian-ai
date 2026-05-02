@@ -237,7 +237,7 @@ Observability table — not load-bearing state. Records PM mode transitions for 
 
 `reason` is free text (PM populates with context like "blocked on cascade-authoring direction"). `triggered_by` is the cause (`mike_message`, `window_reset`, `queue_empty`, `rate_limit`, `manual`).
 
-PM does not read this table to determine its own current mode — that is held in memory by the running PM process. The log exists for auditing, the utilization report, and the dashboard.
+PM does not read this table to determine its own current mode — that is held in memory by the running PM process. **However**, PM does read this table to detect *Mike's* mode-flip activity (per item 2 above): continuous-mode PM polls `pm_mode_log` on each planning iteration, reads the **most recent row's timestamp and mode**, and adjusts its planning loop based on whether `mode='interactive'` is fresh enough to indicate Mike's presence. The two reads are distinct — PM's own current mode is in-memory state (never read from this table); Mike-presence detection is the most recent row's timestamp and mode (read from this table). The log exists for auditing, the utilization report, the dashboard, and Mike-presence detection.
 
 ## Filesystem layout
 

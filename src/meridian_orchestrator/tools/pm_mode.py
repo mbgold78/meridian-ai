@@ -46,7 +46,7 @@ disposition at commit 4 prep.
 from __future__ import annotations
 
 import uuid
-from typing import Literal
+from typing import Literal, get_args
 
 from pydantic import BaseModel
 
@@ -63,6 +63,20 @@ from meridian_orchestrator.storage.interface import Storage
 PmMode = Literal[
     "continuous", "interactive", "paused_blocked", "paused_question"
 ]
+
+# Modes that indicate PM-deliberate paused state. Derived from
+# :data:`PmMode` via ``typing.get_args`` so adding a new
+# ``paused_*`` value to the Literal automatically extends this set —
+# single source of truth pattern. Consumed by
+# :func:`bridge.activity.record_oauth_pm_auto_flip` to skip auto-flip
+# when PM is in a deliberate paused state. A sentinel test
+# (``test_paused_modes_derived_from_pm_mode_literal``) asserts the
+# derivation produces exactly the expected paused values, catching
+# the case where someone renames a paused value without updating
+# the prefix convention.
+PAUSED_MODES: frozenset[str] = frozenset(
+    m for m in get_args(PmMode) if m.startswith("paused_")
+)
 
 
 # ----- Pydantic schemas ----------------------------------------------------
@@ -201,6 +215,7 @@ async def set_pm_mode(
 
 
 __all__ = [
+    "PAUSED_MODES",
     "PmMode",
     "SetPmModeInput",
     "SetPmModeOutput",

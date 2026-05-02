@@ -133,3 +133,94 @@ async def test_nested_transaction_shares_outer(storage: SqliteStorage) -> None:
             )
     row = await storage.fetch_one("SELECT id FROM companies WHERE id = ?", (cid,))
     assert row is not None
+
+
+async def test_nested_transaction_rolls_back_with_outer(
+    storage: SqliteStorage,
+) -> None:
+    """Reentrant-transaction contract: when an exception escapes the
+    outer ``async with storage.transaction():`` block, writes from
+    BOTH the outer and the inner (nested) transactions roll back.
+
+    The inner transaction's ``async with`` is a no-op (yields without
+    BEGIN/COMMIT) because the outer transaction is already active;
+    its writes share the outer's commit/rollback lifecycle. A
+    rollback at the outer level must therefore unwind everything
+    written inside both contexts.
+
+    Failure mode this test prevents: a future change that adds
+    independent SAVEPOINT-style rollback to the nested context
+    (e.g., to support partial rollback) would break the current
+    flat-transaction contract that ``bridge.activity.record_oauth_pm_auto_flip``
+    + ``server._observe_caller`` rely on for atomic fan-out across
+    the activity update + auto-flip writes.
+    """
+    cid_outer = str(uuid.uuid4())
+    cid_inner = str(uuid.uuid4())
+    with pytest.raises(RuntimeError, match="force outer rollback"):
+        async with storage.transaction():
+            await storage.execute(
+                "INSERT INTO companies (id, name) VALUES (?, ?)",
+                (cid_outer, "OuterRollback"),
+            )
+            async with storage.transaction():
+                await storage.execute(
+                    "INSERT INTO companies (id, name) VALUES (?, ?)",
+                    (cid_inner, "InnerRollback"),
+                )
+            raise RuntimeError("force outer rollback")
+
+    # Both rows must be absent — outer rollback unwinds the inner
+    # writes too, since the inner share the outer's transaction.
+    outer_row = await storage.fetch_one(
+        "SELECT id FROM companies WHERE id = ?", (cid_outer,)
+    )
+    inner_row = await storage.fetch_one(
+        "SELECT id FROM companies WHERE id = ?", (cid_inner,)
+    )
+    assert outer_row is None, (
+        "outer transaction's INSERT persisted despite rollback; "
+        "the transaction context manager's exception path is broken."
+    )
+    assert inner_row is None, (
+        "inner transaction's INSERT persisted despite outer rollback; "
+        "reentrant-transaction contract is broken — inner writes "
+        "must share the outer's commit/rollback lifecycle. Without "
+        "this, ``server._observe_caller``'s atomic fan-out across "
+        "``record_mcp_call`` + ``record_oauth_pm_auto_flip`` cannot "
+        "guarantee both-or-neither rollback semantics."
+    )
+
+
+async def test_nested_transaction_inner_exception_propagates_out(
+    storage: SqliteStorage,
+) -> None:
+    """Symmetric to the nested-rollback test but with the exception
+    raised inside the inner block. The inner ``async with`` is a
+    no-op so the exception propagates through the inner context
+    manager unchanged, hits the outer's ``except`` branch, triggers
+    ROLLBACK at the outer level. All writes — outer and inner —
+    must roll back together."""
+    cid_outer = str(uuid.uuid4())
+    cid_inner = str(uuid.uuid4())
+    with pytest.raises(RuntimeError, match="force inner rollback"):
+        async with storage.transaction():
+            await storage.execute(
+                "INSERT INTO companies (id, name) VALUES (?, ?)",
+                (cid_outer, "OuterFromInner"),
+            )
+            async with storage.transaction():
+                await storage.execute(
+                    "INSERT INTO companies (id, name) VALUES (?, ?)",
+                    (cid_inner, "InnerThenRaise"),
+                )
+                raise RuntimeError("force inner rollback")
+
+    outer_row = await storage.fetch_one(
+        "SELECT id FROM companies WHERE id = ?", (cid_outer,)
+    )
+    inner_row = await storage.fetch_one(
+        "SELECT id FROM companies WHERE id = ?", (cid_inner,)
+    )
+    assert outer_row is None
+    assert inner_row is None
