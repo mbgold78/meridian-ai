@@ -91,6 +91,12 @@ from meridian_orchestrator.tools.dispatch import (
     get_dispatch_status,
     get_recent_dispatches,
 )
+from meridian_orchestrator.tools.pm_mode import (
+    PmMode,
+    SetPmModeInput,
+    SetPmModeOutput,
+    set_pm_mode,
+)
 from meridian_orchestrator.tools.supervisor import (
     SignalCompactionInput,
     SignalCompactionOutput,
@@ -247,6 +253,7 @@ def build_server(
         _register_dispatch_query_tools(mcp, storage)
         _register_dispatch_completion_tools(mcp, storage, token_store)
         _register_budget_tools(mcp, storage)
+        _register_pm_mode_tools(mcp, storage)
 
     if storage is not None and get_dispatcher is not None and registry is not None:
         _register_dispatch_initiation_tools(
@@ -441,6 +448,53 @@ def _register_budget_tools(mcp: FastMCP, storage: Storage) -> None:
             ),
             caller_agent_id=agent_id,
             caller_token_id=token_id,
+        )
+
+
+def _register_pm_mode_tools(mcp: FastMCP, storage: Storage) -> None:
+    """Register set_pm_mode (M5-pm-mode-and-window-state commit 4).
+
+    Currently ships ``set_pm_mode`` only — the daemon-side auto-flip
+    writer (commit 5 of this sub-milestone) is daemon-internal, not
+    tool-shaped: it observes MCP request context to detect Mike's
+    OAuth-PM token use and writes ``pm_mode_log`` rows with
+    ``triggered_by='mike_message'`` directly. No future tools are
+    planned in this helper since the auto-flip is a daemon
+    observation hook, not a caller-invoked surface.
+
+    Permission: PM only at the handler layer per
+    ``06-mcp-tools-phase-one.md`` § ``set_pm_mode``. The wrapper
+    resolves caller role via ``_resolve_caller_role_via_token`` and
+    threads it into the handler; single-gate enforcement at the
+    handler matches the established pattern (dispatch tools,
+    supervisor tools).
+    """
+
+    @mcp.tool(
+        name="set_pm_mode",
+        description=(
+            "PM only. Self-report a mode transition. Writes a "
+            "pm_mode_log row with triggered_by='manual' when the "
+            "mode actually changes; always emits a "
+            "pm_mode.transition audit row regardless of whether the "
+            "row was logged (operators see PM's set_pm_mode "
+            "decision frequency, not just transition events). "
+            "transition_logged in the output is True when a row was "
+            "inserted, False on same-mode no-op."
+        ),
+    )
+    async def _set_pm_mode(
+        mode: PmMode,
+        reason: str | None = None,
+    ) -> SetPmModeOutput:
+        agent_id = _resolve_agent_id()
+        await _record_caller_activity(storage, "set_pm_mode")
+        caller_role = _resolve_caller_role_via_token()
+        return await set_pm_mode(
+            storage=storage,
+            request=SetPmModeInput(mode=mode, reason=reason),
+            caller_agent_id=agent_id,
+            caller_role=caller_role,
         )
 
 
