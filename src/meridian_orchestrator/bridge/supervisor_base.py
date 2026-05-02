@@ -29,7 +29,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import os
 import uuid
 from abc import ABC, abstractmethod
 from collections import deque
@@ -44,6 +43,7 @@ import structlog
 from meridian_orchestrator.audit.logger import write_audit
 from meridian_orchestrator.auth import IssuedToken, TokenStore
 from meridian_orchestrator.bridge.dispatcher import _TERMINAL_STATES
+from meridian_orchestrator.bridge.launch_env import build_subprocess_env
 from meridian_orchestrator.errors import OrchestratorError
 from meridian_orchestrator.storage.interface import Storage
 
@@ -130,10 +130,15 @@ async def _default_launcher(
     Presumes ``claude`` is on PATH on the daemon host (BACKLOG item for
     explicit configurable path). M2's operator setup and the M7 service
     install ensure this.
+
+    Env construction routes through :func:`bridge.launch_env.build_subprocess_env`
+    to strip Anthropic credential env vars per #12352. ``allow_api_key`` is
+    not exposed here at M5-record-api-call (long-running supervisors always
+    inherit subscription auth at this sub-milestone); M5-flag-flips will
+    revisit when ``extra_usage.is_enabled: true`` becomes a configurable
+    operator path.
     """
-    env = os.environ.copy()
-    env["MERIDIAN_ORCHESTRATOR_TOKEN"] = ctx.token
-    env["MERIDIAN_ORCHESTRATOR_DISPATCH_ID"] = ctx.dispatch_id
+    env = build_subprocess_env(token=ctx.token, dispatch_id=ctx.dispatch_id)
     env.update(ctx.env_extras)
     proc = await asyncio.create_subprocess_exec(
         "claude",

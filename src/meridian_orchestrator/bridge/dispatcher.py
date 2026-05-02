@@ -34,7 +34,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import os
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -50,6 +49,7 @@ from meridian_orchestrator.bridge.canonical import (
     CanonicalClone,
     CanonicalDivergedError,
 )
+from meridian_orchestrator.bridge.launch_env import build_subprocess_env
 from meridian_orchestrator.bridge.timeouts import ModelString, calculate_timeout
 from meridian_orchestrator.bridge.worktree import DispatchWorktree, MergeResult
 from meridian_orchestrator.errors import OrchestratorError
@@ -162,10 +162,14 @@ async def _default_launcher(ctx: DispatchLaunchContext) -> SubprocessHandle:
     Note: this default presumes ``claude`` is on PATH on the daemon host. M2's
     operator setup and the M7 service install ensure this; the spec has a
     BACKLOG item for an explicit configurable path.
+
+    Env construction routes through :func:`bridge.launch_env.build_subprocess_env`
+    to strip Anthropic credential env vars per #12352. ``allow_api_key`` is
+    not exposed here at M5-record-api-call (sub-agent dispatches always
+    inherit subscription auth at this sub-milestone); M5-flag-flips will
+    revisit if explicit overflow per-dispatch becomes needed.
     """
-    env = os.environ.copy()
-    env["MERIDIAN_ORCHESTRATOR_TOKEN"] = ctx.token
-    env["MERIDIAN_ORCHESTRATOR_DISPATCH_ID"] = ctx.dispatch_id
+    env = build_subprocess_env(token=ctx.token, dispatch_id=ctx.dispatch_id)
     env.update(ctx.env_extras)
     proc = await asyncio.create_subprocess_exec(
         "claude",
