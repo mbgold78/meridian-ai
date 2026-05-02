@@ -1,7 +1,7 @@
 """Unit tests for ``bridge.oauth_usage``.
 
-Commit 1 of M5-pm-mode-and-window-state ships the basic poller
-behavior; this file covers:
+Commits 1-2 of M5-pm-mode-and-window-state ship the poller; this file
+covers:
 
 - :func:`_detect_null_counters` against the canonical Experiment 4
   payload from ``project_subscription_first_architecture`` memory plus
@@ -16,15 +16,19 @@ behavior; this file covers:
   cycle; the loop continues to a successful poll.
 - Constructor validation: requires either ``oauth_token`` or
   ``snapshot_fetcher``.
-
-Commit 2 will add tests for the 429 backoff state machine
-(60→120→240→480→600s) plus the
-``oauth_usage.polling_ceiling_reached`` audit row at ceiling.
+- :class:`BackoffStateMachine` (commit 2): pure-state transitions
+  through the 6-step ladder, ceiling clamp on consecutive 429s,
+  reset on successful poll, ceiling-audit-emission flag tracking.
+- Poller integration with backoff (commit 2):
+  ``oauth_usage.polling_ceiling_reached`` audit row emitted exactly
+  once per ceiling stretch; subsequent ceiling stretches emit fresh
+  rows after a successful-poll reset.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -34,6 +38,7 @@ import pytest
 import pytest_asyncio
 
 from meridian_orchestrator.bridge.oauth_usage import (
+    BackoffStateMachine,
     CachedSnapshot,
     OAuthUsagePoller,
     SnapshotFetchResult,
@@ -457,3 +462,320 @@ def test_constructor_requires_token_or_fetcher(
         ValueError, match=r"oauth_token.*snapshot_fetcher"
     ):
         OAuthUsagePoller(storage=storage)
+
+
+# ---------------------------------------------------------------------------
+# BackoffStateMachine — pure state transitions
+# ---------------------------------------------------------------------------
+
+
+# Test intervals: 6-step ladder distinguishable by value (0.0/0.1/0.2/0.3/
+# 0.4/0.5). Tests assert against these values, not against the production
+# canonical (30/60/120/240/480/600); the state machine is generic over
+# the interval ladder.
+_TEST_INTERVALS: tuple[float, ...] = (0.0, 0.1, 0.2, 0.3, 0.4, 0.5)
+
+
+def _success_result() -> SnapshotFetchResult:
+    return SnapshotFetchResult(
+        status_code=200, payload=_EXPERIMENT_4_PAYLOAD
+    )
+
+
+def _rate_limited_result() -> SnapshotFetchResult:
+    return SnapshotFetchResult(status_code=429)
+
+
+def _server_error_result() -> SnapshotFetchResult:
+    return SnapshotFetchResult(status_code=503)
+
+
+def test_backoff_starts_at_default_step() -> None:
+    """A fresh state machine reports the default cadence and is not
+    at the ceiling."""
+    sm = BackoffStateMachine(intervals_seconds=_TEST_INTERVALS)
+    assert sm.current_interval_seconds == 0.0
+    assert sm.at_ceiling is False
+
+
+def test_backoff_429_escalates_one_step() -> None:
+    """A single 429 transitions step 0 → step 1."""
+    sm = BackoffStateMachine(intervals_seconds=_TEST_INTERVALS)
+    update = sm.update(_rate_limited_result())
+    assert update.previous_interval_seconds == 0.0
+    assert update.current_interval_seconds == 0.1
+    assert update.should_emit_ceiling_audit is False
+    assert sm.at_ceiling is False
+
+
+def test_backoff_429_chain_escalates_through_full_ladder() -> None:
+    """Five consecutive 429s escalate through 0.0→0.1→0.2→0.3→0.4→0.5
+    with the 5th transition into the ceiling step. Per spec the
+    canonical sequence is 30→60→120→240→480→600s; this test uses the
+    test intervals to verify the ladder structure independent of the
+    canonical values."""
+    sm = BackoffStateMachine(intervals_seconds=_TEST_INTERVALS)
+    expected_intervals = [0.1, 0.2, 0.3, 0.4, 0.5]
+    for expected in expected_intervals:
+        update = sm.update(_rate_limited_result())
+        assert update.current_interval_seconds == pytest.approx(expected)
+    assert sm.at_ceiling is True
+
+
+def test_backoff_429_at_ceiling_clamps() -> None:
+    """A 429 received while already at the ceiling step does not
+    escalate further — the state machine clamps. Per Issue #31021 the
+    ceiling is 600s; the daemon does not back off beyond this even
+    under sustained rate limiting."""
+    sm = BackoffStateMachine(intervals_seconds=_TEST_INTERVALS)
+    # Drive to ceiling.
+    for _ in range(5):
+        sm.update(_rate_limited_result())
+    assert sm.at_ceiling is True
+
+    # Two more 429s — must clamp at the ceiling, not escalate or wrap.
+    for _ in range(2):
+        update = sm.update(_rate_limited_result())
+        assert update.current_interval_seconds == 0.5
+        assert update.should_emit_ceiling_audit is False, (
+            "ceiling audit re-emitted on subsequent 429 at ceiling; "
+            "the _ceiling_audit_emitted flag is not blocking re-emit "
+            "within the same ceiling stretch."
+        )
+
+
+def test_backoff_ceiling_audit_emits_exactly_once_at_transition() -> None:
+    """The audit signal fires only on the transition INTO the ceiling
+    step (step 4 → step 5), not on earlier escalations and not on
+    repeated 429s while already at the ceiling."""
+    sm = BackoffStateMachine(intervals_seconds=_TEST_INTERVALS)
+    # First four 429s: no ceiling audit signal.
+    for _ in range(4):
+        update = sm.update(_rate_limited_result())
+        assert update.should_emit_ceiling_audit is False
+    # Fifth 429: transition into ceiling — audit signal fires.
+    update = sm.update(_rate_limited_result())
+    assert update.current_interval_seconds == 0.5
+    assert update.should_emit_ceiling_audit is True
+
+
+def test_backoff_success_resets_to_step_zero() -> None:
+    """A successful poll resets the state machine regardless of the
+    current step. Encodes the 'reset to default on first successful
+    poll' rule from project_subscription_first_architecture memory
+    § B-4."""
+    sm = BackoffStateMachine(intervals_seconds=_TEST_INTERVALS)
+    # Drive to ceiling.
+    for _ in range(5):
+        sm.update(_rate_limited_result())
+    assert sm.at_ceiling is True
+
+    update = sm.update(_success_result())
+    assert update.previous_interval_seconds == 0.5
+    assert update.current_interval_seconds == 0.0
+    assert update.should_emit_ceiling_audit is False
+    assert sm.at_ceiling is False
+
+
+def test_backoff_success_after_reset_re_arms_ceiling_audit() -> None:
+    """After a successful-poll reset, a subsequent ceiling stretch
+    emits a fresh audit signal — the flag clears on reset so the next
+    stretch is observable as a distinct operator-visible event.
+
+    Failure mode this test prevents: a future commit that forgets to
+    clear the _ceiling_audit_emitted flag on reset would silently
+    suppress all subsequent ceiling-reached audits, leaving the
+    operator blind to repeated rate-limit stretches.
+    """
+    sm = BackoffStateMachine(intervals_seconds=_TEST_INTERVALS)
+    # First ceiling stretch.
+    for _ in range(4):
+        sm.update(_rate_limited_result())
+    first_ceiling = sm.update(_rate_limited_result())
+    assert first_ceiling.should_emit_ceiling_audit is True
+
+    # Successful poll resets.
+    sm.update(_success_result())
+
+    # Second ceiling stretch — fresh audit must fire.
+    for _ in range(4):
+        sm.update(_rate_limited_result())
+    second_ceiling = sm.update(_rate_limited_result())
+    assert second_ceiling.should_emit_ceiling_audit is True, (
+        "second ceiling stretch did not emit a fresh audit signal; "
+        "the _ceiling_audit_emitted flag was not cleared on the "
+        "intermediate successful-poll reset."
+    )
+
+
+def test_backoff_non_429_non_success_holds_state() -> None:
+    """Non-2xx non-429 responses (5xx, etc.) do not change state.
+    A 5xx during normal operation does not trigger backoff; a 5xx
+    during backoff does not escalate further or reset.
+
+    Rationale per BackoffStateMachine docstring: 5xx is a transient
+    outage signal, not a rate-limit signal. The 60s+ backoff is for
+    rate limits specifically; treating 5xx as a rate limit would
+    over-back-off during transient endpoint outages.
+    """
+    sm = BackoffStateMachine(intervals_seconds=_TEST_INTERVALS)
+    # 5xx during normal: no escalation.
+    update = sm.update(_server_error_result())
+    assert update.current_interval_seconds == 0.0
+    assert sm.at_ceiling is False
+
+    # Drive to step 2 via 429s.
+    sm.update(_rate_limited_result())
+    sm.update(_rate_limited_result())
+    assert sm.current_interval_seconds == 0.2
+
+    # 5xx during backoff: stay at step 2, don't escalate or reset.
+    update = sm.update(_server_error_result())
+    assert update.previous_interval_seconds == 0.2
+    assert update.current_interval_seconds == 0.2
+
+
+def test_backoff_exception_path_holds_state() -> None:
+    """A None result (the poll loop's exception path) does not change
+    state, same as non-429 non-success. A network exception is not a
+    rate-limit signal."""
+    sm = BackoffStateMachine(intervals_seconds=_TEST_INTERVALS)
+    sm.update(_rate_limited_result())
+    sm.update(_rate_limited_result())
+    sm.update(_rate_limited_result())
+    assert sm.current_interval_seconds == 0.3
+
+    update = sm.update(None)
+    assert update.previous_interval_seconds == 0.3
+    assert update.current_interval_seconds == 0.3
+
+
+def test_backoff_constructor_rejects_wrong_ladder_length() -> None:
+    """The state machine is not generic over arbitrary ladder depths
+    — the spec defines a 6-step ladder. Passing a shorter or longer
+    ladder is a programming error and must surface immediately."""
+    with pytest.raises(ValueError, match=r"6 intervals"):
+        BackoffStateMachine(intervals_seconds=(0.0, 0.1, 0.2))
+    with pytest.raises(ValueError, match=r"6 intervals"):
+        BackoffStateMachine(
+            intervals_seconds=(0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6)
+        )
+
+
+# ---------------------------------------------------------------------------
+# OAuthUsagePoller — ceiling-reached audit emission
+# ---------------------------------------------------------------------------
+
+
+async def test_poller_emits_ceiling_audit_exactly_once_per_stretch(
+    storage: SqliteStorage,
+) -> None:
+    """End-to-end through the poll loop: five consecutive 429s drive
+    the state machine to ceiling on the fifth poll;
+    ``oauth_usage.polling_ceiling_reached`` audit row is written
+    exactly once. Subsequent 429s at ceiling do not write additional
+    rows.
+
+    The test uses scaled-down backoff intervals
+    (sub-millisecond) so the loop completes within the test's wait
+    window. State-machine correctness is unit-tested separately;
+    this test verifies the poller's integration with it.
+    """
+    fetch_count = 0
+    target_429s = 7  # 5 → ceiling, then 2 more at ceiling
+
+    async def always_429() -> SnapshotFetchResult:
+        nonlocal fetch_count
+        fetch_count += 1
+        return _rate_limited_result()
+
+    sm = BackoffStateMachine(intervals_seconds=_TEST_INTERVALS)
+    poller = OAuthUsagePoller(
+        storage=storage,
+        snapshot_fetcher=always_429,
+        poll_interval_seconds=0.0,
+        backoff_state=sm,
+    )
+    await poller.start()
+    try:
+        # Wait until we've observed enough fetches to traverse the
+        # ladder and stay at ceiling.
+        for _ in range(500):
+            if fetch_count >= target_429s:
+                break
+            await asyncio.sleep(0.01)
+    finally:
+        await poller.shutdown()
+
+    audits = await storage.fetch_all(
+        "SELECT id, actor, action, target, details_json "
+        "FROM audit_log WHERE action = 'oauth_usage.polling_ceiling_reached'"
+    )
+    assert len(audits) == 1, (
+        f"expected exactly one ceiling-reached audit row across "
+        f"{fetch_count} consecutive 429s, got {len(audits)}. "
+        "The poller is either re-emitting on subsequent 429s at "
+        "ceiling or failing to emit on the transition into ceiling."
+    )
+    audit = audits[0]
+    assert audit["actor"] == "system"
+    assert audit["target"] is None
+    details = json.loads(audit["details_json"])
+    # Ceiling interval is the last entry in the test ladder.
+    assert details["interval_seconds"] == pytest.approx(0.5)
+    assert details["from_interval_seconds"] == pytest.approx(0.4)
+
+
+async def test_poller_emits_fresh_ceiling_audit_after_reset(
+    storage: SqliteStorage,
+) -> None:
+    """Two ceiling stretches separated by a successful poll produce
+    two audit rows. Encodes the 'one stretch = one audit' contract
+    per project memory § B-4 — the operator sees each ceiling event
+    as a distinct row.
+
+    Failure mode this test prevents: a future commit that fails to
+    clear the ceiling-audit-emitted flag on reset would suppress all
+    audits beyond the first stretch, leaving the operator blind to
+    sustained or repeated rate-limit episodes.
+    """
+    call_count = 0
+
+    async def staged_fetcher() -> SnapshotFetchResult:
+        nonlocal call_count
+        call_count += 1
+        # First 5 calls: 429 (stretch 1, reaches ceiling on 5th)
+        # 6th call: 200 success (resets state machine)
+        # Calls 7-11: 429 (stretch 2, reaches ceiling on 11th)
+        if call_count <= 5:
+            return _rate_limited_result()
+        if call_count == 6:
+            return _success_result()
+        return _rate_limited_result()
+
+    sm = BackoffStateMachine(intervals_seconds=_TEST_INTERVALS)
+    poller = OAuthUsagePoller(
+        storage=storage,
+        snapshot_fetcher=staged_fetcher,
+        poll_interval_seconds=0.0,
+        backoff_state=sm,
+    )
+    await poller.start()
+    try:
+        for _ in range(500):
+            if call_count >= 12:
+                break
+            await asyncio.sleep(0.01)
+    finally:
+        await poller.shutdown()
+
+    audits = await storage.fetch_all(
+        "SELECT details_json FROM audit_log "
+        "WHERE action = 'oauth_usage.polling_ceiling_reached' "
+        "ORDER BY rowid"
+    )
+    assert len(audits) == 2, (
+        f"expected two ceiling-reached audit rows (one per stretch), "
+        f"got {len(audits)}. The successful-poll reset between "
+        "stretches did not re-arm the ceiling audit."
+    )
