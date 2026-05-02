@@ -152,6 +152,10 @@ def _compute_cost_usd(
 # IN-clause built once at module load from the dispatcher's
 # _TERMINAL_STATES frozenset. Single source of truth: any new terminal
 # state added in dispatcher.py automatically extends this guard.
+#
+# Values are interpolated into the SQL string; values must never contain
+# single quotes. Sourced from bridge.dispatcher._TERMINAL_STATES (frozenset
+# of code-defined constants, never user input).
 _TERMINAL_STATES_SQL_LIST = ",".join(f"'{s}'" for s in sorted(_TERMINAL_STATES))
 
 
@@ -204,6 +208,23 @@ async def record_api_call(
     Engineer's iteration loop; OAuth-PM calls land in audit_log with
     target=NULL and surface only via Mike-only ``get_audit_log``
     (M6).
+
+    **Audit-target semantics**: ``target=dispatch_id`` means the call
+    landed *during* this dispatch's lifecycle, not that
+    ``actual_tokens`` was incremented. The increment can no-op via the
+    status-NOT-IN-terminal guard while the audit still records the
+    dispatch_id (the dispatch_id resolved at SELECT time before the
+    transition). Consumers reasoning about "which audits caused
+    actual_tokens increments" must join against the actual_tokens
+    timeline rather than infer from ``target`` alone.
+
+    **Atomicity**: INSERT api_usage + dispatch SELECT + conditional
+    UPDATE dispatches + audit_log write are wrapped in a single
+    ``storage.transaction()`` — partial failures roll back to a clean
+    pre-call state. Without this wrapper, an UPDATE failure after the
+    INSERT succeeded would leave an api_usage row claiming the call
+    consumed tokens while ``dispatches.actual_tokens`` disagreed,
+    silently breaking budget reasoning.
     """
     usage_id = uuid.uuid4().hex
     window_start = datetime.now(tz=UTC).isoformat(timespec="microseconds")
@@ -225,62 +246,67 @@ async def record_api_call(
             ),
         )
 
-    await storage.execute(
-        "INSERT INTO api_usage "
-        "(id, agent_id, model, input_tokens, output_tokens, cost_usd, "
-        "task_id, window_start) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (
-            usage_id,
-            caller_agent_id,
-            request.model,
-            request.input_tokens,
-            request.output_tokens,
-            cost_usd,
-            request.task_id,
-            window_start,
-        ),
-    )
-
-    # Resolve caller's active dispatch (if any) for the audit target
-    # and the actual_tokens increment. The status-NOT-IN guard mirrors
-    # bridge.activity.record_mcp_call.
-    dispatch_row = await storage.fetch_one(
-        "SELECT id FROM dispatches "
-        f"WHERE token_id = ? AND status NOT IN ({_TERMINAL_STATES_SQL_LIST})",
-        (caller_token_id,),
-    )
-    dispatch_id: str | None = dispatch_row["id"] if dispatch_row is not None else None
-
-    if dispatch_id is not None:
-        # Atomic increment with COALESCE-around-zero per
-        # project_subscription_first_architecture R-3 Reading B. The
-        # status-NOT-IN guard is repeated on the UPDATE so a dispatch
-        # that transitions to terminal between the SELECT and the
-        # UPDATE no-ops correctly (race-safe).
-        total_tokens = request.input_tokens + request.output_tokens
+    async with storage.transaction():
         await storage.execute(
-            "UPDATE dispatches "
-            "SET actual_tokens = COALESCE(actual_tokens, 0) + ? "
-            f"WHERE id = ? AND status NOT IN ({_TERMINAL_STATES_SQL_LIST})",
-            (total_tokens, dispatch_id),
+            "INSERT INTO api_usage "
+            "(id, agent_id, model, input_tokens, output_tokens, cost_usd, "
+            "task_id, window_start) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                usage_id,
+                caller_agent_id,
+                request.model,
+                request.input_tokens,
+                request.output_tokens,
+                cost_usd,
+                request.task_id,
+                window_start,
+            ),
         )
 
-    await write_audit(
-        storage,
-        actor=caller_agent_id,
-        action="api.record_call",
-        target=dispatch_id,
-        details={
-            "usage_id": usage_id,
-            "model": request.model,
-            "input_tokens": request.input_tokens,
-            "output_tokens": request.output_tokens,
-            "cost_usd": cost_usd,
-            "task_id": request.task_id,
-            "dispatch_id": dispatch_id,
-        },
-    )
+        # Resolve caller's active dispatch (if any) for the audit target
+        # and the actual_tokens increment. The status-NOT-IN guard mirrors
+        # bridge.activity.record_mcp_call.
+        dispatch_row = await storage.fetch_one(
+            "SELECT id FROM dispatches "
+            f"WHERE token_id = ? AND status NOT IN ({_TERMINAL_STATES_SQL_LIST})",
+            (caller_token_id,),
+        )
+        dispatch_id: str | None = (
+            dispatch_row["id"] if dispatch_row is not None else None
+        )
+
+        if dispatch_id is not None:
+            # Atomic increment with COALESCE-around-zero per
+            # project_subscription_first_architecture R-3 Reading B. The
+            # status-NOT-IN guard is repeated on the UPDATE so a dispatch
+            # that transitions to terminal between the SELECT and the
+            # UPDATE no-ops correctly (race-safe). When the no-op fires,
+            # the audit below still records target=dispatch_id — see the
+            # audit-target-semantics note in the docstring.
+            total_tokens = request.input_tokens + request.output_tokens
+            await storage.execute(
+                "UPDATE dispatches "
+                "SET actual_tokens = COALESCE(actual_tokens, 0) + ? "
+                f"WHERE id = ? AND status NOT IN ({_TERMINAL_STATES_SQL_LIST})",
+                (total_tokens, dispatch_id),
+            )
+
+        await write_audit(
+            storage,
+            actor=caller_agent_id,
+            action="api.record_call",
+            target=dispatch_id,
+            details={
+                "usage_id": usage_id,
+                "model": request.model,
+                "input_tokens": request.input_tokens,
+                "output_tokens": request.output_tokens,
+                "cost_usd": cost_usd,
+                "task_id": request.task_id,
+                "dispatch_id": dispatch_id,
+            },
+        )
 
     return RecordApiCallOutput(usage_id=usage_id, window_start=window_start)
 

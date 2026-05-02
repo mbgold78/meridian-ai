@@ -20,6 +20,16 @@ Plus:
   target=dispatch_id-or-NULL).
 - Unknown-model path: cost_usd written as NULL; api_usage row still
   inserted; structlog warning emitted.
+- Transaction rollback: an UPDATE failure mid-handler rolls back the
+  INSERT api_usage that preceded it, leaving no orphan usage row that
+  claims tokens were consumed without the dispatches.actual_tokens
+  reflecting it.
+- Audit-target-on-no-op-update contract: when the dispatch transitions
+  to terminal between SELECT and UPDATE, the UPDATE no-ops via its
+  status-NOT-IN-terminal guard, but the audit row still fires with
+  target=dispatch_id. Encodes the documented forensic semantics
+  ("target=dispatch_id means call landed during this dispatch, not
+  increment occurred") as a durable contract.
 
 Cost computation pure-function tests live in
 ``tests/unit/tools/test_budget.py``.
@@ -28,9 +38,11 @@ Cost computation pure-function tests live in
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from pathlib import Path
+from typing import Any
 
+import pytest
 import pytest_asyncio
 
 from meridian_orchestrator.auth import TokenStore
@@ -417,3 +429,243 @@ async def test_record_api_call_unknown_model_writes_null_cost(
     assert row["cost_usd"] is None
     assert row["input_tokens"] == 1000
     assert row["output_tokens"] == 500
+
+    # Audit details serialization contract: cost_usd is None in the audit
+    # row's details_json when the model isn't priced. Encodes the audit-
+    # consumer contract durably so future audit-format changes don't break
+    # M6 get_audit_log readers silently. Mirror of the cost_usd column NULL
+    # assertion above — the in-memory dict serializes through json.dumps
+    # to JSON null and round-trips back to Python None.
+    audits = await storage.fetch_all(
+        "SELECT details_json FROM audit_log WHERE action = 'api.record_call'"
+    )
+    assert len(audits) == 1
+    details = json.loads(audits[0]["details_json"])
+    assert details["cost_usd"] is None, (
+        "audit details serialized cost_usd as something other than None for "
+        "an unknown model; downstream get_audit_log consumers (M6) reading "
+        "cost_usd will see corrupted shape."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Transaction rollback regression
+# ---------------------------------------------------------------------------
+
+
+async def test_record_api_call_rolls_back_insert_on_update_failure(
+    storage: SqliteStorage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An UPDATE failure mid-handler must roll back the INSERT api_usage
+    that preceded it; storage.transaction() is the wrapping mechanism.
+
+    Without transaction wrapping, INSERT api_usage succeeds but UPDATE
+    dispatches fails; the api_usage row claims the call consumed tokens
+    but dispatches.actual_tokens disagrees, silently breaking budget
+    reasoning. This test forces the failure mode by monkeypatching
+    storage.execute to raise specifically on the UPDATE call, then
+    asserts both the INSERT and the audit_log write were rolled back to
+    a clean pre-call state.
+
+    Same anti-drift discipline as the env-sanitization wiring tests in
+    test_launcher_env_sanitization.py — a future commit that drops the
+    `async with storage.transaction():` wrapper from record_api_call
+    fails this test informatively.
+    """
+    token_store = TokenStore(service="record-api-call-rollback")
+    issued = token_store.issue("agent-7", "implementer", "rollback-test")
+    await _seed_dispatch(
+        storage,
+        dispatch_id="d-rollback",
+        role="implementer",
+        status="running",
+        token_id=issued.record.token_id,
+        actual_tokens=42,
+    )
+
+    real_execute = storage.execute
+
+    async def failing_execute(
+        query: str, params: Sequence[Any] | None = None
+    ) -> None:
+        if query.lstrip().upper().startswith("UPDATE DISPATCHES"):
+            raise RuntimeError(
+                "simulated UPDATE failure for rollback regression test"
+            )
+        await real_execute(query, params)
+
+    monkeypatch.setattr(storage, "execute", failing_execute)
+
+    with pytest.raises(RuntimeError, match="simulated UPDATE failure"):
+        await record_api_call(
+            storage=storage,
+            request=RecordApiCallInput(
+                model="claude-sonnet-4-6",
+                input_tokens=1000,
+                output_tokens=500,
+            ),
+            caller_agent_id="agent-7",
+            caller_token_id=issued.record.token_id,
+        )
+
+    # api_usage row must NOT exist — the INSERT was rolled back when the
+    # UPDATE failed inside the same transaction.
+    rows = await storage.fetch_all("SELECT id FROM api_usage")
+    assert rows == [], (
+        "api_usage row persisted despite UPDATE failure; the "
+        "storage.transaction() wrapper around INSERT+UPDATE+audit in "
+        "record_api_call has been removed or is not rolling back. "
+        "Without rollback: api_usage claims tokens were consumed while "
+        "dispatches.actual_tokens disagrees, silently breaking budget "
+        "reasoning."
+    )
+
+    # audit_log row must NOT exist either — the audit write was inside
+    # the same transaction.
+    audits = await storage.fetch_all(
+        "SELECT id FROM audit_log WHERE action = 'api.record_call'"
+    )
+    assert audits == [], (
+        "audit_log row persisted despite UPDATE failure; the audit write "
+        "is outside the transaction or the rollback isn't reaching it."
+    )
+
+    # dispatches.actual_tokens must remain at the pre-call value of 42 —
+    # the UPDATE never landed, the rollback didn't accidentally clobber
+    # the row.
+    dispatch_row = await storage.fetch_one(
+        "SELECT actual_tokens FROM dispatches WHERE id = 'd-rollback'"
+    )
+    assert dispatch_row is not None
+    assert dispatch_row["actual_tokens"] == 42, (
+        f"dispatches.actual_tokens is {dispatch_row['actual_tokens']!r}, "
+        "expected 42 (the pre-call value). The UPDATE either landed "
+        "before the simulated failure or the rollback affected the row."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Audit-target-on-no-op-update contract
+# ---------------------------------------------------------------------------
+
+
+async def test_audit_target_dispatch_id_emitted_for_no_op_update(
+    storage: SqliteStorage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Race-window contract: when the dispatch transitions to terminal
+    between SELECT and UPDATE, the UPDATE no-ops via its
+    status-NOT-IN-terminal guard, but the audit row still fires with
+    target=dispatch_id (the dispatch_id resolved at SELECT time).
+
+    Forces the race by monkeypatching ``storage.fetch_one`` to fire a
+    status-transition UPDATE as a side effect right before returning
+    the dispatch row. SQLite sees the side-effect inside the active
+    transaction, so the subsequent UPDATE in record_api_call observes
+    status='completed' and no-ops. The audit then emits with the
+    dispatch_id captured at SELECT time.
+
+    Failure message: target=dispatch_id means "call landed during this
+    dispatch", not "increment occurred". Documentation alone is drift-
+    prone for a contract with alternative-interpretation risk; this
+    test makes the contract durably enforced.
+    """
+    token_store = TokenStore(service="record-api-call-norace")
+    issued = token_store.issue("agent-7", "implementer", "no-op-update-test")
+    await _seed_dispatch(
+        storage,
+        dispatch_id="d-norace",
+        role="implementer",
+        status="running",  # non-terminal at SELECT time
+        token_id=issued.record.token_id,
+        actual_tokens=100,
+    )
+
+    real_fetch_one = storage.fetch_one
+    real_execute = storage.execute
+
+    async def transitioning_fetch_one(
+        query: str, params: Sequence[Any] | None = None
+    ) -> dict[str, Any] | None:
+        result = await real_fetch_one(query, params)
+        # Identify the dispatch-resolution SELECT specifically (not the
+        # post-call assertion fetches in this test). The handler's query
+        # selects from dispatches with a token_id filter.
+        if (
+            "FROM dispatches" in query
+            and "token_id" in query
+            and result is not None
+        ):
+            # Race-window simulation: transition the dispatch to terminal
+            # after the SELECT but before the UPDATE. The write lands in
+            # the same transaction record_api_call opened, so the
+            # subsequent UPDATE sees status='completed' and no-ops via
+            # its status-NOT-IN guard.
+            await real_execute(
+                "UPDATE dispatches SET status = 'completed' WHERE id = ?",
+                (result["id"],),
+            )
+        return result
+
+    monkeypatch.setattr(storage, "fetch_one", transitioning_fetch_one)
+
+    out = await record_api_call(
+        storage=storage,
+        request=RecordApiCallInput(
+            model="claude-sonnet-4-6",
+            input_tokens=500,
+            output_tokens=250,
+        ),
+        caller_agent_id="agent-7",
+        caller_token_id=issued.record.token_id,
+    )
+
+    # Restore for post-call assertion fetches.
+    monkeypatch.setattr(storage, "fetch_one", real_fetch_one)
+
+    # api_usage row landed.
+    usage_row = await storage.fetch_one(
+        "SELECT id FROM api_usage WHERE id = ?", (out.usage_id,)
+    )
+    assert usage_row is not None
+
+    # actual_tokens unchanged — UPDATE no-opped via the status guard.
+    dispatch_row = await storage.fetch_one(
+        "SELECT actual_tokens, status FROM dispatches WHERE id = 'd-norace'"
+    )
+    assert dispatch_row is not None
+    assert dispatch_row["status"] == "completed", (
+        "race-window simulation failed: dispatch did not transition to "
+        "terminal between SELECT and UPDATE. The test's monkeypatch is "
+        "not firing the side-effect UPDATE."
+    )
+    assert dispatch_row["actual_tokens"] == 100, (
+        f"actual_tokens={dispatch_row['actual_tokens']!r}, expected 100 "
+        "(pre-call value). The UPDATE in record_api_call landed despite "
+        "the dispatch transitioning to terminal — the status-NOT-IN "
+        "guard on the UPDATE has been removed or weakened."
+    )
+
+    # Audit row exists with target=<dispatch_id> even though the
+    # increment no-opped — this is the contract under test.
+    audits = await storage.fetch_all(
+        "SELECT target, details_json FROM audit_log "
+        "WHERE action = 'api.record_call'"
+    )
+    assert len(audits) == 1, (
+        f"expected exactly one api.record_call audit, got {len(audits)}; "
+        "transaction may not have committed cleanly."
+    )
+    assert audits[0]["target"] == "d-norace", (
+        f"audit target is {audits[0]['target']!r}, expected 'd-norace'. "
+        "Contract violated: target=dispatch_id means 'call landed during "
+        "this dispatch', not 'increment occurred'. A future commit may "
+        "have changed the audit emit site to skip target when the UPDATE "
+        "no-ops, breaking the documented forensic semantics. Documentation "
+        "alone is drift-prone for a contract with alternative-interpretation "
+        "risk; this test makes the contract durably enforced."
+    )
+    details = json.loads(audits[0]["details_json"])
+    assert details["dispatch_id"] == "d-norace", (
+        "audit details_json.dispatch_id should match target; both are "
+        "captured from the SELECT-time resolution."
+    )

@@ -33,6 +33,10 @@ from meridian_orchestrator.storage.interface import Storage
 # Build the IN-clause once at module load. Single source of truth: the
 # dispatcher's _TERMINAL_STATES frozenset. Sorted so the SQL string is
 # deterministic for diffability.
+#
+# Values are interpolated into the SQL string; values must never contain
+# single quotes. Sourced from bridge.dispatcher._TERMINAL_STATES (frozenset
+# of code-defined constants, never user input).
 _TERMINAL_STATES_SQL_LIST = ",".join(f"'{s}'" for s in sorted(_TERMINAL_STATES))
 
 # Timestamp is generated Python-side as a tz-aware ISO string rather
