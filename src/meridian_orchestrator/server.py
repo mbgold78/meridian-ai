@@ -62,6 +62,11 @@ from meridian_orchestrator.tools.agents import (
     get_org_chart,
     list_agents,
 )
+from meridian_orchestrator.tools.budget import (
+    RecordApiCallInput,
+    RecordApiCallOutput,
+    record_api_call,
+)
 from meridian_orchestrator.tools.dispatch import (
     CompleteDispatchInput,
     CompleteDispatchOutput,
@@ -109,6 +114,31 @@ def _resolve_agent_id() -> str:
     if access is None:
         raise AuthError("no authenticated context for tool call")
     return access.client_id
+
+
+def _resolve_caller_token_id() -> str:
+    """Parse the bearer token from the request context and return its
+    ``token_id`` (the short hex prefix).
+
+    Mirrors :func:`_resolve_agent_id` but returns the token_id rather
+    than the agent_id. Used by tool wrappers that need to look up
+    dispatch context — currently only ``record_api_call``, whose
+    writer (``tools/budget.py``) resolves the caller's active dispatch
+    via ``WHERE token_id = ? AND status NOT IN (terminal)`` to
+    atomically increment ``dispatches.actual_tokens``.
+
+    Raises :class:`AuthError` when no access context exists or the
+    bearer token isn't parseable. Both cases indicate a wrapper layer
+    bug rather than a caller error.
+    """
+    access = get_access_token()
+    if access is None:
+        raise AuthError("no authenticated context for tool call")
+    parsed = _parse_token(access.token)
+    if parsed is None:
+        raise AuthError("could not parse bearer token")
+    token_id, _ = parsed
+    return token_id
 
 
 async def _record_caller_activity(
@@ -216,6 +246,7 @@ def build_server(
     if storage is not None:
         _register_dispatch_query_tools(mcp, storage)
         _register_dispatch_completion_tools(mcp, storage, token_store)
+        _register_budget_tools(mcp, storage)
 
     if storage is not None and get_dispatcher is not None and registry is not None:
         _register_dispatch_initiation_tools(
@@ -353,6 +384,63 @@ def _register_dispatch_initiation_tools(
             caller_agent_id=agent_id,
             caller_role=caller_role,
             tester_agent_id=tester.agent_id,
+        )
+
+
+def _register_budget_tools(mcp: FastMCP, storage: Storage) -> None:
+    """Register budget/usage tools.
+
+    Currently ships ``record_api_call`` (M5-record-api-call commit 4).
+    Downstream M5-oauth-poller-and-get-window-state will add
+    ``get_token_usage``, ``get_burn_rate``, ``check_budget_for_task``,
+    and ``get_window_state`` to this same helper.
+
+    Permission: record_api_call is allowed for all four agents per
+    ``06-mcp-tools-phase-one.md`` § Permission summary table. No
+    role check at handler or wrapper layer; any authenticated caller
+    may record their own API calls. Single-gate pattern (W-3) is
+    preserved by absence — no role-based gate exists at any layer
+    because none is spec'd.
+
+    The wrapper resolves both ``agent_id`` (for the api_usage row) and
+    ``token_id`` (for the dispatch lookup) from the request context.
+    Two distinct concerns: agent_id is the durable identity for the
+    audit/usage row; token_id binds to the specific dispatch context
+    the call landed inside (or no dispatch, for OAuth callers — see
+    handler docstring for the three caller paths).
+    """
+
+    @mcp.tool(
+        name="record_api_call",
+        description=(
+            "Record an Anthropic API call's token usage. Inserts an "
+            "api_usage row with caller_agent_id, model, token counts, "
+            "and computed cost_usd. When the caller is bound to an "
+            "active (non-terminal) dispatch, atomically increments "
+            "dispatches.actual_tokens by input_tokens + output_tokens. "
+            "Allowed for all four agents (PM, Engineer, Implementer, "
+            "Tester)."
+        ),
+    )
+    async def _record_api_call(
+        model: str,
+        input_tokens: int,
+        output_tokens: int,
+        task_id: str | None = None,
+    ) -> RecordApiCallOutput:
+        agent_id = _resolve_agent_id()
+        await _record_caller_activity(storage, "record_api_call")
+        token_id = _resolve_caller_token_id()
+        return await record_api_call(
+            storage=storage,
+            request=RecordApiCallInput(
+                model=model,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                task_id=task_id,
+            ),
+            caller_agent_id=agent_id,
+            caller_token_id=token_id,
         )
 
 
