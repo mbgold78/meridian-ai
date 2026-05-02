@@ -11,10 +11,22 @@ M5-record-api-call ships the writer surface:
 - :func:`_compute_cost_usd` — pure function over (model, input_tokens,
   output_tokens) returning the API-tier-equivalent cost in USD.
 
-Downstream M5-oauth-usage-poller-and-get-window-state ships the
-snapshot consumers (``get_token_usage``, ``get_burn_rate``,
-``get_window_state``, ``check_budget_for_task``). They land in this
-same module when their sub-milestone arrives.
+Downstream sub-milestones add the snapshot consumers in two waves:
+
+- **M5-pm-mode-and-window-state** ships ``get_window_state`` (a thin
+  pass-through over the daemon's polled ``/api/oauth/usage`` snapshot;
+  per-bucket utilization queries, no aggregation against ``api_usage``
+  rows).
+- **M5-subscription-routing** ships ``get_token_usage``,
+  ``get_burn_rate``, and ``check_budget_for_task`` (per-counter
+  aggregation that joins ``api_usage`` data against the polled
+  snapshot's bucket boundaries at query time).
+
+The wave split is deliberate — ``get_window_state`` only needs the
+poller's cache; the aggregation tools need both the cache and the
+``api_usage`` writer's data. Keeping them in separate sub-milestones
+lets the simpler tool ship and start producing operational signal
+before the aggregation logic lands.
 
 **Cost model**: ``cost_usd`` is the **API-tier-equivalent cost** — what
 this call would have cost at per-token API pricing — not actual

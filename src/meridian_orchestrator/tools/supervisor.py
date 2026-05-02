@@ -9,7 +9,7 @@ arrive at M5; future supervisor-lifecycle tools land here too.
 Currently ships:
 
 - :func:`signal_compaction` — Engineer-only. Engineer calls this when its
-  iteration-boundary check (M5: ``get_window_state(bucket='premium') >= 80%``)
+  iteration-boundary check (M5: ``get_window_state(bucket='subscription_5h') >= 80%``)
   decides compaction is appropriate. Sets the in-process
   ``_compaction_pending`` flag on the resolved supervisor; Engineer's
   subprocess is expected to exit cleanly afterward. The watchdog observes
@@ -53,7 +53,7 @@ class SignalCompactionInput(BaseModel):
             "Bucket utilization (0.0-1.0) at decision time, or NULL if "
             "Engineer is using the M4c test-fixture path (no real "
             "threshold check). At M5+ this is the get_window_state-derived "
-            "premium-bucket utilization."
+            "subscription_5h utilization."
         ),
     )
 
