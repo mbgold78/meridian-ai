@@ -50,6 +50,27 @@ Current addenda:
 
 Long form of the rules is in `01-context.md` and the PM system prompt in `07-agent-configs-phase-one.md`.
 
+## Sub-milestone closeouts
+
+When a sub-milestone in M3-M7's chain closes, the close review writes a canonical artifact at `../closeouts/<sub-milestone-slug>.md` (e.g., `../closeouts/M5-subscription-routing.md`). The closeout is the **chain-wide retrospective** for that sub-milestone — distinct from the per-commit prep dispositions that surface during the build.
+
+Convention (one doc per sub-milestone, naming by sub-milestone slug):
+
+- **Chain summary** — commits, hashes, test count trajectory, line counts.
+- **Spec amendments shipped** — cross-references to commits.
+- **Migrations shipped** — version + commit + brief description.
+- **New cross-layer single-source-of-truth instances** — constants / helpers compounded during the chain.
+- **Watch-for-pattern outcomes** — threshold-of-three resolutions, new patterns at 1-2 instances.
+- **Codex finding status** — when a code-review pass ingests findings; track their disposition.
+- **Lineage notes for future-Claude** — non-obvious reasoning that wouldn't surface from cold-reading the code.
+- **Address-now items routed forward** — explicit list with status (resolved during chain / BACKLOG'd / still deferred).
+- **Drift-detection scan** — output of the spec-amendment-runtime-drift scan (empty-scan acknowledgement is its own signal).
+- **Drift between kickoff scope and landed scope** — anything that diverged.
+- **Discipline-pattern observations** — patterns reinforced or surfaced during the chain.
+- **What's next** — pointer to remaining sub-milestones in the parent milestone.
+
+The closeout artifact is the answer to "if I read this chain cold six months from now, what do I need to know?" — the prep checkpoints answer "what should we do next." Pair, not substitute.
+
 ## What this package is *not*
 
 - A user manual. End-user docs live in the top-level `README.md` (authored at M1, refined at M7).

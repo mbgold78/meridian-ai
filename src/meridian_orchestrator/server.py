@@ -470,8 +470,9 @@ def _register_budget_tools(
 
     Ships ``record_api_call`` (M5-record-api-call commit 4),
     ``get_token_usage`` and ``get_burn_rate`` (M5-subscription-routing
-    commit 2). ``check_budget_for_task`` lands at M5-subscription-
-    routing commit 4. ``get_window_state`` lives in
+    commit 2), and ``check_budget_for_task`` (M5-subscription-routing
+    commit 5; the pure routing function it wraps landed at commit 4
+    of the same sub-milestone). ``get_window_state`` lives in
     :func:`_register_window_state_tools` because that helper was
     introduced before this one acquired a snapshot dependency; the
     two helpers may merge in a future hygiene commit.

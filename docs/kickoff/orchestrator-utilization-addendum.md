@@ -344,3 +344,9 @@ If utilization runs lower than expected during the substrate closeout phase, PM 
 Update the affected documents per the changes above, then present the diff for Mike's review. After Mike approves, M1 may proceed (or continue if M1 has already started — this addendum touches M3-M7, M1-M2 are unaffected).
 
 End of addendum.
+
+---
+
+## Implementation status
+
+The addendum's architectural commitments land in M3-M7 sub-milestones. Sub-milestone close reviews under `docs/closeouts/` are the canonical retrospective for each chain. As of M5-subscription-routing's close, the routing layer (`record_api_call`, `get_token_usage`, `get_burn_rate`, `check_budget_for_task`), the OAuth usage poller (M5-pm-mode-and-window-state), and the per-bucket attribution model are all shipped. See `docs/closeouts/M5-subscription-routing.md` for chain summary.

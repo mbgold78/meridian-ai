@@ -42,6 +42,7 @@ mcp_tools_allowed:
   - get_token_usage
   - get_burn_rate
   - record_api_call
+  - check_budget_for_task
   - get_window_state
   - set_pm_mode
   - get_utilization_report
