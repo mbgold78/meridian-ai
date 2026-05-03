@@ -139,6 +139,7 @@ async def test_record_api_call_inserts_api_usage_row(
             task_id="task-1",
         ),
         caller_agent_id="agent-1",
+        caller_agent_role="implementer",
         caller_token_id=issued.record.token_id,
     )
 
@@ -188,6 +189,7 @@ async def test_record_api_call_increments_dispatches_actual_tokens(
             output_tokens=500,
         ),
         caller_agent_id="agent-2",
+        caller_agent_role="implementer",
         caller_token_id=issued.record.token_id,
     )
 
@@ -223,6 +225,7 @@ async def test_record_api_call_cumulative_increment(
                 output_tokens=tokens[1],
             ),
             caller_agent_id="agent-3",
+            caller_agent_role="tester",
             caller_token_id=issued.record.token_id,
         )
 
@@ -257,6 +260,7 @@ async def test_record_api_call_oauth_caller_no_dispatch_update(
             output_tokens=5000,
         ),
         caller_agent_id="pm-agent-id",
+        caller_agent_role="pm",
         caller_token_id=fake_oauth_token_id,
     )
 
@@ -304,6 +308,7 @@ async def test_record_api_call_terminal_dispatch_no_increment(
             model="claude-sonnet-4-6", input_tokens=100, output_tokens=50
         ),
         caller_agent_id="agent-4",
+        caller_agent_role="implementer",
         caller_token_id=issued.record.token_id,
     )
 
@@ -348,6 +353,7 @@ async def test_record_api_call_writes_audit_row(
             model="claude-sonnet-4-6", input_tokens=1000, output_tokens=500
         ),
         caller_agent_id="agent-5",
+        caller_agent_role="implementer",
         caller_token_id=issued.record.token_id,
     )
 
@@ -382,6 +388,7 @@ async def test_record_api_call_audit_target_null_for_oauth_caller(
             model="claude-opus-4-7", input_tokens=500, output_tokens=200
         ),
         caller_agent_id="pm-agent-id",
+        caller_agent_role="pm",
         caller_token_id="oauth-no-dispatch-token",
     )
 
@@ -416,6 +423,7 @@ async def test_record_api_call_unknown_model_writes_null_cost(
             output_tokens=500,
         ),
         caller_agent_id="agent-6",
+        caller_agent_role="implementer",
         caller_token_id="some-token",
     )
 
@@ -505,6 +513,7 @@ async def test_record_api_call_rolls_back_insert_on_update_failure(
                 output_tokens=500,
             ),
             caller_agent_id="agent-7",
+            caller_agent_role="implementer",
             caller_token_id=issued.record.token_id,
         )
 
@@ -616,6 +625,7 @@ async def test_audit_target_dispatch_id_emitted_for_no_op_update(
             output_tokens=250,
         ),
         caller_agent_id="agent-7",
+        caller_agent_role="implementer",
         caller_token_id=issued.record.token_id,
     )
 
@@ -669,3 +679,153 @@ async def test_audit_target_dispatch_id_emitted_for_no_op_update(
         "audit details_json.dispatch_id should match target; both are "
         "captured from the SELECT-time resolution."
     )
+
+
+# ---------------------------------------------------------------------------
+# Observability tier-1 columns (M5-subscription-routing commit 1)
+# ---------------------------------------------------------------------------
+
+
+async def test_record_api_call_auto_populates_agent_role(
+    storage: SqliteStorage,
+) -> None:
+    """``agent_role`` is auto-populated server-side from the wrapper-
+    resolved caller role. Every api_usage row has the cohort dimension
+    from day 1 — no NULL agent_role rows accumulate, no agent burden
+    on the writer side.
+    """
+    out = await record_api_call(
+        storage=storage,
+        request=RecordApiCallInput(
+            model="claude-sonnet-4-6", input_tokens=100, output_tokens=50
+        ),
+        caller_agent_id="agent-1",
+        caller_agent_role="engineer",
+        caller_token_id="some-engineer-token",
+    )
+    row = await storage.fetch_one(
+        "SELECT agent_role FROM api_usage WHERE id = ?", (out.usage_id,)
+    )
+    assert row is not None
+    assert row["agent_role"] == "engineer", (
+        f"agent_role={row['agent_role']!r}, expected 'engineer'. "
+        "agent_role auto-population from caller_agent_role parameter "
+        "regressed; query-side cohort aggregation by role will see "
+        "NULL or stale values."
+    )
+
+
+async def test_record_api_call_observability_columns_default_null(
+    storage: SqliteStorage,
+) -> None:
+    """When the caller doesn't supply ``notes`` / ``workflow_id`` /
+    ``task_type``, those columns persist as NULL. Optional fields stay
+    optional — no implicit defaulting that would hide missing-tag rows
+    at query time.
+    """
+    out = await record_api_call(
+        storage=storage,
+        request=RecordApiCallInput(
+            model="claude-sonnet-4-6", input_tokens=100, output_tokens=50
+        ),
+        caller_agent_id="agent-1",
+        caller_agent_role="implementer",
+        caller_token_id="some-token",
+    )
+    row = await storage.fetch_one(
+        "SELECT notes, workflow_id, task_type FROM api_usage WHERE id = ?",
+        (out.usage_id,),
+    )
+    assert row is not None
+    assert row["notes"] is None
+    assert row["workflow_id"] is None
+    assert row["task_type"] is None
+
+    # Audit details_json round-trip for the NULL-default case: all four
+    # observability keys appear in the audit dict regardless of whether
+    # the caller supplied them. notes/workflow_id/task_type serialize as
+    # JSON null and round-trip to Python None; agent_role is always
+    # populated from caller_agent_role (wrapper-resolved). Without this
+    # assertion, a future refactor that conditionally omits the keys
+    # would leave M6 get_audit_log readers seeing an inconsistent shape
+    # depending on whether the caller tagged the call or not.
+    audits = await storage.fetch_all(
+        "SELECT details_json FROM audit_log WHERE action = 'api.record_call'"
+    )
+    assert len(audits) == 1
+    details = json.loads(audits[0]["details_json"])
+    assert details["notes"] is None
+    assert details["workflow_id"] is None
+    assert details["task_type"] is None
+    assert details["agent_role"] == "implementer"
+
+
+async def test_record_api_call_writes_observability_columns_when_provided(
+    storage: SqliteStorage,
+) -> None:
+    """All three optional cohort fields round-trip from
+    RecordApiCallInput to the api_usage row when the caller supplies
+    them. Verifies the wiring through the INSERT statement; absence of
+    this test would let a future commit drop one of the columns from
+    the VALUES list silently.
+    """
+    out = await record_api_call(
+        storage=storage,
+        request=RecordApiCallInput(
+            model="claude-sonnet-4-6",
+            input_tokens=100,
+            output_tokens=50,
+            notes="exploring substrate sub-task decomposition",
+            workflow_id="wf-substrate-pivot-2026-05",
+            task_type="planning",
+        ),
+        caller_agent_id="agent-2",
+        caller_agent_role="pm",
+        caller_token_id="some-pm-token",
+    )
+    row = await storage.fetch_one(
+        "SELECT notes, workflow_id, agent_role, task_type "
+        "FROM api_usage WHERE id = ?",
+        (out.usage_id,),
+    )
+    assert row is not None
+    assert row["notes"] == "exploring substrate sub-task decomposition"
+    assert row["workflow_id"] == "wf-substrate-pivot-2026-05"
+    assert row["agent_role"] == "pm"
+    assert row["task_type"] == "planning"
+
+
+async def test_record_api_call_audit_details_include_observability_fields(
+    storage: SqliteStorage,
+) -> None:
+    """audit_log details_json carries the four observability columns so
+    M6 ``get_audit_log`` consumers (and the post-hoc cost-interrogation
+    queries described in BACKLOG § Observability roadmap) can join
+    audit history with cohort context. Without this assertion, a future
+    refactor that drops the fields from the audit dict would silently
+    break that downstream join.
+    """
+    out = await record_api_call(
+        storage=storage,
+        request=RecordApiCallInput(
+            model="claude-opus-4-7",
+            input_tokens=200,
+            output_tokens=80,
+            notes="audit-test annotation",
+            workflow_id="wf-audit-test",
+            task_type="research",
+        ),
+        caller_agent_id="agent-3",
+        caller_agent_role="engineer",
+        caller_token_id="some-engineer-token",
+    )
+    audits = await storage.fetch_all(
+        "SELECT details_json FROM audit_log WHERE action = 'api.record_call'"
+    )
+    assert len(audits) == 1
+    details = json.loads(audits[0]["details_json"])
+    assert details["usage_id"] == out.usage_id
+    assert details["notes"] == "audit-test annotation"
+    assert details["workflow_id"] == "wf-audit-test"
+    assert details["agent_role"] == "engineer"
+    assert details["task_type"] == "research"

@@ -11,6 +11,14 @@ M5-record-api-call ships the writer surface:
 - :func:`_compute_cost_usd` — pure function over (model, input_tokens,
   output_tokens) returning the API-tier-equivalent cost in USD.
 
+M5-subscription-routing extends the writer with tier-1 cost-interrogation
+observability per ``BACKLOG.md`` § Observability roadmap. Four columns
+on ``api_usage`` capture cohort dimensions for later baseline derivation:
+``notes`` (agent self-annotation), ``workflow_id`` and ``task_type``
+(cohort keys; population protocol deferred per BACKLOG), ``agent_role``
+(denormalized from caller; auto-populated server-side from the
+caller's resolved role so every row has the dimension from day 1).
+
 Downstream sub-milestones add the snapshot consumers in two waves:
 
 - **M5-pm-mode-and-window-state** ships ``get_window_state`` (a thin
@@ -126,12 +134,31 @@ class RecordApiCallInput(BaseModel):
     has **no ``bucket`` field** — per-bucket attribution is daemon-
     side query-time derivation from ``model`` + the polled
     ``/api/oauth/usage`` snapshot, not subprocess self-report.
+
+    Tier-1 cost-interrogation observability fields (``notes``,
+    ``workflow_id``, ``task_type``) are optional per BACKLOG §
+    Observability roadmap. ``agent_role`` is **not** an input field —
+    it's auto-populated server-side from the caller's resolved role
+    so every row has the dimension from day 1 without agent burden.
+
+    ``agent_role`` resolution timing is **call-time, not token-mint
+    cached.** The wrapper's ``_resolve_caller_role_via_token`` reads
+    ``access.scopes`` on every request; OAuth's
+    ``_record_to_access_token`` reads ``record.role`` from the live
+    keyring on every validation. A role change in the keyring would
+    propagate to subsequent calls immediately rather than waiting for
+    token re-issuance. Phase 1 has no role-update flow, so the
+    dynamic-vs-cached distinction is moot today; the call-time
+    semantics are the more correct shape.
     """
 
     model: str
     input_tokens: int = Field(ge=0)
     output_tokens: int = Field(ge=0)
     task_id: str | None = None
+    notes: str | None = None
+    workflow_id: str | None = None
+    task_type: str | None = None
 
 
 class RecordApiCallOutput(BaseModel):
@@ -184,6 +211,7 @@ async def record_api_call(
     storage: Storage,
     request: RecordApiCallInput,
     caller_agent_id: str,
+    caller_agent_role: str,
     caller_token_id: str,
 ) -> RecordApiCallOutput:
     """Insert an ``api_usage`` row and (when the caller is bound to a
@@ -192,10 +220,18 @@ async def record_api_call(
 
     Args:
         storage: Storage handle.
-        request: Validated input — model, token counts, optional task_id.
+        request: Validated input — model, token counts, optional task_id,
+            optional observability tier-1 fields (``notes``,
+            ``workflow_id``, ``task_type``).
         caller_agent_id: Resolved at the wrapper layer from the auth
             token's client_id. Stored on the ``api_usage`` row's
             ``agent_id`` column.
+        caller_agent_role: Resolved at the wrapper layer via
+            :func:`server._resolve_caller_role_via_token`. Stored
+            denormalized on the ``api_usage`` row's ``agent_role``
+            column for cohort aggregation without a JOIN. Auto-
+            populated server-side so every row has this dimension
+            from day 1.
         caller_token_id: The token_id (short hex prefix) parsed from
             the auth bearer at the wrapper layer. Used to look up the
             caller's active dispatch row, mirror of
@@ -270,8 +306,9 @@ async def record_api_call(
         await storage.execute(
             "INSERT INTO api_usage "
             "(id, agent_id, model, input_tokens, output_tokens, cost_usd, "
-            "task_id, window_start) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "task_id, window_start, notes, workflow_id, agent_role, "
+            "task_type) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 usage_id,
                 caller_agent_id,
@@ -281,6 +318,10 @@ async def record_api_call(
                 cost_usd,
                 request.task_id,
                 window_start,
+                request.notes,
+                request.workflow_id,
+                caller_agent_role,
+                request.task_type,
             ),
         )
 
@@ -325,6 +366,10 @@ async def record_api_call(
                 "cost_usd": cost_usd,
                 "task_id": request.task_id,
                 "dispatch_id": dispatch_id,
+                "notes": request.notes,
+                "workflow_id": request.workflow_id,
+                "agent_role": caller_agent_role,
+                "task_type": request.task_type,
             },
         )
 

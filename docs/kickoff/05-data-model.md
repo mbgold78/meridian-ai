@@ -81,6 +81,14 @@ CREATE INDEX idx_api_usage_agent ON api_usage(agent_id);
 -- Per-bucket attribution is query-time derivation from `model` plus the
 -- daemon's polled `/api/oauth/usage` snapshot per
 -- `project_subscription_first_architecture` memory. No bucket column.
+--
+-- Tier-1 cost-interrogation observability columns (`notes`, `workflow_id`,
+-- `agent_role`, `task_type`) ship at M5-subscription-routing in
+-- `0009_observability_cost_tier1.sql` per `BACKLOG.md` § Observability
+-- roadmap. `agent_role` is auto-populated server-side from the caller's
+-- resolved role; the others are optional caller-supplied cohort tags.
+-- Indexes `idx_api_usage_workflow` and `idx_api_usage_role_type` ride
+-- along.
 
 CREATE TABLE audit_log (
     id TEXT PRIMARY KEY,
@@ -289,6 +297,7 @@ Phase 1 migration plan:
 | `0005_dispatches.sql` | M4 | `dispatches` table per `11-engineer-bridge.md` § Storage shape; multi-per-task dispatch lifecycle tracking |
 | `0003_pm_mode.sql` | M5 | `pm_mode_log` table + `idx_pm_mode_timestamp` |
 | `0004_notifications.sql` | M6 | `inbound_messages`, `outbound_messages`, plus partial indexes |
+| `0009_observability_cost_tier1.sql` | M5 | `api_usage` cohort columns (`notes`, `workflow_id`, `agent_role`, `task_type`) + indexes (`idx_api_usage_workflow`, `idx_api_usage_role_type`) per `BACKLOG.md` § Observability roadmap |
 
 No `bucket` column ships in `api_usage`. The premium-first cost model superseded by the subscription-first architecture (Experiment 4, 2026-05-01) drops per-call bucket attribution from the schema in favor of query-time derivation from `model` plus the daemon's polled `/api/oauth/usage` snapshot. See `project_subscription_first_architecture` memory.
 

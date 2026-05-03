@@ -19,11 +19,12 @@ from meridian_orchestrator.storage.sqlite import SqliteStorage
 #   0006_dispatches_last_tool_called.sql      (M4c-supervisor-base)
 #   0007_dispatches_task_id_nullable.sql      (M4c-supervisor-base)
 #   0008_dispatches_status_check.sql          (M4c-compaction)
+#   0009_observability_cost_tier1.sql         (M5-subscription-routing)
 # Reservation gap remaining: 0004 reserved for inbound_messages +
 # outbound_messages (Telegram notifications); milestone-attribution
 # pending resolution between data-model.md (M6) and the M5 sub-milestone
 # breakdown memory (M5-telegram-foundation).
-EXPECTED_VERSIONS = [1, 2, 3, 5, 6, 7, 8]
+EXPECTED_VERSIONS = [1, 2, 3, 5, 6, 7, 8, 9]
 
 
 @pytest_asyncio.fixture
@@ -96,6 +97,9 @@ async def test_indexes_created(storage: SqliteStorage) -> None:
         "idx_dispatches_status",
         "idx_dispatches_role_status",
         "idx_dispatches_role_completed",
+        # 0009 — observability tier-1 cohort indexes on api_usage
+        "idx_api_usage_workflow",
+        "idx_api_usage_role_type",
     }
     missing = expected - index_names
     assert not missing, f"Missing indexes: {missing}"
@@ -301,3 +305,32 @@ async def test_pm_mode_timestamp_default_populates_on_insert(
     assert row["timestamp"] is not None
     # SQLite datetime('now') format: 'YYYY-MM-DD HH:MM:SS'.
     assert len(row["timestamp"]) >= 19
+
+
+async def test_api_usage_has_observability_tier1_columns(
+    storage: SqliteStorage,
+) -> None:
+    """0009_observability_cost_tier1.sql adds notes, workflow_id,
+    agent_role, task_type to api_usage. Tier-1 cost-interrogation
+    cohort dimensions per BACKLOG § Observability roadmap.
+
+    All four columns are nullable (no NOT NULL, no DEFAULT). Existing
+    rows from before the migration remain NULL on agent_role until a
+    future hygiene-commit backfill — not load-bearing for routing.
+    """
+    await run_migrations(storage)
+    cols = await storage.fetch_all("PRAGMA table_info(api_usage)")
+    by_name = {c["name"]: c for c in cols}
+
+    for col in ("notes", "workflow_id", "agent_role", "task_type"):
+        assert col in by_name, (
+            f"api_usage column {col!r} missing after 0009 migration. "
+            "BACKLOG § Observability roadmap tier-1 cost-interrogation "
+            "scaffolding (cohort keys + agent self-annotation) needs "
+            "this column to exist for downstream cohort aggregation."
+        )
+        assert by_name[col]["notnull"] == 0, (
+            f"api_usage.{col} marked NOT NULL; the migration ships "
+            "these columns nullable so pre-migration rows remain valid "
+            "and so optional-input fields default to NULL."
+        )

@@ -480,8 +480,11 @@ def _register_budget_tools(
             "and computed cost_usd. When the caller is bound to an "
             "active (non-terminal) dispatch, atomically increments "
             "dispatches.actual_tokens by input_tokens + output_tokens. "
-            "Allowed for all four agents (PM, Engineer, Implementer, "
-            "Tester)."
+            "Optional cost-interrogation observability fields (notes, "
+            "workflow_id, task_type) ride along when the caller "
+            "supplies them. agent_role is auto-populated server-side "
+            "from the caller's resolved role. Allowed for all four "
+            "agents (PM, Engineer, Implementer, Tester)."
         ),
     )
     async def _record_api_call(
@@ -489,10 +492,14 @@ def _register_budget_tools(
         input_tokens: int,
         output_tokens: int,
         task_id: str | None = None,
+        notes: str | None = None,
+        workflow_id: str | None = None,
+        task_type: str | None = None,
     ) -> RecordApiCallOutput:
         agent_id = _resolve_agent_id()
         await _observe_caller(storage, token_store,"record_api_call")
         token_id = _resolve_caller_token_id()
+        caller_role = _resolve_caller_role_via_token()
         return await record_api_call(
             storage=storage,
             request=RecordApiCallInput(
@@ -500,8 +507,12 @@ def _register_budget_tools(
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 task_id=task_id,
+                notes=notes,
+                workflow_id=workflow_id,
+                task_type=task_type,
             ),
             caller_agent_id=agent_id,
+            caller_agent_role=caller_role,
             caller_token_id=token_id,
         )
 

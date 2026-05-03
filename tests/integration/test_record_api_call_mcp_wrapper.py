@@ -142,6 +142,9 @@ async def _call_record_api_call(
     input_tokens: int,
     output_tokens: int,
     task_id: str | None = None,
+    notes: str | None = None,
+    workflow_id: str | None = None,
+    task_type: str | None = None,
 ) -> object:
     url = f"{base_url}/mcp"
     args: dict[str, object] = {
@@ -151,6 +154,12 @@ async def _call_record_api_call(
     }
     if task_id is not None:
         args["task_id"] = task_id
+    if notes is not None:
+        args["notes"] = notes
+    if workflow_id is not None:
+        args["workflow_id"] = workflow_id
+    if task_type is not None:
+        args["task_type"] = task_type
     headers = {"Authorization": f"Bearer {token}"}
     async with (
         streamablehttp_client(url, headers=headers) as (read, write, _),
@@ -494,3 +503,98 @@ async def test_oauth_caller_no_dispatch_match_inserts_only(
     )
     assert len(audits) == 1
     assert audits[0]["target"] is None
+
+
+# ---------------------------------------------------------------------------
+# Observability tier-1 roundtrip through the live wrapper
+# ---------------------------------------------------------------------------
+
+
+async def test_wrapper_resolves_agent_role_from_oauth_scope(
+    settings: Settings, storage: SqliteStorage
+) -> None:
+    """End-to-end: the wrapper resolves the caller's role from the
+    access token's OAuth scope (``role:<role>``) and writes it to
+    ``api_usage.agent_role``. This test exercises the auto-population
+    path that direct-handler tests cannot reach (those pass
+    ``caller_agent_role`` explicitly).
+
+    Failure means a future commit either dropped the
+    ``_resolve_caller_role_via_token`` call from the wrapper, broke
+    the OAuth scope-to-role mapping in ``oauth.py``, or stopped
+    threading ``caller_agent_role`` into the handler — any of which
+    breaks the tier-1 cohort dimension's day-1 population guarantee.
+    """
+    issued = await _issue_role_token(storage, "engineer", "wrapper-role-test")
+    base_url = f"http://{settings.mcp_host}:{settings.mcp_port}"
+
+    async with _running_server(settings, storage):
+        result = await _call_record_api_call(
+            base_url=base_url,
+            token=issued.token,
+            model="claude-sonnet-4-6",
+            input_tokens=100,
+            output_tokens=50,
+        )
+
+    assert getattr(result, "isError", False) is False, (
+        f"record_api_call wrapper returned an error: "
+        f"{getattr(result, 'content', None)!r}"
+    )
+    out = _structured(result)
+    usage_id = out["usage_id"]
+
+    row = await storage.fetch_one(
+        "SELECT agent_role FROM api_usage WHERE id = ?", (usage_id,)
+    )
+    assert row is not None
+    assert row["agent_role"] == "engineer", (
+        f"agent_role={row['agent_role']!r}, expected 'engineer'. "
+        "The wrapper-layer resolution from OAuth scope to "
+        "caller_agent_role regressed; api_usage rows from this caller "
+        "will lose their cohort-dimension role tag."
+    )
+
+
+async def test_wrapper_observability_fields_round_trip_through_wire(
+    settings: Settings, storage: SqliteStorage
+) -> None:
+    """Optional observability tier-1 inputs (``notes``, ``workflow_id``,
+    ``task_type``) supplied at the MCP-wire layer land on the
+    ``api_usage`` row. Verifies the wrapper threads each kwarg through
+    ``RecordApiCallInput`` rather than dropping any silently — a
+    typo in the wrapper signature (e.g., misnamed argument) would
+    fail this test informatively.
+    """
+    issued = await _issue_role_token(storage, "pm", "wrapper-obs-test")
+    base_url = f"http://{settings.mcp_host}:{settings.mcp_port}"
+
+    async with _running_server(settings, storage):
+        result = await _call_record_api_call(
+            base_url=base_url,
+            token=issued.token,
+            model="claude-opus-4-7",
+            input_tokens=120,
+            output_tokens=60,
+            notes="planning Q3 substrate sub-task split",
+            workflow_id="wf-substrate-pivot-2026-05",
+            task_type="planning",
+        )
+
+    assert getattr(result, "isError", False) is False, (
+        f"record_api_call wrapper returned an error: "
+        f"{getattr(result, 'content', None)!r}"
+    )
+    out = _structured(result)
+    usage_id = out["usage_id"]
+
+    row = await storage.fetch_one(
+        "SELECT notes, workflow_id, task_type, agent_role "
+        "FROM api_usage WHERE id = ?",
+        (usage_id,),
+    )
+    assert row is not None
+    assert row["notes"] == "planning Q3 substrate sub-task split"
+    assert row["workflow_id"] == "wf-substrate-pivot-2026-05"
+    assert row["task_type"] == "planning"
+    assert row["agent_role"] == "pm"

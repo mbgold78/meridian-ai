@@ -136,13 +136,16 @@ class RecordApiCallInput(BaseModel):
     input_tokens: int
     output_tokens: int
     task_id: str | None = None                                      # the task this call was for
+    notes: str | None = None                                        # free-form agent self-annotation (observability tier-1)
+    workflow_id: str | None = None                                  # cohort key — population protocol deferred (BACKLOG)
+    task_type: str | None = None                                    # cohort key — population protocol deferred (BACKLOG)
 
 class RecordApiCallOutput(BaseModel):
     usage_id: str
     window_start: str
 ```
 
-`agent_id` is taken from the auth token, not the input. `cost_usd` is computed server-side from a model→price table maintained in `tools/budget.py`.
+`agent_id` is taken from the auth token, not the input. `cost_usd` is computed server-side from a model→price table maintained in `tools/budget.py`. `agent_role` is **not** an input field — it's auto-populated server-side from the caller's resolved role (per Q6α at M5-subscription-routing prep) and stored on the `api_usage` row's `agent_role` column for cohort aggregation. The four observability fields (`notes`, `workflow_id`, `agent_role`, `task_type`) are tier-1 cost-interrogation scaffolding per `BACKLOG.md` § Observability roadmap; `notes` / `workflow_id` / `task_type` are optional caller-supplied tags that default to NULL when not provided.
 
 Per-bucket attribution is **query-time derivation**, not a stored field. The daemon polls `https://api.anthropic.com/api/oauth/usage` (`anthropic-beta: oauth-2025-04-20`) at 30s cadence and aggregates against the cached snapshot at query time in `get_token_usage` and `get_utilization_report`. A single API call increments multiple counters simultaneously (e.g., a Sonnet call lands on `subscription_5h` AND `subscription_7d` AND `subscription_7d_sonnet`); per-bucket aggregation is derived from `model` plus the snapshot rather than stamped at write time. See `project_subscription_first_architecture` memory.
 
