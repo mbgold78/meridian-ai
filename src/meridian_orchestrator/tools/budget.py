@@ -1894,6 +1894,60 @@ def _compute_routing(
     )
 
 
+async def check_budget_for_task(
+    *,
+    request: CheckBudgetForTaskInput,
+    snapshot: CachedSnapshot | None,
+    caller_role: str,
+    now: datetime,
+) -> CheckBudgetForTaskOutput:
+    """Public async handler for ``check_budget_for_task`` per
+    ``06-mcp-tools-phase-one.md`` § ``check_budget_for_task``.
+
+    Thin async wrapper over the pure :func:`_compute_routing`
+    decision function. Async signature matches the wrapper-pattern
+    convention used by the other budget tools (record_api_call,
+    get_token_usage, get_burn_rate); no I/O is performed —
+    ``_compute_routing`` is a pure decision function over the
+    supplied inputs (commit 4 disposition).
+
+    **Permission gate** per the spec permission table at
+    ``06-mcp-tools-phase-one.md:629`` (Mike/PM/Engineer permitted;
+    Implementer/Tester denied). The Implementer/Tester denial is
+    deliberate: only roles that originate work or dispatch sub-
+    agents need the budget signal; Implementer/Tester run with the
+    model Engineer chose at dispatch time and don't make their own
+    routing decisions.
+
+    **Observability via structlog DEBUG** (commit 5 disposition):
+    high-frequency read-only routing decisions don't warrant audit
+    log writes (spec: "Not audited"); the DEBUG trace surfaces
+    structured fields for tier-2 analysis when an operator turns up
+    log level. The architectural sub-amendment's
+    ``routing_factors`` field at the API boundary is the always-on
+    structured signal.
+    """
+    _require_role(caller_role, "pm", "engineer")
+    output = _compute_routing(
+        complexity=request.complexity,
+        priority=request.priority,
+        snapshot=snapshot,
+        caller_role=caller_role,
+        now=now,
+    )
+    logger.debug(
+        "check_budget_for_task.decision",
+        complexity=request.complexity,
+        priority=request.priority,
+        caller_role=caller_role,
+        recommended_model=output.recommended_model,
+        recommended_bucket=output.recommended_bucket,
+        fallback_active=output.fallback_active,
+        routing_factors=output.routing_factors,
+    )
+    return output
+
+
 def _build_rationale_text(
     *,
     is_fallback: bool,
@@ -1984,6 +2038,7 @@ __all__ = [
     "TokenUsageBreakdown",
     "WindowLiteral",
     "WindowResolutionFallback",
+    "check_budget_for_task",
     "get_burn_rate",
     "get_token_usage",
     "get_window_state",

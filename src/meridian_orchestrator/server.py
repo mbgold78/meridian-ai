@@ -67,6 +67,8 @@ from meridian_orchestrator.tools.agents import (
 )
 from meridian_orchestrator.tools.budget import (
     BurnRateWindowLiteral,
+    CheckBudgetForTaskInput,
+    CheckBudgetForTaskOutput,
     GetBurnRateInput,
     GetBurnRateOutput,
     GetTokenUsageInput,
@@ -77,6 +79,7 @@ from meridian_orchestrator.tools.budget import (
     RecordApiCallOutput,
     SnapshotProvider,
     WindowLiteral,
+    check_budget_for_task,
     get_burn_rate,
     get_token_usage,
     get_window_state,
@@ -601,6 +604,46 @@ def _register_budget_tools(
             get_snapshot=_snapshot_provider,
             request=GetBurnRateInput(window=window),
             caller_role=caller_role,
+        )
+
+    @mcp.tool(
+        name="check_budget_for_task",
+        description=(
+            "Routing decision for a pending task. Returns "
+            "recommended_model + recommended_bucket plus structured "
+            "routing_factors (queryable as data) + fallback_active "
+            "flag + rationale_text (human-readable summary). "
+            "Allowed for PM, Engineer, and Mike (via PM-OAuth) — "
+            "Implementer/Tester denied (their model is fixed by "
+            "Engineer at dispatch time; they don't choose models). "
+            "complexity and priority are 1..5; bounds enforced via "
+            "Pydantic. fallback_active=True surfaces when the OAuth "
+            "snapshot is unavailable (None / stale / malformed); "
+            "per-role defaults apply with no priority delta or Opus-"
+            "downgrade. Not audited (high-frequency read-only "
+            "decision); structlog DEBUG trace available for "
+            "operator deep-dive."
+        ),
+    )
+    async def _check_budget_for_task(
+        complexity: int,
+        priority: int,
+    ) -> CheckBudgetForTaskOutput:
+        _resolve_agent_id()
+        await _observe_caller(storage, token_store, "check_budget_for_task")
+        caller_role = _resolve_caller_role_via_token()
+        snapshot = _snapshot_provider()
+        # check_budget_for_task is async to match the wrapper-pattern
+        # convention but its body wraps the pure _compute_routing
+        # function (no I/O). Pydantic validates complexity/priority
+        # bounds via the CheckBudgetForTaskInput model construction.
+        return await check_budget_for_task(
+            request=CheckBudgetForTaskInput(
+                complexity=complexity, priority=priority
+            ),
+            snapshot=snapshot,
+            caller_role=caller_role,
+            now=datetime.now(tz=UTC),
         )
 
 

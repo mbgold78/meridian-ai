@@ -217,7 +217,7 @@ Stub in M5 — concrete routing logic refined as Mike observes the system run. S
 
 Tier defaults remain conservative (Sonnet for Engineer/Implementer/Tester) with priority-driven upgrades. The routing logic decides per-task; defaults are not blanket-upgraded to Opus.
 
-**Not audited.**
+**Not audited.** (Read-only routing decisions called on every planning iteration; structured `routing_factors` surface decisions at the API boundary, and structlog DEBUG-level traces are available for operator deep-dive without bloating audit_log.)
 
 ### Window state and PM mode (M5/M6)
 

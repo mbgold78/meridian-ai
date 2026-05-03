@@ -276,36 +276,37 @@ async def _run_lifespan_body(
             # operator hasn't configured the token. Logs once at
             # startup so the operator sees the intent and consequence
             # before discovering at query time that get_window_state
-            # always returns cold-start. Per Q1 disposition + Q7
-            # extended log body at commit 7 prep.
+            # always returns cold-start.
             #
-            # The body is intentionally hand-wavy on the downstream
-            # consumer behavior because 02-architecture.md:133's
-            # "routing logic degrades accordingly" defers to the
-            # not-yet-shipped M5-subscription-routing's design call.
-            # BACKLOG entry tracks tightening this log line once
-            # M5-subscription-routing pins the unknown-pace fallback
-            # behavior (halt-on-unknown vs fallback-to-defaults vs
-            # fallback-to-conservative).
+            # Body tightened at M5-subscription-routing commit 5 now
+            # that the unknown-pace fallback semantics are pinned at
+            # the routing layer (Q3 disposition β; commit 4's
+            # _is_snapshot_fully_parseable + fallback_per_role_defaults
+            # factor + fallback_active=True). The previous hand-wavy
+            # framing ("may include conservative defaults, halting, or
+            # operating without window awareness") is replaced with the
+            # exact behavior. Structured `fallback_behavior` field
+            # alongside the message lets structlog-grep find this state
+            # without parsing the message string.
             if settings.claude_code_oauth_token is None:
                 logger.info(
                     "oauth_usage_poller.skipped_no_token",
+                    fallback_behavior="per_role_defaults",
                     message=(
                         "CLAUDE_CODE_OAUTH_TOKEN not set; OAuth usage "
-                        "poller will not run. get_window_state will "
-                        "return cold-start (pace_recommendation="
-                        "'unknown') for all queries. Downstream "
-                        "consumers of get_window_state "
-                        "(M5-subscription-routing's "
-                        "check_budget_for_task, PM-continuous-mode "
-                        "pacing decisions) will follow their "
-                        "unknown-pace fallback rules — actual "
-                        "behavior depends on those tools' "
-                        "implementations and may include "
-                        "conservative defaults, halting, or "
-                        "operating without window awareness. Set "
-                        "CLAUDE_CODE_OAUTH_TOKEN and restart the "
-                        "daemon to enable window-aware decisions."
+                        "poller will not run. Routing falls back to "
+                        "per-role defaults (PM=Opus, "
+                        "Engineer/Implementer/Tester=Sonnet, no "
+                        "priority-driven upgrade or Opus-downgrade) "
+                        "until the token is set and a snapshot is "
+                        "available. fallback_active=True will surface "
+                        "in routing_factors on every "
+                        "check_budget_for_task call; "
+                        "get_window_state will return "
+                        "pace_recommendation='unknown' for all "
+                        "queries. Set CLAUDE_CODE_OAUTH_TOKEN and "
+                        "restart the daemon to enable budget-aware "
+                        "routing."
                     ),
                 )
             logger.info(
