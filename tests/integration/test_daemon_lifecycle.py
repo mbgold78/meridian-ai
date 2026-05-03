@@ -475,3 +475,118 @@ async def test_full_lifespan_shuts_down_poller_before_pm_supervisor(
         "removes one source of writes (ceiling-reached audit rows) "
         "during the rest of shutdown. Symmetric with start order."
     )
+
+
+# ---------------------------------------------------------------------------
+# Agents-table seeding production gap (M5-subscription-routing commit 0.5)
+# ---------------------------------------------------------------------------
+
+
+async def test_full_lifespan_seeds_agents_rows_before_serving_mcp(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Booting the lifespan against a fresh DB results in agents rows
+    populated before any MCP request can arrive. Closes Codex Finding 1
+    durably: prior to commit 0.5, the registry's docstring claimed to
+    seed the agents table but no production INSERT existed; record_api_call
+    would FK-fail on first invocation.
+
+    Production-shape test (per the integration-defects-need-production-
+    shape-tests memory): the registry is constructed, YAMLs loaded,
+    keyring tokens issued, and `seed_into_storage` runs through main.py's
+    actual lifespan path — not via direct handler call. A future commit
+    that drops the seed_into_storage call from main.py, or moves it
+    after mcp_task spawn, fails this test with the regression mode in
+    the failure message.
+
+    Operator workflow: in production the keyring tokens come from
+    `scripts/issue-token.py`. This test pre-issues them via TokenStore
+    so the registry's initial_load resolves the four roles' UUIDs.
+    Without those tokens, the registry logs unseeded warnings and the
+    snapshot is empty; the seed runs but inserts zero rows. (That state
+    is also valid — just means no agents are configured yet.)
+    """
+    from meridian_orchestrator.auth import TokenStore
+
+    settings = _make_settings_for_full_lifespan(
+        tmp_path, monkeypatch, oauth_token=None
+    )
+
+    # Pre-stage the canonical YAML configs at the runtime path.
+    # AgentRegistry reads from settings.agents_dir.
+    repo_config_dir = (
+        Path(__file__).resolve().parents[2] / "config" / "agents"
+    )
+    settings.agents_dir.mkdir(parents=True, exist_ok=True)
+    for role in ("pm", "engineer", "implementer", "tester"):
+        (settings.agents_dir / f"{role}.yaml").write_text(
+            (repo_config_dir / f"{role}.yaml").read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+
+    # Pre-issue keyring tokens for each role so the registry's
+    # initial_load resolves them to agent UUIDs. Without this, the
+    # snapshot is empty and the seed would no-op (still valid; just
+    # not what this test verifies).
+    store = TokenStore()
+    issued_by_role = {
+        role: store.issue(agent_id=None, role=role, label=f"{role}-lifecycle-test")
+        for role in ("pm", "engineer", "implementer", "tester")
+    }
+
+    try:
+        await _run_lifespan_briefly(settings)
+
+        # Re-open the DB post-lifespan to inspect the agents rows.
+        from meridian_orchestrator.storage.sqlite import SqliteStorage
+
+        storage = SqliteStorage(settings.db_path)
+        await storage.connect()
+        try:
+            rows = await storage.fetch_all(
+                "SELECT id, role, reports_to, company_id "
+                "FROM agents ORDER BY role"
+            )
+        finally:
+            await storage.close()
+
+        assert len(rows) == 4, (
+            f"agents rows post-lifespan: {len(rows)}, expected 4. The "
+            "seed_into_storage call in main.py's lifespan body is "
+            "missing or runs after mcp_task spawn — Codex Finding 1 "
+            "regression. record_api_call will FK-fail on first MCP "
+            "invocation in production."
+        )
+        by_role = {r["role"]: r for r in rows}
+        assert set(by_role.keys()) == {
+            "pm", "engineer", "implementer", "tester"
+        }
+        # Every row got the seeded company_id (non-null) — confirms
+        # seed_initial ran before seed_into_storage in the lifespan.
+        for r in rows:
+            assert r["company_id"], (
+                f"agents row for role={r['role']!r} has empty "
+                "company_id; seed_initial did not run before "
+                "seed_into_storage in the lifespan. Ordering "
+                "invariant broken."
+            )
+        # Each row's id matches the keyring-resolved UUID.
+        for role, r in by_role.items():
+            assert r["id"] == issued_by_role[role].record.agent_id
+
+        # Hierarchy resolution: PM reports_to NULL; engineer reports_to
+        # PM; impl/tester report_to engineer. Pass 2 of seed_into_storage
+        # ran successfully end-to-end through the lifespan.
+        pm_id = by_role["pm"]["id"]
+        engineer_id = by_role["engineer"]["id"]
+        assert by_role["pm"]["reports_to"] is None
+        assert by_role["engineer"]["reports_to"] == pm_id
+        assert by_role["implementer"]["reports_to"] == engineer_id
+        assert by_role["tester"]["reports_to"] == engineer_id
+    finally:
+        # Clean up keyring tokens so subsequent test runs don't see
+        # accumulated state. Each issued token is keyring-scoped; the
+        # default TokenStore service is shared across tests in this
+        # process.
+        for issued in issued_by_role.values():
+            store.revoke(issued.record.token_id)

@@ -23,6 +23,7 @@ Sketched in `docs/kickoff/12-phase-two-engineering-team.md`.
 - **Watch-for-pattern, not fix-now:** `bridge/` → `tools/` cross-layer imports. Two instances now: `bridge/activity.py` imports `PAUSED_MODES` (commit 5) and `read_current_pm_mode` (commit 6 — Q8 helper extraction) from `tools/pm_mode.py`. Reasoning was sound for both (single-source-of-truth value > cross-layer import cost; no cycle since `tools/pm_mode.py` doesn't import from `bridge/`). Two instances stay below the watch-pattern threshold. If a third `bridge` → `tools` import emerges across M5 sub-milestones, the layer split needs reconsidering — likely outcome would be a shared domain-types module (e.g., `bridge/pm_mode_types.py`) that both directories can import from. Don't pre-decide the destination; surface as a prep-checkpoint contradiction at the third instance.
 - Rename `tests/integration/test_tool_activity_writer.py` to a name that reflects its current scope. The file was originally scoped to the dispatches activity writer (`_record_caller_activity` → `record_mcp_call`); at M5-pm-mode-and-window-state commit 5 the helper was renamed to `_observe_caller` with broader fan-out (activity update + OAuth-PM auto-flip + transactional rollback). The filename now under-describes the file's coverage. Suggested target name: `test_observe_caller.py`. Mechanical rename; deferred to a hygiene commit to keep the renaming pass focused on the helper itself.
 - Phase 2 refinement to per-message freshness for the OAuth-PM auto-flip writer. Phase 1 (M5-pm-mode-and-window-state commit 5) ships transition-based approximation: `pm_mode_log` captures stretch-start, not per-message activity, per Reading B at the commit 5 prep. PM's continuous loop computes the interactive window as `now - most_recent_pm_mode_log_timestamp < 30min`. Self-corrects via PM's flip-back-to-continuous logic — heavy-chat Mike experiences periodic 30-min throttle cycles, not continuous throttling. Implement Phase 2 if operational data shows the approximation produces visible problems for sustained-chat scenarios. Implementation shape (Sub-Reading β at commit 5 prep): daemon-side in-memory `_last_oauth_pm_activity_at` cache, exposed via a new `get_window_state` output field (e.g., `last_oauth_pm_activity_seconds_ago: int | None`). Touchpoint: `bridge/activity.py:record_oauth_pm_auto_flip` (extend with cache update); `tools/budget.py:get_window_state` (extend output schema).
+- **Partial roster operation** (M5-subscription-routing commit 0.5): if a YAML's `reports_to` names a role whose token is missing from the keyring, that parent isn't in the registry's in-memory snapshot and `agents.seed_into_storage` sets `reports_to=NULL` for the dependent row rather than raising. `AgentRegistry.initial_load` already logs the unseeded-role warning; the seed reflects the partial roster faithfully in SQL. Behavior is deliberate, not silent failure — a future operator inspecting the agents table mid-roster (e.g., engineer YAML present but engineer token not yet issued) sees `implementer.reports_to=NULL` and `tester.reports_to=NULL`; that's the documented partial-roster shape. The next daemon restart with full keyring tokens issues the same UPSERT path and resolves `reports_to` to the parent's UUID. Touchpoint: `agents/registry.py:seed_into_storage`.
 - Web dashboard UI (Claude Code is the only Phase 1 operator interface)
 - Cloud deployment (architecture is cloud-portable but Phase 1 is local-only)
 - Multi-user support
@@ -40,3 +41,411 @@ Sketched in `docs/kickoff/12-phase-two-engineering-team.md`.
 - M3: Continuous-mode PM driver mechanism (rides on bridge decision)
 - M5: Concrete model routing logic in `check_budget_for_task` (stub at M5, refined as Mike observes)
 - M6: Whether to fold notification tables into earlier migrations if no production state exists at M6 start
+
+
+# Obeservability
+# Observability roadmap
+
+Three first-class observability concerns share underlying data capture but answer different questions at different cadences. Ship as one design surface (cross-cutting toggle/discoverability framework) with three concerns × three depth tiers; sequence the cells across M5 sub-milestones, M6, and beyond.
+
+This document is the canonical reference for the observability layer. The current design is documented first; the **Design lineage** section at the end records four rounds of critique-driven refinement so future sessions can audit what changed and why rather than silently regressing to earlier assumptions.
+
+---
+
+## Three concerns
+
+**1. Agent self-narration.** "What are you working on, when can I see something." Each agent maintains current-focus state at work-unit boundaries; queryable any time; ETA carries confidence tag (concrete / conditional / unknown-with-rationale); slippage surfaces explicitly (original + revised, not hidden). Forcing function: agents declare deliverables before starting, can't invent them post-hoc.
+
+**Narration is enforceable contract, not free-text description.** The `current_focus` state shape is a deliverable contract:
+- `objective` (what's being accomplished)
+- `output_type` (artifact / decision / analysis / etc.)
+- `acceptance_criteria` (how completion is verifiable)
+
+At work-unit completion, agent maps actual output → declared objective. Mismatch flagged in audit log as a finding, not silent. Converts narration from diary to commit log.
+
+**2. Runtime fitness.** "Is the daemon doing its job — filling capacity, contracting when idle, JIT not spinning, cross-validating internally." Per-agent liveness windows (alive vs. shutdown over time); context utilization (how much of each agent's context is in active use); spin-rationale annotation (why is this agent kept alive — queued work / Mike-presence / heartbeat-cheap / forgot-to-shutdown); OAuth-vs-local accounting cross-validation delta; queue-fitness metrics (claim latency by priority/role, idle time per agent). Surfaced inline in agent status reports, as findings in sub-milestone close reviews, and via on-demand query.
+
+**3. Cost interrogation.** "Did we spend too much, are prompts too broad, are personas doing too much on premium tokens, is there optimization across personas/tasks/models." Investigational not analytical — accessible raw data + ad-hoc query power, optional self-annotation by agents (free-text `notes` field on `api_usage`), no premature classification schema. Investigation tool is MCP query access to `api_usage` — no panel, no dashboard.
+
+**Baseline scaffolding now (dimensions, not values):** Don't pre-compute baseline numbers. Do define baseline dimensions:
+- Cohort keys: `workflow_id`, `agent_role`, `task_type` on `api_usage` rows
+- Aggregation hooks: token-per-task, model-mix-per-chain, latency-per-claim
+
+Baselines become derivable once enough data accumulates. Capture is upfront; derivation is later.
+
+**Provisional causal taxonomy for fitness anomalies (expected to evolve):**
+- *Supply-side* (queue starvation, capacity exhaustion)
+- *Demand-side* (over-provisioning, idle agents, unnecessary spin)
+- *Coordination* (dependency blocking, cross-agent waits)
+- *Decision* (routing inefficiency, mis-prioritization)
+
+Tier 2 reasoning maps anomalies to one (or more) categories with confidence: "likely supply-side, low confidence." Categories may merge, split, or be replaced as real patterns surface.
+
+---
+
+## Depth tiers (per concern)
+
+**Tier 1 always on** (cheap, base awareness). **Tiers 2 and 3 opt-in, runtime-toggleable**, with cost estimates surfaced when offered.
+
+| Concern | Tier 1 (always on) | Tier 2 (opt-in) | Tier 3 (opt-in, anomaly-scoped) |
+|---|---|---|---|
+| Narration | current-focus deliverable contracts; ETA-with-confidence-tag; slippage tracking; completion validation | verbose narration (rationale logging on every agent decision, not just boundaries) | explanatory drilldown — agent spends tokens reasoning *why* a decision was made when asked |
+| Fitness | liveness windows; queue-fitness metrics; OAuth-vs-local cross-validation delta | per-call context-utilization tracking; spin-rationale annotation on every keep-alive-vs-shutdown decision | per-anomaly explanatory drilldown (agent reasons about *why* an anomaly happened, scoped to one investigation) |
+| Cost interrogation | `notes` field + cohort keys (`workflow_id`, `agent_role`, `task_type`) on `api_usage`; raw query access | per-call complexity annotation; per-call routing-rationale annotation (why Opus vs Sonnet) | prompt-content sampling for outlier calls (e.g., input >50K tokens; sampled and stored for post-hoc audit) |
+
+Tier 1 of each concern roughly matches the data-capture work that rides along with existing M5 sub-milestones at near-zero marginal cost. Tier 2 and 3 are the opt-in surfaces.
+
+---
+
+## Toggle infrastructure (cross-cutting)
+
+`set_observability_level(scope, level)` MCP tool. Scope is per-concern (narration / fitness / cost); level is `tier1` / `tier1+tier2` / `tier1+tier2+tier3` or finer-grained per-feature flags. State persisted in a config table, runtime-flippable without restart.
+
+**Cost estimates surfaced at toggle-offer time.** When the daemon recommends enabling a tier, it names the overhead (e.g., "~3% token overhead", "~50ms added per agent call", "~2KB per audit log row"). Operator decides knowing the cost.
+
+**Off-ramp / sunset rules.** Tier 2 and 3 toggles auto-disable after 24 hours unless renewed (configurable per scope). Prevents silent runtime-cost accrual when a toggle is flipped on for an investigation and forgotten. Renewal is one-tool-call. Sunset event logs to audit log.
+
+### Observability state log (queryable timeline)
+
+Table `observability_state_log`:
+- timestamp
+- scope (per-concern: narration / fitness / cost)
+- tier (tier1 / tier1+tier2 / etc., or per-feature flags)
+- trigger reason (operator-explicit / nudge-acceptance / sunset / etc.)
+- duration (set on transition out)
+
+Every toggle state change writes a row. Investigations query this alongside `api_usage`, `tasks`, `audit_log` to reconstruct system state at any point. Required for causal reconstruction, false-positive suppression ("was tier 2 even on?"), toggle-effect attribution.
+
+---
+
+## Hard meta-cost budgets with priority profiles
+
+**Hard percentage caps per concern** (defaults: narration ≤ 5%, fitness ≤ 3%, cost ≤ 2%; configurable). Circuit-breaker behavior when exceeded — degrades to tier 1 for the offending concern.
+
+**Priority profiles tied to system phase, not static ordering.** Under cap pressure, the lowest-priority concern in the active profile degrades first.
+
+| Profile | Priority order |
+|---|---|
+| Active execution | narration > fitness > cost |
+| Anomaly investigation | fitness > narration > cost |
+| Review / post-mortem | cost > fitness > narration |
+
+**Profile transition triggers (explicit, logged in `observability_state_log`):**
+- *Active execution → anomaly investigation:* anomaly detection above severity threshold; or operator explicit signal ("something feels off"); or sustained metric divergence
+- *Active execution → review/post-mortem:* operator invokes sub-milestone close review; or operator explicit signal ("let's review what just happened")
+- *Investigation/review → active execution:* anomaly resolution; or operator explicit signal ("back to work"); or timeout fallback (default behavior)
+
+Operator-overridable.
+
+---
+
+## Protective vs. optimizing autonomy boundary
+
+Formalized design principle. Future surface additions classified explicitly.
+
+**Allowed: protective autonomy.**
+- Circuit breakers (cap exceeded → degrade to tier 1)
+- Auto-sunset on toggles
+- Bucket exhaustion → halt expensive operations
+- System protects itself and the operator from runtime failure modes
+
+**Disallowed: optimizing autonomy.**
+- Routing decisions
+- Behavior shifts toward presumed-better outcomes
+- Any action whose intent is "system improves itself"
+- Operator decides optimizations; system surfaces proposals
+
+Distinction is durable, not contextual judgment. Future design discussions ask "is this protective or optimizing?" with a clean answer.
+
+---
+
+## Discoverability — toggles surface as recommendations
+
+Toggles must be **obviously available**, not buried. Failure mode being protected against: hours into something feeling off, finally discovering "I could have turned on deeper introspection at hour two." That's tooling that exists but doesn't announce itself.
+
+When the daemon (or an agent) notices something it can't fully explain — token spend above recent baseline, heartbeat-to-work ratio anomalous, queue depth growing without obvious cause, cross-validation delta widening, claim-vs-alive ratio low — the response is **a contextual recommendation in whatever artifact Mike is looking at**, naming the specific toggle that would help.
+
+Examples:
+
+> "PM heartbeat-to-work ratio is 4:1 in the last hour, higher than the 2:1 baseline. Don't know why yet. Want me to enable per-call rationale logging (narration tier 2)? ~3% token overhead; will let me explain the next time you ask."
+
+> "M5-subscription-routing close review: subscription_7d_opus burned 67% during the chain. Higher than the 40% projected. Hard to explain post-hoc. Enabling per-call complexity-annotation (cost tier 2) for the next chain would let me audit Opus-vs-Sonnet routing at the next close."
+
+> "Engineer was alive 3h22m this session, claimed-tasks 47min. Claim-vs-alive ratio low end of healthy. Could be normal (work shape) or routing inefficiency. Spin-rationale logging (fitness tier 2) would disambiguate."
+
+### Discoverability constraints
+
+- **Hard constraints:** max 1 recommendation per artifact; cooldown 30-60 min per anomaly type; confidence threshold before nudging.
+- **Triggered by genuine signals:** anomaly thresholds (calibrated per-concern), explicit user cues ("something feels off"), recurrence patterns (asked about same anomaly twice).
+- **High signal-to-noise bar.** If the daemon nudges on every routine status report, the nudges become background noise.
+- **Recommendations name specific toggle + cost + expected gain**, not vague "want more info?"
+
+### Nudge acceptance → outcome correlation, not just acceptance rate
+
+Track nudge acceptance rate AND outcome correlation:
+- Did accepting this nudge correlate with the operator subsequently being able to explain or act on something they couldn't before?
+- Initial measurement is proxy (operator query patterns post-acceptance, e.g., did they ask about the same anomaly again within 24 hours).
+
+If acceptance rate high without outcome improvement → triggers miscalibrated. Adjust thresholds. System self-calibrates against operator outcomes, not just operator clicks.
+
+---
+
+## Cross-signal disagreement detection
+
+**Minimum-viable disagreement detection ships with tier 1 surfaces.** At artifact / status level:
+- Cross-signal inconsistency detection (no resolution logic; just visibility)
+- List of conflicting signals with their respective claims
+- **Severity dimension** (low / moderate / high) derived from:
+  - Magnitude of divergence (small variance vs. direct contradiction)
+  - Number of signals involved (two-signal mismatch vs. all-three contradiction)
+  - Confidence levels of the disagreeing signals
+
+Example: narration says "task completed cleanly" (high confidence); fitness shows high coordination delay during that period (medium confidence); cost shows abnormal token spike (high confidence). Three-signal contradiction with high-confidence boundary signals → severity high.
+
+Severity makes flag actionable, not just informative — operator triages by severity rather than mentally evaluating every disagreement.
+
+Full reconciliation (resolving conflicting truths) remains future architectural work.
+
+---
+
+## Observability completeness model (structured, quantified)
+
+Returned with every on-demand status query and embedded in artifact footers.
+
+**Coverage by concern:**
+- Narration completeness (% of work units with validated contracts)
+- Fitness completeness (% of metrics active vs. possible at current toggle level)
+- Cost completeness (% of calls with cohort keys + annotations)
+
+**Missing critical signals:** binary flags (e.g., "context utilization OFF (tier 2 toggle)")
+
+**Data freshness per concern:**
+- Real-time (data current within seconds)
+- Delayed (data current within minutes; specify lag bound)
+- Stale (data significantly behind real-time; specify staleness)
+
+**Confidence score per anomaly:** derived from completeness AND freshness in the relevant concern. A stale-data anomaly has lower confidence than a real-time one.
+
+Quantified shape forces operator to see uncertainty, not skim past it.
+
+---
+
+## Proposals layer (counterfactual reasoning)
+
+Future sub-milestone (after tier 1 fitness + cost data has accumulated). System simulates counterfactuals and proposes them; operator decides.
+
+**Counterfactual scope (initial):** routing-class decisions where math is tractable (model A vs. model B for class of work, given recorded complexity scores and cost ratios). Defer richer counterfactuals (agent lifecycle, scheduling) until later.
+
+**Trigger:** anomaly thresholds that fire discoverability nudges + operator explicit request ("propose alternatives for the last chain"). NOT periodic — that becomes background noise.
+
+### Proposal contract (non-negotiable)
+
+Every proposal carries:
+- **Data coverage** (% of relevant history used)
+- **Similarity basis** (how comparable past tasks are; cohort match strength)
+- **Quality impact known vs. proxy** (no direct A/B, what proxy is used, what its limits are)
+- **Confidence level** derived from coverage + similarity
+- **Feasibility flag** (high / constrained / low) — not every counterfactual is operationally executable
+- **Constraint description** (why not fully feasible — e.g., "12 of the 42 candidate tasks have hard sequencing dependencies on prior Opus context")
+
+Example shape:
+
+> "Projected token reduction: 18%. Basis: 42 prior tasks with similar complexity score (±1), same agent role. Coverage: 63% of last 7 days routing decisions. Quality impact: unknown (no direct A/B); proxy: Sonnet success rate 73% on comparable tasks. Confidence: low-moderate. Feasibility: constrained (12 of 42 candidates have hard sequencing dependencies on prior Opus context)."
+
+Proposals are not autonomy. They're counterfactual reasoning surfaced to operator with explicit evidence basis. Reduces operator's analytical burden without reducing decision authority.
+
+---
+
+## Silent compliance defenses
+
+Agents optimizing for passing validation rather than doing real work is a first-order failure mode, not a later refinement.
+
+**Random audit sampling:** % of work units re-evaluated independently of agent's own narration. Sampling rate calibrated against tier-1 cost budget.
+
+**Cross-signal checks:** correlation between narration length and actual work complexity (uniform narration is suspicious); low-anomaly-rate cross-checked against utilization variance (suspiciously smooth metrics).
+
+**Audit rigor escalation triggers** (refinement on rejection of full adversarial-audit infrastructure):
+- Sustained drop in anomaly rate + stable workload (suspicious smoothness)
+- Increasing narration uniformity (text-similarity metrics on narration over time trending up)
+- Declining variance in audit findings (audit results becoming homogeneous)
+
+When triggered: temporarily increase audit sampling rate AND widen audit scope (deeper re-evaluation of sampled work units, not just spot-check). Logged as a phase transition in `observability_state_log`. Defense scales with apparent quietness rather than apparent loudness — "system looks too healthy" becomes a trigger, not a comfort.
+
+Full adversarial-audit infrastructure (cross-agent re-evaluation, deliberately hard edge cases) deferred unless escalated audits surface evidence it's needed.
+
+Findings written to audit log as integrity-check results.
+
+---
+
+## Intervention cost tracking with target behavior
+
+Table `intervention_log`:
+- timestamp
+- trigger (anomaly nudge / proposal / direct operator query / etc.)
+- action taken (toggle flipped / routing override / proposal accepted/rejected / no action)
+- time to resolution (anomaly detected → resolved or normalized)
+- linked anomaly_id / proposal_id
+
+**Target behavior (expected trends, not just capture):**
+- Interventions per workflow ↓ over time (system getting smarter or operator burden lower)
+- Time-to-resolution ↓ over time (proposals + nudges get more accurate or operator response more efficient)
+- Proposal acceptance correlates with intervention reduction (proposals are doing real work, not just being acknowledged)
+
+Trends become first-class metrics surfaced in sub-milestone close reviews. Failure to trend in expected direction is itself a finding. Real KPI for system quality. Token efficiency without intervention reduction is a degenerate optimum.
+
+---
+
+## First-week operating posture
+
+Reality is week 1 produces noise that looks like signal. Without explicit posture, the failure mode is operator misreading noise as system failure → "fixing" calibration artifacts → degrading clarity.
+
+**Posture for the first sessions after observability layer ships:**
+- **Anomaly thresholds:** loose (high tolerance) initially; tightened as data accumulates and baseline distributions form
+- **Nudges:** conservative (high confidence threshold); reduced false-positive rate at cost of sensitivity
+- **Proposals:** disabled or explicitly returning "insufficient data — calibration phase"
+- **Operator expectation:** explicitly framed as calibration, not steady-state operation. Anomalies during this phase are noise unless persistent.
+
+Posture is an operating state, recorded in config and logged. System exits calibration phase via explicit operator signal or after threshold metric stability is achieved.
+
+Future Claude sessions reading this on day 4 of operation should see "we expected this to be noisy" instead of "we should redesign."
+
+---
+
+## Sequencing across milestones
+
+**Tier 1 data capture rides along with M5 sub-milestones at near-zero marginal cost:**
+
+- *During M5-subscription-routing (next):* `notes` field + cohort keys (`workflow_id`, `agent_role`, `task_type`) on `api_usage`. Cost-interrogation tier 1.
+- *During M5-continuous-pm-driver:* PM's `current_focus` with deliverable contract + completion validation; liveness logging; spin-rationale logging. Random-audit-sampling infrastructure (sampling logic; the actual re-evaluation is async). Narration tier 1 + fitness tier 1 (PM scope).
+- *During M5-flag-flips:* extend narration + liveness + spin-rationale to Engineer. First moment when liveness windows across multiple agents become observable. Cross-validation delta computation (OAuth poller vs. local `api_usage` aggregation) becomes useful.
+
+**Tier 1 surfaces** (inline footers in agent status reports; findings in close reviews; on-demand `get_daemon_status` MCP tool; cross-signal disagreement detection; observability completeness model; intervention_log; priority profile transitions) ship post-M5-flag-flips as a focused observability sub-milestone, OR fold into M6 if M5 is running long. Order matters — surfaces ship after enough data has accumulated to make them non-empty.
+
+**Toggle infrastructure** (`set_observability_level`, sunset rules, `observability_state_log`, audit-log integration) ships alongside Tier 1 surfaces. Off by default; tier 1 always on regardless.
+
+**Tier 2 features** (verbose narration, per-call rationale logging, per-call complexity/routing annotation, context-utilization tracking) post-M6. Each tier-2 feature is its own scoped sub-milestone — implement, calibrate cost, expose toggle, add discoverability triggers.
+
+**Proposals layer:** post-tier-2, requires accumulated data.
+
+**Tier 3 features** (anomaly-scoped explanatory drilldown, prompt-content sampling for outliers): later still. Tier 3 is opt-in *and* anomaly-scoped — only relevant when an investigation is already in flight.
+
+**Unified-truth reconciliation** (full resolution of cross-signal disagreements; currently only detection ships): named future architectural work.
+
+---
+
+## Future architectural concern (named, not solved)
+
+### Unified truth reconciliation across narration, fitness, cost
+
+Cross-signal disagreement *detection* with severity ships in tier 1 surfaces. **Reconciliation** (resolving disagreements rather than just flagging them) remains future work.
+
+**Why not now:** Reconciliation requires knowing what disagreement looks like in this specific system. Designing the unified view before observing the parallel tracks risks specifying a framework that doesn't match how disagreements manifest.
+
+**Trigger for revisiting:** After tier 1 has run enough sessions to characterize where the tracks diverge. Likely M6 or post-M6 work. The shape will probably involve a unified event/state model that all three concerns project from, with reconciliation rules at the projection boundary.
+
+### Latent coupling between concerns
+
+Narration verbosity affects token cost. Cost caps degrade narration. Degraded narration affects fitness interpretability. These are interacting systems with feedback loops, not parallel concerns with shared data.
+
+Named as a known second-order-effects category. Don't try to solve now; flag for awareness during debugging if cross-concern symptoms emerge.
+
+---
+
+## Unaddressed failure modes (forced adversarial structure)
+
+This section exists to prevent design drift toward "we've thought of everything."
+
+1. **Outcome quality tracking absent.** No mechanism for "did this call succeed at its purpose." Proposals layer's quality-impact-unknown framing is honest but doesn't fix it. Adding outcome quality is its own design problem (who judges, on what timeline, with what evidence). Deferred.
+
+2. **Cross-session operator behavior drift.** Operator interpretation of the same signal may drift across sessions. Mitigations available (operator notes on findings, periodic recalibration prompts) but not designed yet.
+
+3. **Anomaly threshold calibration.** Initial values are guesses. First-week operating posture (above) addresses this; calibration is an active operating state, not a one-time setup.
+
+4. **Proposals layer cold-start.** First weeks of operation, no proposals are surface-able. System should explicitly say "insufficient data for proposals" rather than degrading to low-confidence proposals.
+
+5. **Privacy / sensitivity in tier 3 prompt sampling.** Sampling prompt content raises concerns if prompts ever contain confidential context. Sampling-with-redaction or sampling-with-explicit-opt-in per call needed. Defer to tier 3 design.
+
+6. **Toggle-state recovery after daemon crash.** Resume previous state from `observability_state_log`? Reset to defaults? Operator-confirm-on-restart? Design choice deferred.
+
+7. **Evidence-basis gaming.** Once proposals declare evidence basis, agents can game it (cherry-pick favorable cohorts to produce confident proposals). Audit-sampling defense addresses some of this; full defense requires independent evidence-basis verification, not designed yet.
+
+---
+
+## Meta-cost flag
+
+Three first-class observability concerns means three first-class places where the daemon spends tokens on itself. Self-narration writes to state at every work-unit boundary; fitness logging at every agent state transition; cost annotation potentially per API call.
+
+Tier 1 is cheap (mostly database writes; agent self-annotation is short text). Tier 2 starts costing real tokens (rationale logging is multi-sentence). Tier 3 can be expensive (per-anomaly drilldown is dedicated reasoning). Hard percentage caps (above) prevent runaway. The observability of *that meta-cost* is itself a question — track separately via the `notes` field tagging or dedicated audit segregation.
+
+---
+
+## Open design questions (defer to focused observability sub-milestone)
+
+- Anomaly-threshold calibration values. Initial values are guesses; need real-session data.
+- Recommendation cadence ceiling. How many nudges per artifact / per session before signal-to-noise drops? Probably 1-2 per artifact max; worth a hard cap.
+- Toggle scope granularity. Per-concern (narration/fitness/cost) is the obvious split; per-feature flags within a concern is finer. Pick at design time based on whether operators want the granularity.
+- Prompt-content sampling (tier 3 cost) sampling-with-redaction details.
+
+---
+
+# Design lineage
+
+The current design above reflects four rounds of adversarial review. This section preserves the round-by-round refinement chronology so future sessions can audit decisions rather than rediscover them. Round-by-round structure prevents silent regression to earlier assumptions.
+
+Each change uses the structure: **Change → Original assumption → Failure mode → New design.**
+
+## Round 1 — initial design
+
+Three concerns × three depth tiers. Toggle infrastructure with sunset rules. Discoverability via contextual nudges. Cost-aware (meta-cost flagged). Sequencing across M5 sub-milestones.
+
+Original framing was operator-mood-driven checkpoint pattern: Mike opens a website or looks at a produced result and either says "great" or puts strategic directions forward. Runtime fitness signals woven into artifacts, not a separate dashboard. On-demand status via `get_daemon_status` MCP tool answering "what are you working on, when can I see something."
+
+## Round 2 — structural enforcement
+
+**Narration becomes enforceable contract.** *Original:* free-text declarations + "discipline" of declaring before starting. *Failure mode:* coherence without accountability; storytelling appearing consistent but semantically hollow. *New:* deliverable contract structure (objective / output_type / acceptance_criteria) with completion validation mapping output → declared objective; mismatch is audit-log finding.
+
+**Observability state queryable timeline.** *Original:* toggle state is config; current state is what matters. *Failure mode:* irreproducible findings ("was tier 2 even on?"). *New:* `observability_state_log` table with timestamp / scope / tier / trigger reason / duration.
+
+**Hard meta-cost budgets with priority ordering.** *Original:* visibility-only meta-cost tracking. *Failure mode:* observability cannibalizes throughput non-linearly. *New:* hard percentage caps with circuit-breaker degradation; priority ordering (initially static) for which concern degrades first under pressure.
+
+**Discoverability constraints + acceptance correlation.** *Original:* "high signal-to-noise bar" hand-wave. *Failure mode:* nudges fire too often (ignored) or too rarely (missed leverage); optimizing for clicks rather than understanding. *New:* hard constraints (1 recommendation per artifact, cooldown windows, confidence thresholds) + track acceptance correlated with outcome improvement, not just acceptance rate.
+
+**Baseline scaffolding (dimensions, not values).** *Original:* baselines emerge from running the system. *Failure mode:* without scaffolding, data is shapeless and clean baseline derivation later impossible. *New:* cohort keys + aggregation hooks captured upfront; baseline values derived later.
+
+**Provisional causal taxonomy.** *Original:* taxonomy emerges from observed patterns. *Failure mode:* pure emergence produces inconsistent labeling, fragmented reasoning. *New:* four-category provisional taxonomy (supply-side / demand-side / coordination / decision); explicitly expected to evolve.
+
+**Proposals layer (middle path between observe-only and autonomy).** *Original:* binary choice between observation and autonomous-actuation; rejected the latter. *Failure mode:* false binary; missed the middle layer where system simulates counterfactuals and operator decides. *New:* proposals layer as future sub-milestone scoped to routing-class counterfactuals; non-negotiable evidence-basis declaration (coverage / similarity / quality-impact / confidence).
+
+**Silent compliance defenses first-class.** *Original:* deferred as "later scoping." *Failure mode:* first-order, not later-order; agents converge to passing the system before tier 2 ships. *New:* random audit sampling + cross-signal correlation checks ship from the start.
+
+**Observability completeness as structured quantified model.** *Original:* "how much you don't know" as narrative footer. *Failure mode:* operators over-trust partial views; false confidence. *New:* structured coverage by concern + binary flags for missing signals + per-anomaly confidence scores.
+
+**Intervention cost tracking.** *Original:* track token cost (productive) and observability cost (meta) only. *Failure mode:* a system that looks efficient by token metrics but requires constant operator intervention is failing. *New:* `intervention_log` table with trigger / action / time-to-resolution.
+
+## Round 3 — refinement
+
+**Cross-signal disagreement detection (timing pulled forward).** *Original:* unified truth as future architectural concern, post-M6. *Failure mode:* divergence happens immediately, not later; operator must manually triangulate every cross-signal mismatch. *New:* minimum-viable disagreement flag with severity dimension ships in tier 1 surfaces; full reconciliation stays deferred. Severity (low / moderate / high) derived from divergence magnitude + signals involved + confidence levels.
+
+**Counterfactual feasibility constraint.** *Original:* evidence basis sufficient for proposal credibility. *Failure mode:* proposals can be analytically valid but operationally impossible. *New:* feasibility flag (high / constrained / low) + constraint description added to non-negotiable proposal contract.
+
+**Data freshness as completeness dimension.** *Original:* completeness = coverage + missing signals + anomaly confidence. *Failure mode:* completeness ≠ timeliness; stale data with high coverage produces over-trust. *New:* per-concern data freshness (real-time / delayed / stale) added to completeness model; anomaly confidence incorporates freshness.
+
+**Explicit transition triggers for priority profiles.** *Original:* phase-based profiles (active / investigation / review) with implicit transitions. *Failure mode:* implicit transitions produce inconsistent priority behavior. *New:* explicit triggers for each transition direction, logged in `observability_state_log`.
+
+**Intervention cost target behavior.** *Original:* `intervention_log` captures events; trends observable post-hoc. *Failure mode:* logging without target produces passive data collection. *New:* expected trend behavior defined (interventions per workflow ↓, time-to-resolution ↓, proposal acceptance correlating with intervention reduction); failure to trend is itself a finding.
+
+**Protective vs. optimizing autonomy boundary formalization.** *Original:* "no control loop / no autonomy." *Failure mode:* conceptual inconsistency — circuit breakers + caps + auto-degradation already ARE autonomy; hand-waving invites future drift. *New:* explicit classification (allowed: protective; disallowed: optimizing) as durable design principle.
+
+**Audit rigor escalation triggers.** *Original:* random sampling alone as silent-compliance defense. *Failure mode:* sampling has limited sensitivity to drift signals that look like calmer-system rather than weirder-system. *New:* triggers for escalating audit rigor (sustained anomaly drop + stable workload, increasing narration uniformity, declining audit-finding variance) → temporarily widen audit scope. Full adversarial-audit infrastructure rejected; escalation infrastructure accepted.
+
+**First-week operating posture (named expectation).** *Original:* implicit assumption of calibrated thresholds, meaningful anomaly detection. *Failure mode:* week 1 produces noise that looks like signal; operator "fixes" calibration artifacts. *New:* explicit first-week posture (loose thresholds, conservative nudges, proposals disabled, calibration-phase framing) documented and recorded in config.
+
+## Critique-loop discipline note
+
+After four rounds, inflection point reached. Round 5 explicitly declined.
+
+**Reasoning preserved verbatim:** "Risk has shifted from design flaws → interpretation errors. The system is now strong enough that bad operator conclusions become the main failure mode. You will be tempted to 'fix' issues that are actually calibration artifacts. The next phase is not 'improve the design' — it is 'learn how the design behaves under real conditions without overreacting.' If you keep iterating at design-level now, you'll degrade clarity and introduce unnecessary coupling."
+
+This applies to future sessions reading this entry: **do not re-open observability design questions during M5 or initial operations without specific runtime-data-driven cause.** The next meaningful improvements come from real anomaly patterns, real intervention cost trends, real disagreement frequency — not pre-runtime critique.
+
+If a future session feels the urge to refine this design before runtime data exists, that urge IS the failure mode being warned against. The right response is to ship and observe.

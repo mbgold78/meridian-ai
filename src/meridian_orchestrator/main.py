@@ -34,6 +34,7 @@ from meridian_orchestrator.config import Settings
 from meridian_orchestrator.errors import ValidationError
 from meridian_orchestrator.server import serve as serve_mcp
 from meridian_orchestrator.storage.migrations import run_migrations
+from meridian_orchestrator.storage.seed import seed_initial
 from meridian_orchestrator.storage.sqlite import SqliteStorage
 
 logger = structlog.get_logger(__name__)
@@ -135,6 +136,14 @@ async def _run_lifespan_body(
     pointing at a temp data dir.
     """
     async with _lifespan(settings) as storage:
+        # M5-subscription-routing commit 0.5: seed companies + projects
+        # automatically on every boot. Idempotent per seed_initial's
+        # contract — re-runs are no-ops when rows already exist. Folded
+        # into the lifespan to remove the fragile manual scripts/init-db.py
+        # pre-step; init-db.py stays valid for explicit operator
+        # initialization but is no longer required for first boot. The
+        # returned company_id is required by the agents-table seed below.
+        company_id, _project_id = await seed_initial(storage)
         registry = AgentRegistry(settings.agents_dir)
         async with registry.lifespan():
             # M5-wrapper-closure: provision the canonical clone and
@@ -238,6 +247,17 @@ async def _run_lifespan_body(
             # facing tool wrapper actually needs it. The pm_supervisor
             # variable above is held in lifespan scope for shutdown
             # coordination only.
+
+            # M5-subscription-routing commit 0.5: seed the agents table
+            # from the registry's in-memory snapshot. MUST run before
+            # mcp_task spawns — otherwise the first MCP request that
+            # writes api_usage (or any row referencing agents.id) hits
+            # FOREIGN KEY CONSTRAINT FAILED. Closes Codex Finding 1: the
+            # registry's startup docstring claimed it seeded the agents
+            # table but no INSERT ever happened in production code; only
+            # test fixtures inserted agents rows. Failure here propagates
+            # and the daemon fails to start — load-bearing for record_api_call.
+            await registry.seed_into_storage(storage, company_id)
 
             mcp_task = asyncio.create_task(
                 serve_mcp(
