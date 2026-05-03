@@ -199,8 +199,12 @@ class CheckBudgetForTaskInput(BaseModel):
 class CheckBudgetForTaskOutput(BaseModel):
     recommended_model: Literal['claude-haiku-4-5','claude-sonnet-4-6','claude-opus-4-7']
     recommended_bucket: Literal['subscription_5h', 'api_key_overflow']
-    rationale: str
+    routing_factors: list[str]      # named tags describing decision context (queryable as data)
+    fallback_active: bool           # true when snapshot was unavailable / stale; per-role defaults applied
+    rationale_text: str             # human-readable summary
 ```
+
+Output schema amended at M5-subscription-routing commit 4 from the original `rationale: str` to the structured shape above. ``routing_factors`` carries named tags (e.g., ``per_role_default_engineer``, ``subscription_7d_opus_at_67pct_below_threshold``, ``opus_downgraded_to_sonnet_due_to_7d_opus_high``) so tier-2 observability analysis can query routing decisions as data without string parsing. Pct-format factors follow the stable convention ``<dimension>_at_<value>pct_<context>``. ``fallback_active`` flags the snapshot-unavailable degraded path; ``rationale_text`` always names the fallback state explicitly when active.
 
 Stub in M5 — concrete routing logic refined as Mike observes the system run. Subscription-first routing logic (per `project_subscription_first_architecture` memory):
 

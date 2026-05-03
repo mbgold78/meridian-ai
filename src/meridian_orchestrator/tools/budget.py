@@ -1422,10 +1422,555 @@ async def get_burn_rate(
     )
 
 
+# ===========================================================================
+# check_budget_for_task — pure routing function (M5-subscription-routing
+# commit 4)
+# ===========================================================================
+#
+# Pure decision function over (complexity, priority, snapshot, caller_role,
+# now). No DB I/O, no MCP, no auth — wrapper at commit 5 fetches the
+# snapshot, resolves caller_role, and passes inputs through; this commit
+# ships the routing logic separable from the wiring.
+#
+# **Six routing rules** per ``06-mcp-tools-phase-one.md`` § ``check_budget_
+# for_task``:
+#
+# 1. Normal/upgrade pace — subscription_5h, role default + priority delta.
+# 2. subscription_7d_opus high (>= 80%) — Opus → Sonnet for non-critical
+#    (priority > 1); Opus preserved for priority == 1.
+# 3. subscription_5h conserve — pause-recommended factor; recommendation
+#    unchanged (caller decides to dispatch / pause).
+# 4. subscription_5h rate_limited — rate-limited factor; recommendation
+#    unchanged.
+# 5. Saturated, ``extra_usage.is_enabled: false`` —
+#    ``subscription_saturated_no_overflow`` factor; bucket stays
+#    subscription_5h (Literal-restricted output; caller queues).
+# 6. Saturated, ``extra_usage.is_enabled: true`` — bucket=
+#    api_key_overflow; ``routed_to_api_key_overflow`` factor.
+#
+# **Orthogonal-dimensions architecture** per Q8 disposition: bucket and
+# model resolve from independent computations; all applicable rules
+# emit factors without ordering-suppression. A multi-rule contract test
+# (e.g., 5h rate_limited + 7d_opus high simultaneously) locks this
+# durably.
+#
+# **Fallback (Q3 disposition β):** snapshot unavailable (None or stale
+# > 120s) → per-role default, no priority delta, no Opus-downgrade,
+# bucket=subscription_5h. ``rationale_text`` explicitly names the
+# fallback state.
+
+
+# ----- Constants ----------------------------------------------------------
+
+# Subscription_7d_opus utilization threshold for the Opus → Sonnet
+# downgrade rule. Per Q4 disposition: 80% as a single named constant,
+# documented as "M5 stub — refined after operational observation."
+# Future hygiene-commit revision is a single-line edit.
+OPUS_DOWNGRADE_UTILIZATION_THRESHOLD: float = 0.80
+
+
+# Tier hierarchy from cheapest to most-capable. The routing function
+# resolves a tier index (0..2) and looks up the model name.
+_TIER_HIERARCHY: tuple[str, ...] = (
+    "claude-haiku-4-5",
+    "claude-sonnet-4-6",
+    "claude-opus-4-7",
+)
+
+
+# Per-role default tier index per spec § check_budget_for_task. PM
+# defaults to Opus (highest); Engineer/Implementer/Tester default to
+# Sonnet (middle).
+_ROLE_DEFAULT_TIER: dict[str, int] = {
+    "pm": 2,
+    "engineer": 1,
+    "implementer": 1,
+    "tester": 1,
+}
+
+
+# Priority-driven tier delta per Q5/Q6 disposition. Priority=1 (highest)
+# upgrades by one tier; priority=5 (lowest) downgrades by one tier;
+# middle priorities (2, 3, 4) leave the tier at the role default.
+# Bounds-clamping to [0, len-1] is the responsibility of
+# :func:`_apply_priority_delta`.
+#
+# Documented as M5 stub — refined after operational observation. Don't
+# ship a 5x5 (complexity, priority) matrix preemptively per Q5
+# disposition; calibration without runtime data is a guess.
+_PRIORITY_TIER_DELTA: dict[int, int] = {
+    1: 1,
+    2: 0,
+    3: 0,
+    4: 0,
+    5: -1,
+}
+
+
+# ----- Factor naming convention -------------------------------------------
+#
+# **Stable structural prefix for percentage-embedded factors** (Q5 sub-
+# amendment): ``<dimension>_at_<value>pct_<context>``. Examples:
+#
+# - ``subscription_5h_at_45pct_normal``
+# - ``subscription_7d_opus_at_67pct_below_threshold``
+# - ``subscription_7d_opus_at_85pct_above_threshold``
+#
+# The ``_at_`` separator + ``pct`` literal + numeric value pin the format
+# so future tier-2 LIKE-pattern queries are tractable
+# (``WHERE factor LIKE 'subscription_7d_opus_at_%pct_above_threshold'``).
+# Sentinel test :func:`tests.unit.tools.test_budget.
+# test_pct_factor_format_sentinel` enforces the format on every factor
+# emitted by this module that matches ``*pct*``.
+#
+# Non-percentage numeric factors (e.g., ``snapshot_age_42s``) follow a
+# different convention because the units differ; the ``s`` suffix marks
+# seconds. The Q5 sub-amendment locks pct-format only.
+_PCT_FACTOR_FORMAT_PATTERN: str = (
+    r"^[a-z_0-9]+_at_\d+pct_[a-z_]+$"
+)
+
+
+# ----- Pydantic schemas ---------------------------------------------------
+
+
+class CheckBudgetForTaskInput(BaseModel):
+    """Input shape for ``check_budget_for_task`` per
+    ``06-mcp-tools-phase-one.md`` § ``check_budget_for_task``.
+
+    Per Q1 disposition (M5 stub), ``complexity`` is captured on the
+    schema but does not influence the routing math at this milestone.
+    PM's prompt heuristic folds task complexity into the priority
+    assignment; the routing function consumes priority + per-role
+    defaults. Complexity surfaces as a routing factor for
+    observability tier-2 inspection.
+    """
+
+    complexity: int = Field(ge=1, le=5)
+    priority: int = Field(ge=1, le=5)
+
+
+class CheckBudgetForTaskOutput(BaseModel):
+    """Output shape for ``check_budget_for_task`` per the architectural
+    sub-amendment at the M5-subscription-routing prep.
+
+    Three structural channels:
+
+    - ``recommended_model`` / ``recommended_bucket`` — the routing
+      decision (Literal-typed for caller compatibility).
+    - ``routing_factors`` — list of named tags (queryable as data, not
+      parsed from strings) describing the decision context. Pct-format
+      factors follow the ``<dimension>_at_<value>pct_<context>``
+      convention pinned at module level.
+    - ``fallback_active: bool`` — flag for the snapshot-unavailable
+      degraded path per Q3 disposition β. ``rationale_text`` also
+      names the fallback explicitly when active.
+    - ``rationale_text`` — human-readable summary for operator dashboards
+      and the ``set_observability_level`` tier-2 path.
+
+    Field name ``rationale_text`` (not ``rationale``) per Q4
+    disposition: spec amendment lands in ``06-mcp-tools-phase-one.md`` §
+    ``check_budget_for_task`` output schema in this same commit.
+    """
+
+    recommended_model: Literal[
+        "claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-7"
+    ]
+    recommended_bucket: Literal["subscription_5h", "api_key_overflow"]
+    routing_factors: list[str]
+    fallback_active: bool
+    rationale_text: str
+
+
+# ----- Pure helper: priority-driven tier delta ----------------------------
+
+
+_ClampMarker = Literal["none", "top", "bottom"]
+
+
+def _apply_priority_delta(
+    default_tier_idx: int, priority: int
+) -> tuple[int, _ClampMarker]:
+    """Apply priority delta to ``default_tier_idx``, clamped to
+    ``[0, len(_TIER_HIERARCHY) - 1]``.
+
+    Returns ``(clamped_idx, clamp_marker)`` where ``clamp_marker`` is:
+
+    - ``'none'`` — no clamping was necessary (raw delta produced an
+      in-range index).
+    - ``'top'`` — raw delta would have exceeded the top index;
+      result clamped to top.
+    - ``'bottom'`` — raw delta would have gone below 0; result
+      clamped to bottom.
+
+    The clamp marker drives the ``tier_clamped_at_top`` /
+    ``tier_clamped_at_bottom`` factors in the routing function.
+
+    Per Q5/Q6 disposition: priority=1 on Opus stays Opus (already at
+    top, ``clamp_marker='top'``); priority=5 on Haiku stays Haiku
+    (already at bottom, ``clamp_marker='bottom'``).
+    """
+    delta = _PRIORITY_TIER_DELTA[priority]
+    raw_idx = default_tier_idx + delta
+    top_idx = len(_TIER_HIERARCHY) - 1
+    if raw_idx > top_idx:
+        return (top_idx, "top")
+    if raw_idx < 0:
+        return (0, "bottom")
+    return (raw_idx, "none")
+
+
+# ----- Malformed-snapshot detection ---------------------------------------
+
+
+def _is_snapshot_fully_parseable(snapshot: CachedSnapshot) -> bool:
+    """Return True when the snapshot's required counters are all
+    present and parseable. False on any malformed required field.
+
+    Required fields (driven by the routing rules):
+
+    - ``five_hour.utilization`` (number) and ``five_hour.resets_at``
+      (parseable ISO 8601 string) — needed for bucket / pace decision.
+    - ``seven_day_opus.utilization`` (number) — needed for the
+      Opus-downgrade rule.
+    - ``extra_usage.is_enabled`` (bool) — needed for the overflow
+      routing decision under saturation.
+
+    Per the malformed-snapshot disposition (commit 4 review): ANY
+    malformed required field collapses the snapshot to the fallback
+    path. The routing function does not attempt per-counter graceful
+    degradation; the conservative full-fallback semantics avoid the
+    silent-rate_limited-miss bug class (e.g., a malformed
+    ``five_hour`` would otherwise route to subscription_5h with
+    unknown saturation state).
+
+    Null-counter cases (documented Anthropic API state where a
+    feature isn't enabled) also fail this check and trigger fallback
+    — same treatment as contract violations. The simplification is
+    deliberate; tier-2 observability that wants to distinguish nulls
+    from contract violations would need a separate signal layer.
+    """
+    payload = snapshot.payload
+
+    five_hour = payload.get("five_hour")
+    if not isinstance(five_hour, dict):
+        return False
+    if not isinstance(five_hour.get("utilization"), int | float):
+        return False
+    resets_at_raw = five_hour.get("resets_at")
+    if not isinstance(resets_at_raw, str):
+        return False
+    try:
+        datetime.fromisoformat(resets_at_raw)
+    except ValueError:
+        return False
+
+    seven_day_opus = payload.get("seven_day_opus")
+    if not isinstance(seven_day_opus, dict):
+        return False
+    if not isinstance(seven_day_opus.get("utilization"), int | float):
+        return False
+
+    extra_usage = payload.get("extra_usage")
+    if not isinstance(extra_usage, dict):
+        return False
+    return isinstance(extra_usage.get("is_enabled"), bool)
+
+
+# ----- Pure routing function ----------------------------------------------
+
+
+def _compute_routing(
+    *,
+    complexity: int,
+    priority: int,
+    snapshot: CachedSnapshot | None,
+    caller_role: str,
+    now: datetime,
+) -> CheckBudgetForTaskOutput:
+    """Compute the routing decision from inputs alone — no I/O, no
+    side effects.
+
+    See module-level commit-4 docstring for the six rules and the
+    orthogonal-dimensions architecture (bucket and model resolve from
+    independent computations; all applicable rules emit factors).
+
+    **Snapshot states:**
+
+    - ``None`` → fallback per Q3 β (per-role default; no priority
+      delta; no Opus-downgrade; bucket=subscription_5h;
+      ``fallback_active=True``).
+    - present, age > 120s (stale) → fallback (same as None).
+    - present, fresh, malformed required counter → fallback (same as
+      None). Malformed snapshot payloads are treated identically to
+      ``snapshot=None`` (silent fallback to per-role-defaults). Future
+      poller contract violations would surface as
+      ``fallback_active=True`` indistinguishable from cold-start. The
+      observability loss is deliberate per the commit-4 disposition;
+      tier-2 distinction would need a separate signal layer.
+    - present, fresh, all counters parseable → full routing logic
+      engages.
+
+    Args:
+        complexity: 1..5. Captured but not consumed in routing math
+            at M5 (Q1 disposition); emitted as a factor for
+            observability.
+        priority: 1..5. Drives the priority-tier delta per
+            :data:`_PRIORITY_TIER_DELTA`.
+        snapshot: The polled OAuth snapshot or ``None`` (cold start).
+        caller_role: One of ``'pm'``, ``'engineer'``, ``'implementer'``,
+            ``'tester'``. Wrapper layer validates upstream; KeyError
+            here surfaces a wrapper bug.
+        now: Wall-clock UTC, passed explicitly per Q10 for testability.
+
+    Returns ``CheckBudgetForTaskOutput`` with structured factors,
+    fallback flag, and human-readable rationale.
+    """
+    factors: list[str] = []
+
+    # Always-emitted context factors.
+    factors.append(f"complexity_{complexity}")
+    factors.append(f"priority_{priority}")
+    factors.append(f"per_role_default_{caller_role}")
+
+    # Snapshot age factor: surfaces freshness even when not falling back
+    # so tier-2 analysis can correlate "90s-old snapshot fired normal
+    # routing" vs "200s-old fired fallback."
+    if snapshot is None:
+        factors.append("snapshot_unavailable")
+        is_fallback = True
+        snapshot_age_seconds: int | None = None
+    else:
+        snapshot_age_seconds = snapshot.age_seconds(now=now)
+        factors.append(f"snapshot_age_{snapshot_age_seconds}s")
+        is_stale = snapshot_age_seconds > _STALE_SNAPSHOT_THRESHOLD_SECONDS
+        # Malformed-snapshot collapse per disposition (a): any
+        # required-counter parsing failure triggers the fallback path,
+        # indistinguishable from cold-start. See routing docstring's
+        # snapshot-states table.
+        is_malformed = (not is_stale) and not _is_snapshot_fully_parseable(
+            snapshot
+        )
+        is_fallback = is_stale or is_malformed
+
+    default_tier_idx = _ROLE_DEFAULT_TIER[caller_role]
+
+    # ----- Model resolution (independent dimension) -----
+
+    if is_fallback:
+        # Per-role default; no priority delta; no Opus-downgrade.
+        model_tier_idx = default_tier_idx
+        factors.append("fallback_per_role_defaults")
+        # Priority factor still emitted even though no delta applied —
+        # the input is still observed. Distinguish from delta-bearing
+        # case via the explicit "no_delta" suffix.
+        factors.append(f"priority_{priority}_no_delta")
+    else:
+        # Apply priority delta with bounds clamp.
+        model_tier_idx, clamp_marker = _apply_priority_delta(
+            default_tier_idx, priority
+        )
+        delta = _PRIORITY_TIER_DELTA[priority]
+        if delta == 0:
+            factors.append(f"priority_{priority}_no_delta")
+        elif delta > 0:
+            factors.append(f"priority_{priority}_upgrade_tier")
+        else:
+            factors.append(f"priority_{priority}_downgrade_tier")
+
+        if clamp_marker == "top":
+            factors.append("tier_clamped_at_top")
+        elif clamp_marker == "bottom":
+            factors.append("tier_clamped_at_bottom")
+
+        # Opus-downgrade rule (rule 2). Only applies when the resolved
+        # model would be Opus AND subscription_7d_opus utilization is
+        # at-or-above threshold. Q7 disposition: "non-critical" =
+        # priority > 1; priority == 1 preserves Opus.
+        assert snapshot is not None  # narrowed
+        seven_day_opus = snapshot.payload.get("seven_day_opus")
+        if isinstance(seven_day_opus, dict):
+            opus_util_raw = seven_day_opus.get("utilization")
+            if isinstance(opus_util_raw, int | float):
+                opus_util = float(opus_util_raw)
+                opus_pct = int(opus_util)
+                threshold_pct = int(
+                    OPUS_DOWNGRADE_UTILIZATION_THRESHOLD * 100
+                )
+                if opus_util >= threshold_pct:
+                    factors.append(
+                        f"subscription_7d_opus_at_{opus_pct}pct_above_threshold"
+                    )
+                    if model_tier_idx == 2:  # Opus
+                        if priority == 1:
+                            factors.append(
+                                "opus_preserved_for_critical_priority"
+                            )
+                        else:
+                            model_tier_idx = 1  # Sonnet
+                            factors.append(
+                                "opus_downgraded_to_sonnet_due_to_7d_opus_high"
+                            )
+                else:
+                    factors.append(
+                        f"subscription_7d_opus_at_{opus_pct}pct_below_threshold"
+                    )
+
+    recommended_model = _TIER_HIERARCHY[model_tier_idx]
+
+    # ----- Bucket resolution (independent dimension) -----
+
+    bucket: Literal["subscription_5h", "api_key_overflow"] = "subscription_5h"
+    pace_for_rationale: str | None = None
+    five_hour_pct: int | None = None
+
+    if not is_fallback:
+        assert snapshot is not None  # narrowed
+        five_hour = snapshot.payload.get("five_hour")
+        if isinstance(five_hour, dict):
+            util_raw = five_hour.get("utilization")
+            resets_at_raw = five_hour.get("resets_at")
+            if isinstance(util_raw, int | float) and isinstance(
+                resets_at_raw, str
+            ):
+                resets_at: datetime | None
+                try:
+                    resets_at = datetime.fromisoformat(resets_at_raw)
+                except ValueError:
+                    resets_at = None
+                if resets_at is not None:
+                    resets_at = _coerce_naive_to_utc(resets_at)
+                    util = float(util_raw)
+                    five_hour_pct = int(util)
+                    minutes_to_reset = max(
+                        0, int((resets_at - now).total_seconds() // 60)
+                    )
+                    pace = _compute_pace_recommendation(util, minutes_to_reset)
+                    pace_for_rationale = pace
+                    factors.append(
+                        f"subscription_5h_at_{five_hour_pct}pct_{pace}"
+                    )
+
+                    if pace == "conserve":
+                        factors.append(
+                            "subscription_5h_conserve_pause_recommended"
+                        )
+                    elif pace == "rate_limited":
+                        factors.append("subscription_5h_rate_limited")
+                        # Rule 5/6: saturated. Check overflow.
+                        extra_usage = snapshot.payload.get("extra_usage")
+                        is_enabled = (
+                            isinstance(extra_usage, dict)
+                            and extra_usage.get("is_enabled") is True
+                        )
+                        if is_enabled:
+                            bucket = "api_key_overflow"
+                            factors.append("routed_to_api_key_overflow")
+                        else:
+                            factors.append(
+                                "subscription_saturated_no_overflow"
+                            )
+
+    # ----- Rationale composition -----
+
+    rationale_text = _build_rationale_text(
+        is_fallback=is_fallback,
+        recommended_model=recommended_model,
+        recommended_bucket=bucket,
+        caller_role=caller_role,
+        priority=priority,
+        complexity=complexity,
+        five_hour_pct=five_hour_pct,
+        pace=pace_for_rationale,
+        factors=factors,
+    )
+
+    return CheckBudgetForTaskOutput(
+        recommended_model=recommended_model,  # type: ignore[arg-type]
+        recommended_bucket=bucket,
+        routing_factors=factors,
+        fallback_active=is_fallback,
+        rationale_text=rationale_text,
+    )
+
+
+def _build_rationale_text(
+    *,
+    is_fallback: bool,
+    recommended_model: str,
+    recommended_bucket: str,
+    caller_role: str,
+    priority: int,
+    complexity: int,
+    five_hour_pct: int | None,
+    pace: str | None,
+    factors: list[str],
+) -> str:
+    """Compose a human-readable summary from the routing decision +
+    observed factors.
+
+    The text explicitly names the fallback state when active per the
+    Q3 sub-amendment ("rationale_text explicitly names fallback status
+    when active") so operators reading the response cold can detect
+    the degraded path without parsing factor strings.
+    """
+    parts: list[str] = []
+
+    if is_fallback:
+        parts.append(
+            "Snapshot unavailable; routing on per-role defaults "
+            f"({caller_role}={recommended_model}). Budget-aware "
+            "adjustments will resume when snapshot recovers."
+        )
+        return " ".join(parts)
+
+    parts.append(
+        f"Routed to {recommended_bucket} with {recommended_model} "
+        f"(role={caller_role}, priority={priority}, "
+        f"complexity={complexity})."
+    )
+
+    if "opus_downgraded_to_sonnet_due_to_7d_opus_high" in factors:
+        parts.append(
+            "Opus downgraded to Sonnet for non-critical priority "
+            "(subscription_7d_opus above threshold)."
+        )
+    elif "opus_preserved_for_critical_priority" in factors:
+        parts.append(
+            "Opus preserved for priority=1 task despite "
+            "subscription_7d_opus above threshold."
+        )
+
+    if "subscription_5h_conserve_pause_recommended" in factors:
+        parts.append(
+            "subscription_5h in conserve pace; caller should consider "
+            "pausing new high-token dispatches."
+        )
+    elif "routed_to_api_key_overflow" in factors:
+        parts.append(
+            "subscription_5h saturated and overflow enabled; per-call "
+            "cost surfaces to operator."
+        )
+    elif "subscription_saturated_no_overflow" in factors:
+        parts.append(
+            "subscription_5h saturated and overflow disabled; caller "
+            "should queue and surface to operator."
+        )
+    elif pace is not None and five_hour_pct is not None:
+        parts.append(
+            f"subscription_5h at {five_hour_pct}% ({pace} pace)."
+        )
+
+    return " ".join(parts)
+
+
 __all__ = [
     "BUCKET_FIELD_MAP",
     "MODEL_PRICING",
+    "OPUS_DOWNGRADE_UTILIZATION_THRESHOLD",
     "BurnRateWindowLiteral",
+    "CheckBudgetForTaskInput",
+    "CheckBudgetForTaskOutput",
     "GetBurnRateInput",
     "GetBurnRateOutput",
     "GetTokenUsageInput",
