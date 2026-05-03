@@ -47,6 +47,51 @@ class Settings(BaseSettings):
     # substrate_working_directory validator above is engineer-only.
     enable_pm_supervisor: bool = Field(default=False)
 
+    # M5-pm-mode-and-window-state commit 7: OAuth subscription token
+    # the daemon uses to poll Anthropic's /api/oauth/usage endpoint.
+    #
+    # **First instance of the external-credential-with-validation-alias
+    # convention** documented in the class docstring above. Future
+    # external-credential fields (Telegram bot token at M6, etc.)
+    # should follow this exact shape:
+    # - Field name matches the env var (snake_case lowercase of the
+    #   env var name) — searchability beats brevity.
+    # - Type is ``str | None``.
+    # - Default is ``None`` (absence triggers a skip-with-warning code
+    #   path; see main.py's lifespan handling for the OAuth token).
+    # - ``validation_alias`` names the env var explicitly so the
+    #   ``MERIDIAN_ORCH_`` prefix isn't applied (Pydantic-settings
+    #   default behavior would otherwise look for
+    #   ``MERIDIAN_ORCH_CLAUDE_CODE_OAUTH_TOKEN``).
+    #
+    # **Footgun for tests** (caught at M5-pm-mode-and-window-state
+    # commit 7 during test development): pydantic-settings'
+    # ``populate_by_name`` defaults to ``False`` for fields with
+    # ``validation_alias`` set. This means constructor kwargs by
+    # Python field name are silently ignored; only env var
+    # population works. ``Settings(claude_code_oauth_token="test")``
+    # in a test will produce a Settings instance with
+    # ``claude_code_oauth_token=None`` — no error, no warning, just
+    # the default value. Tests for fields using this convention must
+    # use ``monkeypatch.setenv(env_var_name, value)`` BEFORE
+    # ``Settings()`` construction, plus a sanity assertion that the
+    # field populated correctly. Reference pattern:
+    # ``tests/integration/test_daemon_lifecycle.py::_make_settings_for_full_lifespan``
+    # uses ``monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", oauth_token)``
+    # followed by ``assert settings.claude_code_oauth_token ==
+    # "test-oauth-token"`` to surface this if a future Pydantic-
+    # settings config change ever silently breaks the alias path.
+    #
+    # When the token is unset, the OAuth usage poller is skipped at
+    # daemon startup with an INFO log naming the consequence; the
+    # daemon still serves MCP and runs supervisors normally, but
+    # ``get_window_state`` returns the cold-start placeholder
+    # (``pace_recommendation='unknown'``) for all queries.
+    claude_code_oauth_token: str | None = Field(
+        default=None,
+        validation_alias="CLAUDE_CODE_OAUTH_TOKEN",
+    )
+
     # M5-wrapper-closure: the substrate working tree the daemon discovers
     # ``origin`` from at canonical-provisioning time. Outside ``data_dir``
     # because it points at Mike's actual local clone, not daemon state.

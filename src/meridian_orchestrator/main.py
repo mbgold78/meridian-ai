@@ -25,6 +25,10 @@ from meridian_orchestrator.bridge.canonical import (
 )
 from meridian_orchestrator.bridge.dispatcher import BridgeDispatcher
 from meridian_orchestrator.bridge.engineer_supervisor import EngineerSupervisor
+from meridian_orchestrator.bridge.oauth_usage import (
+    CachedSnapshot,
+    OAuthUsagePoller,
+)
 from meridian_orchestrator.bridge.pm_supervisor import PMSupervisor
 from meridian_orchestrator.config import Settings
 from meridian_orchestrator.errors import ValidationError
@@ -42,6 +46,12 @@ logger = structlog.get_logger(__name__)
 # force-close after timeout. The subprocess gets SIGKILL via the OS
 # when the daemon process exits.
 SUPERVISOR_SHUTDOWN_TIMEOUT_SECONDS = 90
+
+# Wall-clock timeout for the OAuth usage poller's shutdown() coroutine.
+# The poller's shutdown is lightweight (cancel one asyncio task, await
+# its clean exit) and shouldn't take more than a few seconds even under
+# pathological asyncio.sleep cancellation paths. Generous 30s headroom.
+POLLER_SHUTDOWN_TIMEOUT_SECONDS = 30
 
 
 def _configure_logging(settings: Settings) -> None:
@@ -77,7 +87,17 @@ async def _lifespan(settings: Settings) -> AsyncIterator[SqliteStorage]:
 
 
 async def _run() -> None:
-    """Async main: open lifespan, wait for shutdown signal, exit cleanly."""
+    """Async main: read settings, configure logging + signal handlers,
+    open lifespan, wait for shutdown signal, exit cleanly.
+
+    Thin wrapper around :func:`_run_lifespan_body` — extraction at
+    M5-pm-mode-and-window-state commit 7 makes the lifespan body
+    testable. Production builds the shutdown ``asyncio.Event``
+    internally and wires SIGINT/SIGTERM (POSIX) or SIGINT/SIGBREAK
+    (Windows) handlers to set it. Tests pass an external event they
+    can set programmatically to trigger clean shutdown without
+    sending real OS signals.
+    """
     settings = Settings()
     _configure_logging(settings)
     logger.info("startup.begin", data_dir=str(settings.data_dir))
@@ -98,6 +118,22 @@ async def _run() -> None:
         if hasattr(signal, "SIGBREAK"):
             signal.signal(signal.SIGBREAK, lambda *_: _on_signal())
 
+    await _run_lifespan_body(settings, shutdown)
+
+
+async def _run_lifespan_body(
+    settings: Settings, shutdown: asyncio.Event
+) -> None:
+    """The actual lifespan body — opened, runs until ``shutdown`` is
+    set, drains cleanly. Extracted from :func:`_run` at M5-pm-mode-
+    and-window-state commit 7 for testability: tests pass an
+    external shutdown event they can set programmatically without
+    sending OS signals.
+
+    Production callers go through :func:`_run`; tests can call this
+    directly with a custom shutdown event and a Settings instance
+    pointing at a temp data dir.
+    """
     async with _lifespan(settings) as storage:
         registry = AgentRegistry(settings.agents_dir)
         async with registry.lifespan():
@@ -149,6 +185,14 @@ async def _run() -> None:
             mcp_ready = asyncio.Event()
             engineer_supervisor: EngineerSupervisor | None = None
             pm_supervisor: PMSupervisor | None = None
+            # M5-pm-mode-and-window-state commit 7: OAuth usage poller
+            # is constructed AFTER mcp_ready (parallelized with
+            # supervisor starts; see post-ready start block below). The
+            # variable is created once at lifespan scope and either
+            # stays None (no token configured) or holds the live
+            # poller; the get_oauth_usage_snapshot closure dispatches
+            # off the current value at call time.
+            oauth_usage_poller: OAuthUsagePoller | None = None
 
             # Lazy lookup callable for the signal_compaction tool wrapper.
             # The supervisor is constructed AFTER the MCP server starts
@@ -167,6 +211,26 @@ async def _run() -> None:
             def get_dispatcher() -> BridgeDispatcher | None:
                 return dispatcher
 
+            # Lazy lookup for the get_window_state tool wrapper.
+            # OAuthUsagePoller is constructed after mcp_ready (so its
+            # eventual ceiling-reached audit writes have a live MCP
+            # context — though the audit goes through storage, not MCP,
+            # so this is more about start-order symmetry than a hard
+            # dependency). When the operator hasn't set
+            # CLAUDE_CODE_OAUTH_TOKEN, the poller stays None and this
+            # closure returns None unconditionally — the
+            # get_window_state handler treats that as the cold-start
+            # case (snapshot=None → pace_recommendation='unknown'),
+            # which collapses "no poller running" with "poller
+            # exists but hasn't polled yet" into a single user-visible
+            # state per Q3 disposition at commit 6 prep.
+            def get_oauth_usage_snapshot() -> CachedSnapshot | None:
+                return (
+                    oauth_usage_poller.latest_snapshot()
+                    if oauth_usage_poller is not None
+                    else None
+                )
+
             # No get_pm_supervisor closure threaded through serve_mcp at
             # M5-pm-supervisor-base — no MCP tool consumes a PM
             # supervisor reference yet (signal_compaction is engineer-
@@ -183,9 +247,47 @@ async def _run() -> None:
                     storage=storage,
                     get_engineer_supervisor=get_engineer_supervisor,
                     get_dispatcher=get_dispatcher,
+                    get_oauth_usage_snapshot=get_oauth_usage_snapshot,
                 ),
                 name="mcp-server",
             )
+
+            # OAuth usage poller skip-with-warning at startup if the
+            # operator hasn't configured the token. Logs once at
+            # startup so the operator sees the intent and consequence
+            # before discovering at query time that get_window_state
+            # always returns cold-start. Per Q1 disposition + Q7
+            # extended log body at commit 7 prep.
+            #
+            # The body is intentionally hand-wavy on the downstream
+            # consumer behavior because 02-architecture.md:133's
+            # "routing logic degrades accordingly" defers to the
+            # not-yet-shipped M5-subscription-routing's design call.
+            # BACKLOG entry tracks tightening this log line once
+            # M5-subscription-routing pins the unknown-pace fallback
+            # behavior (halt-on-unknown vs fallback-to-defaults vs
+            # fallback-to-conservative).
+            if settings.claude_code_oauth_token is None:
+                logger.info(
+                    "oauth_usage_poller.skipped_no_token",
+                    message=(
+                        "CLAUDE_CODE_OAUTH_TOKEN not set; OAuth usage "
+                        "poller will not run. get_window_state will "
+                        "return cold-start (pace_recommendation="
+                        "'unknown') for all queries. Downstream "
+                        "consumers of get_window_state "
+                        "(M5-subscription-routing's "
+                        "check_budget_for_task, PM-continuous-mode "
+                        "pacing decisions) will follow their "
+                        "unknown-pace fallback rules — actual "
+                        "behavior depends on those tools' "
+                        "implementations and may include "
+                        "conservative defaults, halting, or "
+                        "operating without window awareness. Set "
+                        "CLAUDE_CODE_OAUTH_TOKEN and restart the "
+                        "daemon to enable window-aware decisions."
+                    ),
+                )
             logger.info(
                 "startup.complete",
                 mcp_url=f"http://{settings.mcp_host}:{settings.mcp_port}/mcp",
@@ -198,17 +300,32 @@ async def _run() -> None:
             )
 
             try:
-                # Start supervisors only after the MCP server is accepting
-                # connections — their own MCP calls back to the daemon need
-                # the server up. Gated on per-supervisor enable flags
-                # (defaults off; flipped on at M5-flag-flips after the
-                # verification checklist passes per
-                # project_m5_engineer_supervisor_flag_flip memory).
+                # Start supervisors AND the OAuth usage poller only
+                # after the MCP server is accepting connections — their
+                # own MCP calls back to the daemon need the server up.
+                # Gated:
+                # - Supervisors gated on per-supervisor enable flags
+                #   (defaults off; flipped on at M5-flag-flips after
+                #   the verification checklist passes per
+                #   project_m5_engineer_supervisor_flag_flip memory).
+                # - OAuth poller gated on
+                #   ``settings.claude_code_oauth_token is not None``
+                #   per Q1 disposition at commit 7 prep (skip with
+                #   warning when token unset).
                 #
-                # Start order: PM first, then Engineer. Causality match
-                # (PM is upstream of Engineer in the dispatch chain) and
-                # symmetric with the shutdown order below.
-                if settings.enable_engineer_supervisor or settings.enable_pm_supervisor:
+                # Start order: poller → PM → Engineer. Per Q3 Reading A
+                # (poller starts after MCP ready, parallelizable with
+                # supervisor starts because OAuthUsagePoller.start()
+                # spawns an asyncio task and returns immediately
+                # without awaiting first poll completion). Symmetric
+                # with the shutdown order below where poller stops
+                # first per Q3 Reading X.
+                needs_post_ready_start = (
+                    settings.claude_code_oauth_token is not None
+                    or settings.enable_engineer_supervisor
+                    or settings.enable_pm_supervisor
+                )
+                if needs_post_ready_start:
                     ready_or_crash = asyncio.create_task(
                         mcp_ready.wait(), name="mcp-ready-wait"
                     )
@@ -224,6 +341,23 @@ async def _run() -> None:
                         if mcp_exc is not None:
                             raise mcp_exc
                     else:
+                        # Poller first per Q3 Start = Reading A.
+                        # ``start()`` is non-blocking (task spawn +
+                        # INFO log; no await on first poll). Failures
+                        # in the polling loop are caught inside the
+                        # loop and logged; they don't propagate to
+                        # ``start()``. So this can't fail in a way
+                        # that blocks supervisor starts.
+                        if settings.claude_code_oauth_token is not None:
+                            oauth_usage_poller = OAuthUsagePoller(
+                                storage=storage,
+                                oauth_token=settings.claude_code_oauth_token,
+                            )
+                            await oauth_usage_poller.start()
+                            logger.info(
+                                "oauth_usage_poller.lifespan_started"
+                            )
+
                         if settings.enable_pm_supervisor:
                             try:
                                 settings.pm_continuous_dir.mkdir(
@@ -285,15 +419,31 @@ async def _run() -> None:
                             raise crash_exc
                 logger.info("shutdown.begin")
             finally:
-                # Shutdown order: PM → Engineer → MCP. Causality match —
-                # PM is upstream of Engineer in the dispatch chain;
-                # stopping PM stops the upstream cause of new Engineer
-                # work and lets Engineer drain its in-flight subagent
-                # dispatches naturally. Each supervisor's shutdown() gets
-                # a wall-clock timeout (SUPERVISOR_SHUTDOWN_TIMEOUT_SECONDS)
-                # so a wedged supervisor doesn't block daemon shutdown;
-                # force-close after timeout, log the failure, continue
-                # the shutdown sequence.
+                # Shutdown order: poller → PM → Engineer → MCP. Per Q3
+                # Shutdown = Reading X disposition at commit 7 prep:
+                # poller is the lightest-weight component (cancel one
+                # asyncio task; no cascade) and the upstream observer
+                # of Mike's MCP activity. Stopping it first removes
+                # one source of writes (ceiling-reached audit rows)
+                # during the rest of shutdown. Symmetric with start
+                # order (poller-first there too).
+                #
+                # Each shutdown() gets a wall-clock timeout — a
+                # wedged component (poller stuck on a slow asyncio.sleep
+                # cancellation; supervisor stalled on a SQLite write)
+                # doesn't block daemon shutdown; force-close after
+                # timeout, log the failure, continue the sequence.
+                if oauth_usage_poller is not None:
+                    try:
+                        await asyncio.wait_for(
+                            oauth_usage_poller.shutdown(),
+                            timeout=POLLER_SHUTDOWN_TIMEOUT_SECONDS,
+                        )
+                    except Exception as exc:
+                        logger.error(
+                            "oauth_usage_poller.shutdown_force_close",
+                            error=str(exc),
+                        )
                 if pm_supervisor is not None:
                     try:
                         await asyncio.wait_for(

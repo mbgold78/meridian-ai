@@ -33,7 +33,11 @@ from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
 
 from meridian_orchestrator.auth import IssuedToken, TokenStore
-from meridian_orchestrator.bridge.oauth_usage import CachedSnapshot
+from meridian_orchestrator.bridge.oauth_usage import (
+    CachedSnapshot,
+    OAuthUsagePoller,
+    SnapshotFetchResult,
+)
 from meridian_orchestrator.config import Settings
 from meridian_orchestrator.server import serve as serve_mcp
 from meridian_orchestrator.storage.migrations import run_migrations
@@ -323,3 +327,136 @@ async def test_cold_start_returns_unknown_over_mcp(
     assert structured is not None
     assert structured["pace_recommendation"] == "unknown"
     assert structured["snapshot_age_seconds"] is None
+
+
+# ---------------------------------------------------------------------------
+# Full-stack with real OAuthUsagePoller + injected fake fetcher
+# (M5-pm-mode-and-window-state commit 7 production-shape integration)
+# ---------------------------------------------------------------------------
+
+
+@asynccontextmanager
+async def _running_server_with_live_poller(
+    settings: Settings,
+    storage: SqliteStorage,
+    poller: OAuthUsagePoller,
+) -> AsyncIterator[None]:
+    """Spin the MCP server with a live OAuthUsagePoller's
+    ``latest_snapshot`` as the closure target. Mirrors
+    :func:`_running_server` but passes a poller-backed callable
+    instead of a static snapshot — exercises the
+    ``main.py``-shape integration where ``get_oauth_usage_snapshot``
+    delegates to a running poller.
+    """
+    ready = asyncio.Event()
+    task = asyncio.create_task(
+        serve_mcp(
+            settings,
+            ready=ready,
+            storage=storage,
+            get_oauth_usage_snapshot=poller.latest_snapshot,
+        ),
+        name="mcp-test-with-poller",
+    )
+    try:
+        await asyncio.wait_for(ready.wait(), timeout=15)
+        yield
+    finally:
+        task.cancel()
+        with contextlib.suppress(TimeoutError, asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=15)
+
+
+async def test_get_window_state_returns_populated_state_after_real_poll(
+    settings: Settings, storage: SqliteStorage
+) -> None:
+    """Production-shape integration: a real OAuthUsagePoller is
+    constructed with an injected fake fetcher returning the
+    Experiment-4 payload; the poller's first snapshot lands; the
+    MCP server's get_window_state wrapper closure dispatches to
+    ``poller.latest_snapshot()`` and returns populated window data
+    (NOT cold-start).
+
+    Closes the with-poller end-to-end coverage gap from the commit
+    7 prep review. Existing tests cover:
+    - Static-snapshot injection (this file's other tests)
+    - Direct-handler logic (test_get_window_state.py)
+    - Lifespan wiring (test_daemon_lifecycle.py with TrackingPoller)
+
+    What this test adds: the production code path where the closure
+    threads through the running poller's ``latest_snapshot()``
+    method, picks up a snapshot the poller wrote during normal
+    operation, and surfaces it to a live MCP caller — verifying the
+    full-stack wiring is intact.
+    """
+    polled_at = datetime.now(tz=UTC)
+    resets_at = (polled_at + timedelta(hours=4)).isoformat(
+        timespec="microseconds"
+    )
+
+    async def fake_fetch() -> SnapshotFetchResult:
+        return SnapshotFetchResult(
+            status_code=200,
+            payload={
+                "five_hour": {
+                    "utilization": 17.0,
+                    "resets_at": resets_at,
+                },
+            },
+        )
+
+    issued = await _issue_role_token(storage, "pm", "pm-real-poller")
+
+    # Construct a real poller with a fast cadence and the fake
+    # fetcher injected. The cadence override is at construction
+    # time (not via the module-level default) so it actually
+    # applies.
+    poller = OAuthUsagePoller(
+        storage=storage,
+        snapshot_fetcher=fake_fetch,
+        poll_interval_seconds=0.02,
+    )
+    await poller.start()
+    try:
+        # Wait for the poller's first snapshot to land. Fast cadence
+        # means this should happen within a few hundred ms.
+        for _ in range(100):
+            if poller.latest_snapshot() is not None:
+                break
+            await asyncio.sleep(0.02)
+        assert poller.latest_snapshot() is not None, (
+            "real poller did not publish a snapshot within ~2s; "
+            "polling/fetcher injection is broken in the test harness."
+        )
+
+        base_url = f"http://{settings.mcp_host}:{settings.mcp_port}"
+        async with _running_server_with_live_poller(
+            settings, storage, poller
+        ):
+            result = await _call_get_window_state(
+                base_url=base_url, token=issued.token
+            )
+
+        assert getattr(result, "isError", False) is False, (
+            f"get_window_state returned an error: "
+            f"{getattr(result, 'content', None)!r}"
+        )
+        structured = getattr(result, "structuredContent", None)
+        assert structured is not None
+
+        # Populated, NOT cold-start. This is the load-bearing
+        # assertion: pace_recommendation is concrete (not 'unknown'),
+        # snapshot_age_seconds is a real int, utilization matches
+        # the fake payload.
+        assert structured["pace_recommendation"] != "unknown", (
+            "get_window_state returned 'unknown' despite the poller "
+            "having a live snapshot; the closure is not threading "
+            "through poller.latest_snapshot() correctly."
+        )
+        assert structured["snapshot_age_seconds"] is not None
+        assert structured["snapshot_age_seconds"] >= 0
+        assert structured["utilization"] == 17.0
+        assert structured["bucket"] == "subscription_5h"
+        assert structured["window_end"]  # populated, not empty string
+    finally:
+        await poller.shutdown()
