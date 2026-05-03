@@ -45,6 +45,7 @@ from meridian_orchestrator.auth import IssuedToken, TokenStore
 from meridian_orchestrator.bridge.dispatcher import _TERMINAL_STATES
 from meridian_orchestrator.bridge.launch_env import build_subprocess_env
 from meridian_orchestrator.errors import OrchestratorError
+from meridian_orchestrator.storage.datetime_utils import _coerce_naive_to_utc
 from meridian_orchestrator.storage.interface import Storage
 
 logger = structlog.get_logger(__name__)
@@ -731,8 +732,8 @@ class LongRunningSupervisor(ABC):
         # last_activity_at column via SQL `datetime('now')` instead of
         # routing through record_mcp_call, the watchdog should still
         # work — naive == UTC convention is enforced here as a backstop.
-        if effective_dt.tzinfo is None:
-            effective_dt = effective_dt.replace(tzinfo=UTC)
+        # Shared helper extracted at M5-subscription-routing commit 2.
+        effective_dt = _coerce_naive_to_utc(effective_dt)
 
         idle_float = (datetime.now(tz=UTC) - effective_dt).total_seconds()
         if idle_float <= self._timeout_seconds:

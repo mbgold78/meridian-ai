@@ -66,11 +66,19 @@ from meridian_orchestrator.tools.agents import (
     list_agents,
 )
 from meridian_orchestrator.tools.budget import (
+    BurnRateWindowLiteral,
+    GetBurnRateInput,
+    GetBurnRateOutput,
+    GetTokenUsageInput,
+    GetTokenUsageOutput,
     GetWindowStateInput,
     GetWindowStateOutput,
     RecordApiCallInput,
     RecordApiCallOutput,
     SnapshotProvider,
+    WindowLiteral,
+    get_burn_rate,
+    get_token_usage,
     get_window_state,
     record_api_call,
 )
@@ -297,7 +305,9 @@ def build_server(
     if storage is not None:
         _register_dispatch_query_tools(mcp, storage, token_store)
         _register_dispatch_completion_tools(mcp, storage, token_store)
-        _register_budget_tools(mcp, storage, token_store)
+        _register_budget_tools(
+            mcp, storage, token_store, get_oauth_usage_snapshot
+        )
         _register_pm_mode_tools(mcp, storage, token_store)
 
     if storage is not None and get_oauth_usage_snapshot is not None:
@@ -448,28 +458,38 @@ def _register_dispatch_initiation_tools(
 
 
 def _register_budget_tools(
-    mcp: FastMCP, storage: Storage, token_store: TokenStore
+    mcp: FastMCP,
+    storage: Storage,
+    token_store: TokenStore,
+    get_oauth_usage_snapshot: SnapshotProvider | None,
 ) -> None:
     """Register budget/usage tools.
 
-    Currently ships ``record_api_call`` (M5-record-api-call commit 4).
-    Downstream M5-oauth-poller-and-get-window-state will add
-    ``get_token_usage``, ``get_burn_rate``, ``check_budget_for_task``,
-    and ``get_window_state`` to this same helper.
+    Ships ``record_api_call`` (M5-record-api-call commit 4),
+    ``get_token_usage`` and ``get_burn_rate`` (M5-subscription-routing
+    commit 2). ``check_budget_for_task`` lands at M5-subscription-
+    routing commit 4. ``get_window_state`` lives in
+    :func:`_register_window_state_tools` because that helper was
+    introduced before this one acquired a snapshot dependency; the
+    two helpers may merge in a future hygiene commit.
 
-    Permission: record_api_call is allowed for all four agents per
-    ``06-mcp-tools-phase-one.md`` § Permission summary table. No
-    role check at handler or wrapper layer; any authenticated caller
-    may record their own API calls. Single-gate pattern (W-3) is
-    preserved by absence — no role-based gate exists at any layer
-    because none is spec'd.
+    Permission: record_api_call is allowed for all four agents.
+    get_token_usage is hierarchy-scoped (PM/Engineer subtree;
+    Implementer/Tester own only) at the handler layer.
+    get_burn_rate is PM/Engineer/Mike at the handler layer (single-
+    gate via ``_require_role`` per the established pattern).
 
-    The wrapper resolves both ``agent_id`` (for the api_usage row) and
-    ``token_id`` (for the dispatch lookup) from the request context.
-    Two distinct concerns: agent_id is the durable identity for the
-    audit/usage row; token_id binds to the specific dispatch context
-    the call landed inside (or no dispatch, for OAuth callers — see
-    handler docstring for the three caller paths).
+    The wrappers resolve identity facts (``agent_id`` via
+    ``_resolve_agent_id``; ``role`` via
+    ``_resolve_caller_role_via_token``; ``token_id`` via
+    ``_resolve_caller_token_id`` for record_api_call) and pass them
+    to the handlers as positional kwargs.
+
+    ``get_oauth_usage_snapshot`` is optional — the wrappers register
+    regardless. When ``None``, ``get_token_usage`` / ``get_burn_rate``
+    fall back to calendar_24h for ``current`` / ``last`` window
+    requests via the helper's snapshot-unavailable path; the response
+    surfaces ``window_resolution_fallback='calendar_24h'``.
     """
 
     @mcp.tool(
@@ -514,6 +534,73 @@ def _register_budget_tools(
             caller_agent_id=agent_id,
             caller_agent_role=caller_role,
             caller_token_id=token_id,
+        )
+
+    # Lazy snapshot lookup: the optional get_oauth_usage_snapshot
+    # callable is captured here so the wrappers below resolve it at
+    # call time. When the operator hasn't set
+    # CLAUDE_CODE_OAUTH_TOKEN, this is None and the handlers fall
+    # back to calendar_24h for current/last window requests.
+    def _snapshot_provider() -> Any:
+        if get_oauth_usage_snapshot is None:
+            return None
+        return get_oauth_usage_snapshot()
+
+    @mcp.tool(
+        name="get_token_usage",
+        description=(
+            "Per-window token-usage aggregation. Hierarchy-scoped: "
+            "PM/Engineer see their subtree, Implementer/Tester see "
+            "only their own usage. window selects 'current' / 'last' "
+            "(subscription_5h-relative) or 'today' / 'last_24h' "
+            "(calendar). Output includes by_model and (when "
+            "agent_id is None) by_agent breakdowns plus "
+            "window_resolution_fallback='calendar_24h' when the "
+            "OAuth snapshot was unavailable for current/last and "
+            "the resolver fell back to a rolling 24h window."
+        ),
+    )
+    async def _get_token_usage(
+        agent_id: str | None = None,
+        window: WindowLiteral = "current",
+    ) -> GetTokenUsageOutput:
+        caller_agent_id = _resolve_agent_id()
+        await _observe_caller(storage, token_store, "get_token_usage")
+        caller_role = _resolve_caller_role_via_token()
+        return await get_token_usage(
+            storage=storage,
+            get_snapshot=_snapshot_provider,
+            request=GetTokenUsageInput(agent_id=agent_id, window=window),
+            caller_agent_id=caller_agent_id,
+            caller_role=caller_role,
+        )
+
+    @mcp.tool(
+        name="get_burn_rate",
+        description=(
+            "Subscription-window burn rate (tokens/hour, projected "
+            "window total, cost/hour, projected window cost). "
+            "Allowed for PM, Engineer, and Mike — Implementer/Tester "
+            "denied. Scope is global (whole subscription), not the "
+            "caller's role-scoped slice. window selects 'current' / "
+            "'last' (subscription_5h-relative) or 'last_24h' "
+            "(rolling). For closed windows projected equals "
+            "observed; only 'current' projects forward. "
+            "window_resolution_fallback='calendar_24h' signals the "
+            "snapshot-unavailable fallback path."
+        ),
+    )
+    async def _get_burn_rate(
+        window: BurnRateWindowLiteral = "current",
+    ) -> GetBurnRateOutput:
+        _resolve_agent_id()
+        await _observe_caller(storage, token_store, "get_burn_rate")
+        caller_role = _resolve_caller_role_via_token()
+        return await get_burn_rate(
+            storage=storage,
+            get_snapshot=_snapshot_provider,
+            request=GetBurnRateInput(window=window),
+            caller_role=caller_role,
         )
 
 

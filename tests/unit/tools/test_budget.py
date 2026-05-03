@@ -22,9 +22,14 @@ add to the dict that forgets the test fails this file informatively.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
+from meridian_orchestrator.bridge.oauth_usage import CachedSnapshot
 from meridian_orchestrator.tools.budget import (
+    _AGENT_ROLE_SUBTREE,
     MODEL_PRICING,
     _compute_cost_usd,
+    _resolve_window,
 )
 
 
@@ -138,3 +143,242 @@ def test_model_pricing_values_are_positive() -> None:
     for model, (input_price, output_price) in MODEL_PRICING.items():
         assert input_price > 0, f"{model} input price must be positive"
         assert output_price > 0, f"{model} output price must be positive"
+
+
+# ---------------------------------------------------------------------------
+# _AGENT_ROLE_SUBTREE — hierarchy subtree map
+# ---------------------------------------------------------------------------
+
+
+def test_agent_role_subtree_contains_four_roles() -> None:
+    """Sentinel: the four-role hierarchy is durably encoded. Phase 2
+    multi-tenancy may extend; this test guards against accidental
+    drops or typos in the map.
+    """
+    assert set(_AGENT_ROLE_SUBTREE.keys()) == {
+        "pm", "engineer", "implementer", "tester"
+    }
+
+
+def test_agent_role_subtree_pm_includes_all_four() -> None:
+    """PM's subtree includes self + Engineer + Implementer + Tester
+    (the entire hierarchy under Mike). PM with agent_id=None rolls up
+    every agent's usage.
+    """
+    assert _AGENT_ROLE_SUBTREE["pm"] == frozenset(
+        {"pm", "engineer", "implementer", "tester"}
+    )
+
+
+def test_agent_role_subtree_engineer_excludes_pm() -> None:
+    """Engineer's subtree includes self + Implementer + Tester.
+    Engineer cannot see PM's usage. The hierarchy enforcement test.
+    """
+    assert _AGENT_ROLE_SUBTREE["engineer"] == frozenset(
+        {"engineer", "implementer", "tester"}
+    )
+    assert "pm" not in _AGENT_ROLE_SUBTREE["engineer"]
+
+
+def test_agent_role_subtree_implementer_self_only() -> None:
+    """Implementer's subtree is just implementer (own role only).
+    Implementer cannot see Tester's usage even though both report to
+    Engineer — sibling isolation per spec hierarchy invariant 4.
+    """
+    assert _AGENT_ROLE_SUBTREE["implementer"] == frozenset({"implementer"})
+
+
+def test_agent_role_subtree_tester_self_only() -> None:
+    """Tester's subtree is just tester. Symmetric to implementer's
+    self-only scope."""
+    assert _AGENT_ROLE_SUBTREE["tester"] == frozenset({"tester"})
+
+
+# ---------------------------------------------------------------------------
+# _resolve_window — pure function tests for window-resolution semantics
+# ---------------------------------------------------------------------------
+
+
+def _make_snapshot_with_resets_at(
+    resets_at: datetime, polled_at: datetime
+) -> CachedSnapshot:
+    """Build a CachedSnapshot whose five_hour.resets_at is set; other
+    fields are left empty. Suitable for _resolve_window tests that
+    only need the subscription_5h cycle anchor.
+    """
+    return CachedSnapshot(
+        payload={
+            "five_hour": {
+                "resets_at": resets_at.isoformat(timespec="microseconds"),
+                "utilization": 50.0,
+            }
+        },
+        polled_at=polled_at,
+        null_counters=[],
+    )
+
+
+def test_resolve_window_current_with_fresh_snapshot() -> None:
+    """``current`` resolves to (resets_at - 5h, resets_at) using the
+    snapshot's five_hour.resets_at."""
+    now = datetime(2026, 5, 3, 14, 0, 0, tzinfo=UTC)
+    resets_at = datetime(2026, 5, 3, 17, 0, 0, tzinfo=UTC)  # 3h from now
+    snapshot = _make_snapshot_with_resets_at(resets_at, polled_at=now)
+
+    resolution = _resolve_window(window="current", snapshot=snapshot, now=now)
+
+    assert resolution.window_end == resets_at
+    assert resolution.window_start == resets_at - timedelta(hours=5)
+    assert resolution.fallback == "none"
+
+
+def test_resolve_window_last_with_fresh_snapshot() -> None:
+    """``last`` resolves to (resets_at - 10h, resets_at - 5h) — the
+    previous 5h cycle. ``window_end`` is the start of the current
+    cycle; ``window_start`` is 5h before that.
+    """
+    now = datetime(2026, 5, 3, 14, 0, 0, tzinfo=UTC)
+    resets_at = datetime(2026, 5, 3, 17, 0, 0, tzinfo=UTC)
+    snapshot = _make_snapshot_with_resets_at(resets_at, polled_at=now)
+
+    resolution = _resolve_window(window="last", snapshot=snapshot, now=now)
+
+    assert resolution.window_end == resets_at - timedelta(hours=5)
+    assert resolution.window_start == resets_at - timedelta(hours=10)
+    assert resolution.fallback == "none"
+
+
+def test_resolve_window_today_calendar() -> None:
+    """``today`` resolves to (today_UTC_00:00, tomorrow_UTC_00:00).
+    Snapshot-independent. Open window — now is between start and end.
+    """
+    now = datetime(2026, 5, 3, 14, 30, 45, tzinfo=UTC)
+    resolution = _resolve_window(window="today", snapshot=None, now=now)
+
+    assert resolution.window_start == datetime(2026, 5, 3, 0, 0, 0, tzinfo=UTC)
+    assert resolution.window_end == datetime(2026, 5, 4, 0, 0, 0, tzinfo=UTC)
+    assert resolution.fallback == "none"
+
+
+def test_resolve_window_last_24h_rolling() -> None:
+    """``last_24h`` resolves to (now - 24h, now). Pure rolling window;
+    snapshot-independent."""
+    now = datetime(2026, 5, 3, 14, 30, 45, tzinfo=UTC)
+    resolution = _resolve_window(window="last_24h", snapshot=None, now=now)
+
+    assert resolution.window_start == now - timedelta(hours=24)
+    assert resolution.window_end == now
+    assert resolution.fallback == "none"
+
+
+def test_resolve_window_current_falls_back_when_snapshot_none() -> None:
+    """Cold-start: snapshot=None → ``current`` falls back to
+    (now - 24h, now) with fallback='calendar_24h'."""
+    now = datetime(2026, 5, 3, 14, 0, 0, tzinfo=UTC)
+    resolution = _resolve_window(window="current", snapshot=None, now=now)
+
+    assert resolution.window_start == now - timedelta(hours=24)
+    assert resolution.window_end == now
+    assert resolution.fallback == "calendar_24h"
+
+
+def test_resolve_window_current_falls_back_when_snapshot_stale() -> None:
+    """Snapshot age > 120s → ``current`` falls back to calendar_24h.
+    The 120s threshold is _STALE_SNAPSHOT_THRESHOLD_SECONDS, shared
+    with get_window_state.
+    """
+    now = datetime(2026, 5, 3, 14, 0, 0, tzinfo=UTC)
+    resets_at = datetime(2026, 5, 3, 17, 0, 0, tzinfo=UTC)
+    # Snapshot polled 200 seconds ago — stale.
+    polled_at = now - timedelta(seconds=200)
+    snapshot = _make_snapshot_with_resets_at(resets_at, polled_at=polled_at)
+
+    resolution = _resolve_window(window="current", snapshot=snapshot, now=now)
+
+    assert resolution.window_start == now - timedelta(hours=24)
+    assert resolution.window_end == now
+    assert resolution.fallback == "calendar_24h"
+
+
+def test_resolve_window_last_fallback_does_not_shift_backward_24h() -> None:
+    """Critical contract: when ``last`` falls back to calendar_24h,
+    the window is (now - 24h, now) — the SAME shape as ``current``'s
+    fallback. ``last`` does NOT additionally shift backward by 24
+    hours into a (now - 48h, now - 24h) window. Future-Claude reading
+    a response with window='last' + fallback='calendar_24h' must NOT
+    expect a shifted-back window.
+
+    Failure here means the fallback path forked between current and
+    last — operator interpretation breaks because the documented
+    "fallback collapses both onto same surface" contract is violated.
+    """
+    now = datetime(2026, 5, 3, 14, 0, 0, tzinfo=UTC)
+    resolution = _resolve_window(window="last", snapshot=None, now=now)
+
+    assert resolution.window_start == now - timedelta(hours=24), (
+        "last fell back to a shifted window — expected (now - 24h, "
+        "now), same as current's fallback. Documented contract: both "
+        "current and last collapse onto the same calendar_24h surface "
+        "when the snapshot is unavailable; 'last' does NOT shift "
+        "backward 24h further. See _resolve_window docstring."
+    )
+    assert resolution.window_end == now
+    assert resolution.fallback == "calendar_24h"
+
+
+def test_resolve_window_today_unaffected_by_snapshot_state() -> None:
+    """``today`` doesn't depend on the snapshot — fallback is always
+    'none' regardless of snapshot state."""
+    now = datetime(2026, 5, 3, 14, 30, 45, tzinfo=UTC)
+    today_start = datetime(2026, 5, 3, 0, 0, 0, tzinfo=UTC)
+    tomorrow_start = datetime(2026, 5, 4, 0, 0, 0, tzinfo=UTC)
+
+    for snapshot in (
+        None,
+        _make_snapshot_with_resets_at(
+            datetime(2026, 5, 3, 17, 0, 0, tzinfo=UTC), polled_at=now
+        ),
+    ):
+        resolution = _resolve_window(window="today", snapshot=snapshot, now=now)
+        assert resolution.window_start == today_start
+        assert resolution.window_end == tomorrow_start
+        assert resolution.fallback == "none"
+
+
+def test_resolve_window_last_24h_unaffected_by_snapshot_state() -> None:
+    """``last_24h`` is rolling and snapshot-independent — fallback
+    stays 'none' regardless of snapshot."""
+    now = datetime(2026, 5, 3, 14, 0, 0, tzinfo=UTC)
+    for snapshot in (
+        None,
+        _make_snapshot_with_resets_at(
+            datetime(2026, 5, 3, 17, 0, 0, tzinfo=UTC), polled_at=now
+        ),
+    ):
+        resolution = _resolve_window(
+            window="last_24h", snapshot=snapshot, now=now
+        )
+        assert resolution.window_start == now - timedelta(hours=24)
+        assert resolution.window_end == now
+        assert resolution.fallback == "none"
+
+
+def test_resolve_window_handles_malformed_resets_at() -> None:
+    """If snapshot.payload['five_hour']['resets_at'] is malformed,
+    the resolver falls back to calendar_24h rather than raising.
+    Defensive degradation — production should never see this path,
+    but a corrupt poll payload should not crash window resolution.
+    """
+    now = datetime(2026, 5, 3, 14, 0, 0, tzinfo=UTC)
+    bad_snapshot = CachedSnapshot(
+        payload={"five_hour": {"resets_at": "not-a-real-iso-string"}},
+        polled_at=now,
+        null_counters=[],
+    )
+
+    resolution = _resolve_window(
+        window="current", snapshot=bad_snapshot, now=now
+    )
+    assert resolution.fallback == "calendar_24h"
+    assert resolution.window_start == now - timedelta(hours=24)
+    assert resolution.window_end == now

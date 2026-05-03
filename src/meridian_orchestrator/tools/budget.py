@@ -87,6 +87,7 @@ from meridian_orchestrator.bridge.oauth_usage import (
     CachedSnapshot,
 )
 from meridian_orchestrator.errors import PermissionError as OrchestratorPermissionError
+from meridian_orchestrator.storage.datetime_utils import _coerce_naive_to_utc
 from meridian_orchestrator.storage.interface import Storage
 from meridian_orchestrator.tools.pm_mode import read_current_pm_mode
 
@@ -624,9 +625,10 @@ async def _read_most_recent_pm_mode_log_timestamp(
     except ValueError:
         # Unparseable timestamp; defensive degrade.
         return None
-    if parsed.tzinfo is None:
-        # Naive timestamp from SQLite datetime('now'); treat as UTC.
-        parsed = parsed.replace(tzinfo=UTC)
+    # Naive timestamp from SQLite datetime('now') is treated as UTC;
+    # tz-aware inputs preserve their offset. Shared helper extracted at
+    # M5-subscription-routing commit 2.
+    parsed = _coerce_naive_to_utc(parsed)
     return parsed.isoformat(timespec="microseconds")
 
 
@@ -821,15 +823,624 @@ async def get_window_state(
     )
 
 
+# ===========================================================================
+# get_token_usage + get_burn_rate (M5-subscription-routing commit 2)
+# ===========================================================================
+#
+# Per-window aggregations over api_usage joined against the polled
+# /api/oauth/usage snapshot for subscription-window resolution. Reading-C
+# hybrid window semantics per Q1 disposition at the M5-subscription-routing
+# prep:
+#
+# - 'current' / 'last' → subscription_5h-relative (primary pacing counter).
+#   Falls back to (now - 24h, now) when snapshot is None or stale (>120s).
+#   Both 'current' and 'last' fall back to the SAME calendar_24h window;
+#   'last' does NOT shift backward 24h further.
+# - 'today' / 'last_24h' → calendar (today_UTC_00:00 → tomorrow_UTC_00:00 /
+#   rolling 24h). Snapshot-independent; never trigger fallback.
+#
+# Hierarchy filtering uses the denormalized api_usage.agent_role column
+# (commit 1) — no JOIN required. Subtree map is hardcoded per Q3
+# disposition.
+
+
+# ----- Hierarchy subtree map ----------------------------------------------
+
+# _AGENT_ROLE_SUBTREE is hardcoded rather than derived from agents.reports_to
+# chains because (a) Phase 1 has fixed 4-role hierarchy; runtime derivation
+# is over-engineering for static cardinality, (b) derivation would introduce
+# snapshot/import ordering complexity. Single-source-of-truth contract test
+# asserts the four entries + values in tests/unit/tools/test_budget.py;
+# Phase 2 dynamic hierarchies refactor to recursive-CTE at that point.
+#
+# Deliberate exception to the "derive don't duplicate" pattern compounded
+# through M5 (PmMode → PAUSED_MODES; FIELD_TO_BUCKET → BUCKET_FIELD_MAP).
+# Documented as exception, not regression.
+_AGENT_ROLE_SUBTREE: dict[str, frozenset[str]] = {
+    "pm": frozenset({"pm", "engineer", "implementer", "tester"}),
+    "engineer": frozenset({"engineer", "implementer", "tester"}),
+    "implementer": frozenset({"implementer"}),
+    "tester": frozenset({"tester"}),
+}
+
+
+# ----- Window-resolution helper -------------------------------------------
+
+
+WindowLiteral = Literal["current", "last", "today", "last_24h"]
+BurnRateWindowLiteral = Literal["current", "last", "last_24h"]
+WindowResolutionFallback = Literal["none", "calendar_24h"]
+
+
+class _WindowResolution(BaseModel):
+    """Internal: result of :func:`_resolve_window`."""
+
+    window_start: datetime
+    window_end: datetime
+    fallback: WindowResolutionFallback
+
+
+def _resolve_window(
+    *,
+    window: WindowLiteral,
+    snapshot: CachedSnapshot | None,
+    now: datetime,
+) -> _WindowResolution:
+    """Resolve the requested window literal to absolute (start, end)
+    datetimes.
+
+    **Reading-C hybrid semantics** per Q1 disposition:
+
+    - ``current`` → subscription_5h current window. ``window_end`` =
+      snapshot's ``five_hour.resets_at``; ``window_start`` =
+      ``window_end - 5h``. Open window (now < window_end during an
+      active cycle).
+    - ``last`` → previous subscription_5h window.
+      ``window_end`` = ``resets_at - 5h``; ``window_start`` =
+      ``resets_at - 10h``. Closed window (now > window_end).
+    - ``today`` → calendar today UTC. ``window_start`` =
+      today_UTC_00:00; ``window_end`` = tomorrow_UTC_00:00.
+      Snapshot-independent.
+    - ``last_24h`` → rolling 24h. ``window_start`` = now - 24h;
+      ``window_end`` = now. Snapshot-independent.
+
+    **Cold-start / stale fallback** for ``current`` and ``last``:
+    when snapshot is None or its ``age_seconds() > 120``, both windows
+    fall back to the SAME ``(now - 24h, now)`` window — i.e., the
+    same shape as ``last_24h``. **``last`` does NOT shift backward 24h
+    further.** Future-Claude reading a response with
+    ``window='last'`` + ``window_resolution_fallback='calendar_24h'``
+    should NOT expect a window shifted into the previous 24h period;
+    the fallback collapses both ``current`` and ``last`` onto the
+    same surface. Behavior is deliberate — the fallback signals "we
+    can't resolve subscription windows; here's a calendar substitute."
+
+    ``today`` and ``last_24h`` never trigger fallback; they don't
+    depend on the snapshot.
+
+    Returns ``_WindowResolution`` with absolute UTC datetimes and a
+    fallback marker.
+    """
+    if window in ("current", "last"):
+        snapshot_unusable = (
+            snapshot is None
+            or snapshot.age_seconds(now=now) > _STALE_SNAPSHOT_THRESHOLD_SECONDS
+        )
+        if not snapshot_unusable:
+            assert snapshot is not None  # narrowed for mypy
+            five_hour = snapshot.payload.get("five_hour")
+            if isinstance(five_hour, dict):
+                resets_at_raw = five_hour.get("resets_at")
+                if isinstance(resets_at_raw, str):
+                    resets_at: datetime | None
+                    try:
+                        resets_at = datetime.fromisoformat(resets_at_raw)
+                    except ValueError:
+                        resets_at = None
+                    if resets_at is not None:
+                        resets_at = _coerce_naive_to_utc(resets_at)
+                        cycle_seconds = _CYCLE_DURATION_SECONDS[
+                            "subscription_5h"
+                        ]
+                        if window == "current":
+                            window_end_dt = resets_at
+                            window_start_dt = window_end_dt - timedelta(
+                                seconds=cycle_seconds
+                            )
+                        else:  # "last"
+                            window_end_dt = resets_at - timedelta(
+                                seconds=cycle_seconds
+                            )
+                            window_start_dt = window_end_dt - timedelta(
+                                seconds=cycle_seconds
+                            )
+                        return _WindowResolution(
+                            window_start=window_start_dt,
+                            window_end=window_end_dt,
+                            fallback="none",
+                        )
+        # Fallback path: collapse both current and last onto calendar_24h.
+        return _WindowResolution(
+            window_start=now - timedelta(hours=24),
+            window_end=now,
+            fallback="calendar_24h",
+        )
+
+    if window == "today":
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        tomorrow_start = today_start + timedelta(days=1)
+        return _WindowResolution(
+            window_start=today_start,
+            window_end=tomorrow_start,
+            fallback="none",
+        )
+
+    # last_24h
+    return _WindowResolution(
+        window_start=now - timedelta(hours=24),
+        window_end=now,
+        fallback="none",
+    )
+
+
+# ----- Aggregation helpers ------------------------------------------------
+
+
+class TokenUsageBreakdown(BaseModel):
+    """Inner-dict shape for ``GetTokenUsageOutput.by_model`` and
+    ``by_agent`` per Q5 disposition. Mirrors top-level fields.
+    """
+
+    input_tokens: int
+    output_tokens: int
+    cost_usd: float
+
+
+async def _aggregate_usage_totals(
+    *,
+    storage: Storage,
+    window_start: datetime,
+    window_end: datetime,
+    subtree_roles: frozenset[str],
+    agent_id_filter: str | None,
+) -> tuple[int, int, float]:
+    """Aggregate ``(input_tokens, output_tokens, cost_usd)`` over
+    ``api_usage`` rows in the window, filtered to subtree roles and
+    optionally a single agent_id.
+
+    **Cost-aggregation semantics** per Q6 disposition: NULL
+    ``cost_usd`` rows (unknown-model path from M5-record-api-call) are
+    coalesced to 0.0 in aggregate. Aggregate ``cost_usd`` reflects
+    observed-priced rows only; rows with unknown model price are NOT
+    excluded from token aggregates but contribute zero to the cost
+    aggregate. Operators investigating cost variance should query
+    ``api_usage`` directly for ``WHERE cost_usd IS NULL`` to surface
+    unknown-model rows. The aggregate-level zero-cost can be
+    misread as no-cost; this helper deliberately preserves the
+    spec'd ``float`` type rather than propagating NULL upward.
+
+    Filter columns: ``window_start`` (the call timestamp; ISO 8601
+    microseconds; lex-sortable) and ``agent_role`` (denormalized at
+    M5-subscription-routing commit 1).
+    """
+    role_placeholders = ",".join("?" * len(subtree_roles))
+    sql = (
+        "SELECT "
+        "COALESCE(SUM(input_tokens), 0) AS input_tokens, "
+        "COALESCE(SUM(output_tokens), 0) AS output_tokens, "
+        "COALESCE(SUM(cost_usd), 0.0) AS cost_usd "
+        "FROM api_usage "
+        "WHERE window_start >= ? AND window_start < ? "
+        f"AND agent_role IN ({role_placeholders})"
+    )
+    params: list[Any] = [
+        window_start.isoformat(timespec="microseconds"),
+        window_end.isoformat(timespec="microseconds"),
+    ]
+    params.extend(sorted(subtree_roles))
+
+    if agent_id_filter is not None:
+        sql += " AND agent_id = ?"
+        params.append(agent_id_filter)
+
+    row = await storage.fetch_one(sql, tuple(params))
+    if row is None:
+        return (0, 0, 0.0)
+    return (
+        int(row["input_tokens"]),
+        int(row["output_tokens"]),
+        float(row["cost_usd"]),
+    )
+
+
+async def _aggregate_usage_by_model(
+    *,
+    storage: Storage,
+    window_start: datetime,
+    window_end: datetime,
+    subtree_roles: frozenset[str],
+    agent_id_filter: str | None,
+) -> dict[str, TokenUsageBreakdown]:
+    """Per-model breakdown over the same filter as
+    :func:`_aggregate_usage_totals`. NULL cost coalesced per the same
+    semantics."""
+    role_placeholders = ",".join("?" * len(subtree_roles))
+    sql = (
+        "SELECT model, "
+        "COALESCE(SUM(input_tokens), 0) AS input_tokens, "
+        "COALESCE(SUM(output_tokens), 0) AS output_tokens, "
+        "COALESCE(SUM(cost_usd), 0.0) AS cost_usd "
+        "FROM api_usage "
+        "WHERE window_start >= ? AND window_start < ? "
+        f"AND agent_role IN ({role_placeholders})"
+    )
+    params: list[Any] = [
+        window_start.isoformat(timespec="microseconds"),
+        window_end.isoformat(timespec="microseconds"),
+    ]
+    params.extend(sorted(subtree_roles))
+
+    if agent_id_filter is not None:
+        sql += " AND agent_id = ?"
+        params.append(agent_id_filter)
+
+    sql += " GROUP BY model"
+
+    rows = await storage.fetch_all(sql, tuple(params))
+    return {
+        str(row["model"]): TokenUsageBreakdown(
+            input_tokens=int(row["input_tokens"]),
+            output_tokens=int(row["output_tokens"]),
+            cost_usd=float(row["cost_usd"]),
+        )
+        for row in rows
+    }
+
+
+async def _aggregate_usage_by_agent(
+    *,
+    storage: Storage,
+    window_start: datetime,
+    window_end: datetime,
+    subtree_roles: frozenset[str],
+    agent_id_filter: str | None,
+) -> dict[str, TokenUsageBreakdown]:
+    """Per-agent breakdown. Same semantics as the by_model path."""
+    role_placeholders = ",".join("?" * len(subtree_roles))
+    sql = (
+        "SELECT agent_id, "
+        "COALESCE(SUM(input_tokens), 0) AS input_tokens, "
+        "COALESCE(SUM(output_tokens), 0) AS output_tokens, "
+        "COALESCE(SUM(cost_usd), 0.0) AS cost_usd "
+        "FROM api_usage "
+        "WHERE window_start >= ? AND window_start < ? "
+        f"AND agent_role IN ({role_placeholders}) "
+        "AND agent_id IS NOT NULL"
+    )
+    params: list[Any] = [
+        window_start.isoformat(timespec="microseconds"),
+        window_end.isoformat(timespec="microseconds"),
+    ]
+    params.extend(sorted(subtree_roles))
+
+    if agent_id_filter is not None:
+        sql += " AND agent_id = ?"
+        params.append(agent_id_filter)
+
+    sql += " GROUP BY agent_id"
+
+    rows = await storage.fetch_all(sql, tuple(params))
+    return {
+        str(row["agent_id"]): TokenUsageBreakdown(
+            input_tokens=int(row["input_tokens"]),
+            output_tokens=int(row["output_tokens"]),
+            cost_usd=float(row["cost_usd"]),
+        )
+        for row in rows
+    }
+
+
+async def _lookup_agent_role(
+    storage: Storage, agent_id: str
+) -> str | None:
+    """Return the role for ``agent_id`` from the agents table, or
+    ``None`` if no such row exists.
+
+    Used by ``get_token_usage`` to validate that a caller-supplied
+    ``agent_id`` belongs to the caller's subtree before querying.
+    """
+    row = await storage.fetch_one(
+        "SELECT role FROM agents WHERE id = ?", (agent_id,)
+    )
+    if row is None:
+        return None
+    role = row["role"]
+    return str(role) if role is not None else None
+
+
+# ----- get_token_usage ----------------------------------------------------
+
+
+class GetTokenUsageInput(BaseModel):
+    """Input shape for ``get_token_usage`` per
+    ``06-mcp-tools-phase-one.md`` § ``get_token_usage``.
+
+    ``agent_id=None`` returns subtree rollup (PM/Engineer scope) or
+    own-scope rollup (Implementer/Tester). When set, the caller is
+    requesting a specific agent's usage; the handler validates the
+    target is within the caller's hierarchy subtree per Q4
+    disposition (cross-subtree → PERMISSION_DENIED).
+    """
+
+    agent_id: str | None = None
+    window: WindowLiteral = "current"
+
+
+class GetTokenUsageOutput(BaseModel):
+    """Output shape for ``get_token_usage``.
+
+    ``window_resolution_fallback`` per Q1b disposition: ``'none'`` is
+    the default; ``'calendar_24h'`` signals that ``current`` or
+    ``last`` was requested but the OAuth snapshot was unavailable
+    (None) or stale (>120s) and the resolver fell back to a rolling
+    calendar 24h window. ``today`` and ``last_24h`` never trigger
+    fallback.
+
+    ``by_agent`` is None when ``agent_id`` is set; populated as a
+    dict when ``agent_id=None`` (rollup case), keyed by agent_id with
+    one entry per agent that has rows in the window.
+    """
+
+    input_tokens: int
+    output_tokens: int
+    cost_usd: float
+    by_model: dict[str, TokenUsageBreakdown]
+    by_agent: dict[str, TokenUsageBreakdown] | None
+    window_start: str
+    window_end: str
+    window_resolution_fallback: WindowResolutionFallback
+
+
+async def get_token_usage(
+    *,
+    storage: Storage,
+    get_snapshot: SnapshotProvider,
+    request: GetTokenUsageInput,
+    caller_agent_id: str,
+    caller_role: str,
+) -> GetTokenUsageOutput:
+    """Per-window token-usage aggregation for the caller's subtree.
+
+    See module-level commit-2 docstring for window semantics + the
+    hardcoded subtree exception. ``agent_id=None`` rolls up across
+    the caller's subtree; a specific ``agent_id`` is validated
+    against the subtree (cross-subtree raises ``PERMISSION_DENIED``
+    per Q4 disposition; no permission-graph leakage in the message).
+
+    **Implementer / Tester scope.** Both roles see only their own
+    usage per the permission table. With ``agent_id=None`` the
+    handler implicitly filters to ``caller_agent_id``; with an
+    explicit ``agent_id`` it must equal ``caller_agent_id`` or the
+    request is rejected.
+    """
+    if caller_role not in _AGENT_ROLE_SUBTREE:
+        raise OrchestratorPermissionError(
+            f"caller role {caller_role!r} cannot invoke this tool"
+        )
+    subtree_roles = _AGENT_ROLE_SUBTREE[caller_role]
+
+    # Resolve agent_id filter against caller's hierarchy.
+    agent_id_filter: str | None
+    if request.agent_id is None:
+        # Own-scope rollup for impl/tester (scope to caller's own
+        # agent_id); PM/Engineer subtree rollup uses role filter only.
+        agent_id_filter = (
+            caller_agent_id
+            if caller_role in ("implementer", "tester")
+            else None
+        )
+    else:
+        if caller_role in ("implementer", "tester"):
+            if request.agent_id != caller_agent_id:
+                raise OrchestratorPermissionError(
+                    "agent_id out of subtree"
+                )
+        else:
+            target_role = await _lookup_agent_role(storage, request.agent_id)
+            if target_role is None or target_role not in subtree_roles:
+                raise OrchestratorPermissionError(
+                    "agent_id out of subtree"
+                )
+        agent_id_filter = request.agent_id
+
+    # Resolve window.
+    snapshot = get_snapshot()
+    now = datetime.now(tz=UTC)
+    resolution = _resolve_window(
+        window=request.window, snapshot=snapshot, now=now
+    )
+
+    # Aggregate.
+    input_tokens, output_tokens, cost_usd = await _aggregate_usage_totals(
+        storage=storage,
+        window_start=resolution.window_start,
+        window_end=resolution.window_end,
+        subtree_roles=subtree_roles,
+        agent_id_filter=agent_id_filter,
+    )
+    by_model = await _aggregate_usage_by_model(
+        storage=storage,
+        window_start=resolution.window_start,
+        window_end=resolution.window_end,
+        subtree_roles=subtree_roles,
+        agent_id_filter=agent_id_filter,
+    )
+
+    by_agent: dict[str, TokenUsageBreakdown] | None
+    if request.agent_id is None:
+        by_agent = await _aggregate_usage_by_agent(
+            storage=storage,
+            window_start=resolution.window_start,
+            window_end=resolution.window_end,
+            subtree_roles=subtree_roles,
+            agent_id_filter=agent_id_filter,
+        )
+    else:
+        by_agent = None
+
+    return GetTokenUsageOutput(
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        cost_usd=cost_usd,
+        by_model=by_model,
+        by_agent=by_agent,
+        window_start=resolution.window_start.isoformat(timespec="microseconds"),
+        window_end=resolution.window_end.isoformat(timespec="microseconds"),
+        window_resolution_fallback=resolution.fallback,
+    )
+
+
+# ----- get_burn_rate ------------------------------------------------------
+
+
+class GetBurnRateInput(BaseModel):
+    """Input shape for ``get_burn_rate`` per
+    ``06-mcp-tools-phase-one.md`` § ``get_burn_rate``.
+
+    Note: ``today`` is not a burn-rate window — pacing decisions
+    track subscription cycles (current / last) and rolling 24h, not
+    calendar-day boundaries.
+    """
+
+    window: BurnRateWindowLiteral = "current"
+
+
+class GetBurnRateOutput(BaseModel):
+    """Output shape for ``get_burn_rate``.
+
+    For closed windows (``last``, ``last_24h``) per Q7 disposition:
+    ``projected_window_total`` and ``projected_window_cost`` equal
+    the observed totals — there's no future to project into. Only
+    the open ``current`` window has projected > observed.
+
+    ``window_resolution_fallback`` mirrors ``get_token_usage``'s
+    field per Q1b — ``'calendar_24h'`` signals snapshot-unavailable
+    fallback for ``current`` / ``last``.
+    """
+
+    tokens_per_hour: float
+    projected_window_total: int
+    cost_per_hour: float
+    projected_window_cost: float
+    window_resolution_fallback: WindowResolutionFallback
+
+
+async def get_burn_rate(
+    *,
+    storage: Storage,
+    get_snapshot: SnapshotProvider,
+    request: GetBurnRateInput,
+    caller_role: str,
+) -> GetBurnRateOutput:
+    """Subscription-window burn rate for PM / Engineer / Mike.
+
+    **Scope is global** per Q8 disposition: burn rate reflects the
+    whole subscription's pace, not the caller's role-scoped slice.
+    PM and Engineer share the subscription; their pacing decisions
+    (e.g., Engineer's compaction-at-80%) need global utilization.
+    Implementer / Tester are denied at the handler layer per the
+    permission table.
+
+    **Math** (closed vs. open windows):
+
+    - For ``current`` (open): ``elapsed = now - window_start``;
+      ``total = window_end - window_start`` (= 5h).
+      ``rate = observed_so_far / elapsed_hours``;
+      ``projected = observed + rate * (window_end - now) / 1h``.
+    - For ``last`` and ``last_24h`` (closed): ``elapsed = total =
+      window_length``; ``rate = observed / total_hours``;
+      ``projected = observed`` (already final).
+
+    Defensive guard: if elapsed_hours == 0 (subscription cycle just
+    reset to its start at exactly ``now``), rate computation would
+    divide by zero. Treat as zero rate; projected = observed.
+
+    Note: the spec's permission table lists Mike as allowed; Mike
+    connects as PM via OAuth (role=pm), so the role gate here is
+    just ``pm`` + ``engineer``. There is no separate ``mike`` role.
+    """
+    _require_role(caller_role, "pm", "engineer")
+
+    snapshot = get_snapshot()
+    now = datetime.now(tz=UTC)
+    resolution = _resolve_window(
+        window=request.window, snapshot=snapshot, now=now
+    )
+
+    # Global scope: aggregate over all four roles, no agent_id filter.
+    subtree_roles = _AGENT_ROLE_SUBTREE["pm"]
+    input_tokens, output_tokens, cost_usd = await _aggregate_usage_totals(
+        storage=storage,
+        window_start=resolution.window_start,
+        window_end=resolution.window_end,
+        subtree_roles=subtree_roles,
+        agent_id_filter=None,
+    )
+    observed_tokens = input_tokens + output_tokens
+
+    total_window_seconds = (
+        resolution.window_end - resolution.window_start
+    ).total_seconds()
+    total_window_hours = total_window_seconds / 3600 if total_window_seconds > 0 else 0.0
+
+    # Elapsed-vs-total: 'current' is open (elapsed < total); 'last' and
+    # 'last_24h' are closed (elapsed == total). The elapsed-clamp via min
+    # handles the edge case where now > window_end (rare; closed window).
+    elapsed_seconds = min(
+        (now - resolution.window_start).total_seconds(),
+        total_window_seconds,
+    )
+    elapsed_hours = elapsed_seconds / 3600 if elapsed_seconds > 0 else 0.0
+
+    if elapsed_hours <= 0.0:
+        tokens_per_hour = 0.0
+        cost_per_hour = 0.0
+        projected_window_total = observed_tokens
+        projected_window_cost = cost_usd
+    else:
+        tokens_per_hour = observed_tokens / elapsed_hours
+        cost_per_hour = cost_usd / elapsed_hours
+        projected_window_total = int(tokens_per_hour * total_window_hours)
+        projected_window_cost = cost_per_hour * total_window_hours
+
+    return GetBurnRateOutput(
+        tokens_per_hour=tokens_per_hour,
+        projected_window_total=projected_window_total,
+        cost_per_hour=cost_per_hour,
+        projected_window_cost=projected_window_cost,
+        window_resolution_fallback=resolution.fallback,
+    )
+
+
 __all__ = [
     "BUCKET_FIELD_MAP",
     "MODEL_PRICING",
+    "BurnRateWindowLiteral",
+    "GetBurnRateInput",
+    "GetBurnRateOutput",
+    "GetTokenUsageInput",
+    "GetTokenUsageOutput",
     "GetWindowStateInput",
     "GetWindowStateOutput",
     "PaceRecommendation",
     "RecordApiCallInput",
     "RecordApiCallOutput",
     "SnapshotProvider",
+    "TokenUsageBreakdown",
+    "WindowLiteral",
+    "WindowResolutionFallback",
+    "get_burn_rate",
+    "get_token_usage",
     "get_window_state",
     "record_api_call",
 ]
