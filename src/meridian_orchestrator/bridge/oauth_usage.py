@@ -70,7 +70,16 @@ DEFAULT_HTTP_TIMEOUT_SECONDS = 10.0
 # (``tangelo``, ``iguana_necktie``, ``omelette*``, ``cowork``,
 # ``oauth_apps``) are filtered as noise per the memory's Experiment 4
 # findings.
-_FIELD_TO_BUCKET: dict[str, str] = {
+#
+# Promoted from private (``_FIELD_TO_BUCKET``) to public
+# (``FIELD_TO_BUCKET``) at M5-pm-mode-and-window-state commit 6
+# because ``tools/budget.py`` derives the inverse map
+# (``BUCKET_FIELD_MAP``) from this dict for the ``get_window_state``
+# handler's bucket → snapshot-field lookup. Single source of truth:
+# any change to this dict auto-propagates through the inverse
+# derivation and is durably enforced by
+# ``test_bucket_field_map_is_inverse_of_field_to_bucket``.
+FIELD_TO_BUCKET: dict[str, str] = {
     "five_hour": "subscription_5h",
     "seven_day": "subscription_7d",
     "seven_day_opus": "subscription_7d_opus",
@@ -285,12 +294,12 @@ def _detect_null_counters(payload: dict[str, Any]) -> list[str]:
 
     Returned bucket names use the canonical subscription-first
     vocabulary; raw payload field names are translated through
-    :data:`_FIELD_TO_BUCKET`. Codename fields not in the translation
+    :data:`FIELD_TO_BUCKET`. Codename fields not in the translation
     map are ignored (Anthropic-internal A/B / pre-launch features per
     the memory's Experiment 4 findings).
     """
     null_buckets: list[str] = []
-    for field_name, bucket_name in _FIELD_TO_BUCKET.items():
+    for field_name, bucket_name in FIELD_TO_BUCKET.items():
         value = payload.get(field_name)
         if value is None:
             null_buckets.append(bucket_name)
@@ -601,6 +610,7 @@ class OAuthUsagePoller:
 __all__ = [
     "ANTHROPIC_BETA_HEADER",
     "DEFAULT_POLL_INTERVAL_SECONDS",
+    "FIELD_TO_BUCKET",
     "OAUTH_USAGE_URL",
     "BackoffStateMachine",
     "BackoffUpdateResult",

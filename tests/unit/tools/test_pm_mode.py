@@ -43,6 +43,7 @@ from meridian_orchestrator.storage.migrations import run_migrations
 from meridian_orchestrator.storage.sqlite import SqliteStorage
 from meridian_orchestrator.tools.pm_mode import (
     SetPmModeInput,
+    read_current_pm_mode,
     set_pm_mode,
 )
 
@@ -424,3 +425,74 @@ async def test_first_ever_set_pm_mode_always_logs_with_transition_logged_true(
     rows = await storage.fetch_all("SELECT mode FROM pm_mode_log")
     assert len(rows) == 1
     assert rows[0]["mode"] == "continuous"
+
+
+# ---------------------------------------------------------------------------
+# read_current_pm_mode helper (Q8 extraction at commit 6)
+# ---------------------------------------------------------------------------
+
+
+async def test_read_current_pm_mode_returns_none_on_empty_table(
+    storage: SqliteStorage,
+) -> None:
+    """Empty pm_mode_log → None. The Q3 None-baseline contract from
+    commit 4 prep applies to this lookup helper too — empty table
+    means 'no current mode reported,' not an implicit default."""
+    assert await read_current_pm_mode(storage) is None
+
+
+async def test_read_current_pm_mode_returns_most_recent_row(
+    storage: SqliteStorage,
+) -> None:
+    """Returns the mode value from the most recent row by rowid."""
+    await storage.execute(
+        "INSERT INTO pm_mode_log (id, mode, triggered_by) "
+        "VALUES (?, ?, ?)",
+        ("seed-1", "continuous", "manual"),
+    )
+    await storage.execute(
+        "INSERT INTO pm_mode_log (id, mode, triggered_by) "
+        "VALUES (?, ?, ?)",
+        ("seed-2", "interactive", "mike_message"),
+    )
+    assert await read_current_pm_mode(storage) == "interactive"
+
+
+async def test_read_current_pm_mode_uses_rowid_not_timestamp(
+    storage: SqliteStorage,
+) -> None:
+    """Determinism contract: when two rows tie on timestamp (same
+    second under burst writes), the rowid-DESC ordering picks the
+    later-inserted row.
+
+    Failure mode this test prevents: a future commit changing the
+    SELECT to ``ORDER BY timestamp DESC`` would silently produce
+    non-deterministic results when set_pm_mode and
+    record_oauth_pm_auto_flip both fire in the same second
+    (plausible in production: Mike sends an MCP request just as PM's
+    continuous loop ticks).
+    """
+    # Insert two rows with the same explicit timestamp to simulate
+    # the same-second burst-write case.
+    same_ts = "2026-05-02 19:30:45"
+    await storage.execute(
+        "INSERT INTO pm_mode_log (id, mode, triggered_by, timestamp) "
+        "VALUES (?, ?, ?, ?)",
+        ("first-rowid", "continuous", "manual", same_ts),
+    )
+    await storage.execute(
+        "INSERT INTO pm_mode_log (id, mode, triggered_by, timestamp) "
+        "VALUES (?, ?, ?, ?)",
+        ("second-rowid", "interactive", "mike_message", same_ts),
+    )
+
+    # The second insert has higher rowid (auto-incremented INTEGER PK
+    # equivalent in SQLite). rowid-DESC picks it.
+    assert await read_current_pm_mode(storage) == "interactive", (
+        "read_current_pm_mode returned the earlier row's mode when "
+        "two rows tied on timestamp; the rowid-DESC ordering is no "
+        "longer being used. Same-second burst writes from "
+        "set_pm_mode + record_oauth_pm_auto_flip would produce "
+        "non-deterministic 'current mode' lookups, breaking the "
+        "transition_logged contract in set_pm_mode."
+    )

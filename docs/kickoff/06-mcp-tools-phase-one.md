@@ -236,7 +236,7 @@ class GetWindowStateOutput(BaseModel):
     utilization: float                                             # 0-100, normalized per /api/oauth/usage
     minutes_to_reset: int
     pace_recommendation: Literal['normal', 'upgrade', 'conserve', 'rate_limited', 'unknown']
-    snapshot_age_seconds: int                                      # age of cached /api/oauth/usage snapshot
+    snapshot_age_seconds: int | None                               # age of cached snapshot; None on cold-start
     null_counters: list[str]                                       # counters returning null on the latest poll
     current_pm_mode: str | None                                    # current pm_mode_log mode
     most_recent_pm_mode_log_timestamp: str | None                  # for mode-flip detection by callers
@@ -244,7 +244,13 @@ class GetWindowStateOutput(BaseModel):
 
 Returns the current state for the specified agent within the requested bucket, derived from the daemon's polled `/api/oauth/usage` snapshot. `pace_recommendation` is computed from `utilization` and `minutes_to_reset` per the table in `02-architecture.md` § Window-aware burn (per bucket). PM's continuous-mode planner consumes `subscription_5h` on every planning iteration as the primary pacing signal; per-model 7-day counters drive routing-tier decisions in `check_budget_for_task`.
 
-`snapshot_age_seconds` exposes cache staleness directly. The daemon's poll cadence is 30s default with exponential backoff on 429 (60→120→240→480→600s ceiling). When `snapshot_age_seconds > 120`, callers treat utilization as `unknown` for that planning iteration; routing logic degrades accordingly. `null_counters` lists which counters returned null on the latest poll (per the B-1 fallback rule: null is treated as "feature unknown; fall back to overall counter").
+`snapshot_age_seconds` exposes cache staleness directly. The daemon's poll cadence is 30s default with exponential backoff on 429 (60→120→240→480→600s ceiling). Three distinct states with three distinct values per M5-pm-mode-and-window-state commit 6 prep Q3 disposition:
+
+- `None` — no snapshot exists (cold-start; daemon just started, no successful poll yet).
+- `0` — snapshot just polled.
+- positive int — snapshot is N seconds old.
+
+When `snapshot_age_seconds > 120`, callers treat utilization as `unknown` for that planning iteration; routing logic degrades accordingly. `None` (cold-start) also forces `pace_recommendation='unknown'` since no data is available. `null_counters` lists which counters returned null on the latest poll (per the B-1 fallback rule: null is treated as "feature unknown; fall back to overall counter" — fallback decisions live with the routing layer per Q4 disposition, not at this tool's layer).
 
 The `current_pm_mode` and `most_recent_pm_mode_log_timestamp` fields let Engineer detect mode flips against a stored cursor without a separate `get_pm_mode` tool. Callers that don't need mode info ignore these fields.
 

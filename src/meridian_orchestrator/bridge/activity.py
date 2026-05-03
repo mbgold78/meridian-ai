@@ -77,7 +77,7 @@ from typing import TYPE_CHECKING
 from meridian_orchestrator.audit.logger import write_audit
 from meridian_orchestrator.bridge.dispatcher import _TERMINAL_STATES
 from meridian_orchestrator.storage.interface import Storage
-from meridian_orchestrator.tools.pm_mode import PAUSED_MODES
+from meridian_orchestrator.tools.pm_mode import PAUSED_MODES, read_current_pm_mode
 
 if TYPE_CHECKING:
     from meridian_orchestrator.auth import TokenRecord
@@ -175,15 +175,11 @@ async def record_oauth_pm_auto_flip(
         return
 
     async with storage.transaction():
-        # Read current mode = most recent pm_mode_log row by rowid.
-        # Mirrors set_pm_mode's lookup pattern; see tools/pm_mode.py
-        # for the rowid-vs-timestamp rationale.
-        current_row = await storage.fetch_one(
-            "SELECT mode FROM pm_mode_log ORDER BY rowid DESC LIMIT 1"
-        )
-        current_mode = (
-            current_row["mode"] if current_row is not None else None
-        )
+        # Centralized lookup — see tools.pm_mode.read_current_pm_mode
+        # for the rowid-DESC rationale. Centralized at M5-pm-mode-and-
+        # window-state commit 6 (Q8 disposition); pre-extraction this
+        # was inlined here at commit 5.
+        current_mode = await read_current_pm_mode(storage)
 
         # Skip if already in interactive — Reading B (write only on
         # transition) per the M5-pm-mode-and-window-state commit 5

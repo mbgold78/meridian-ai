@@ -66,8 +66,12 @@ from meridian_orchestrator.tools.agents import (
     list_agents,
 )
 from meridian_orchestrator.tools.budget import (
+    GetWindowStateInput,
+    GetWindowStateOutput,
     RecordApiCallInput,
     RecordApiCallOutput,
+    SnapshotProvider,
+    get_window_state,
     record_api_call,
 )
 from meridian_orchestrator.tools.dispatch import (
@@ -220,6 +224,7 @@ def build_server(
     storage: Storage | None = None,
     get_engineer_supervisor: Callable[[], LongRunningSupervisor | None] | None = None,
     get_dispatcher: Callable[[], BridgeDispatcher | None] | None = None,
+    get_oauth_usage_snapshot: SnapshotProvider | None = None,
 ) -> FastMCP:
     """Construct the FastMCP server with auth + the current tool set.
 
@@ -294,6 +299,11 @@ def build_server(
         _register_dispatch_completion_tools(mcp, storage, token_store)
         _register_budget_tools(mcp, storage, token_store)
         _register_pm_mode_tools(mcp, storage, token_store)
+
+    if storage is not None and get_oauth_usage_snapshot is not None:
+        _register_window_state_tools(
+            mcp, storage, token_store, get_oauth_usage_snapshot
+        )
 
     if storage is not None and get_dispatcher is not None and registry is not None:
         _register_dispatch_initiation_tools(
@@ -541,6 +551,67 @@ def _register_pm_mode_tools(
             storage=storage,
             request=SetPmModeInput(mode=mode, reason=reason),
             caller_agent_id=agent_id,
+            caller_role=caller_role,
+        )
+
+
+def _register_window_state_tools(
+    mcp: FastMCP,
+    storage: Storage,
+    token_store: TokenStore,
+    get_oauth_usage_snapshot: SnapshotProvider,
+) -> None:
+    """Register get_window_state (M5-pm-mode-and-window-state commit 6).
+
+    The ``get_oauth_usage_snapshot`` callable is evaluated lazily at
+    each tool invocation. Mirrors the lazy-callable pattern used for
+    ``get_dispatcher`` / ``get_engineer_supervisor``: the
+    OAuthUsagePoller is constructed in ``main.py``'s lifespan after
+    the MCP server starts (its first poll runs against the live
+    network), so a closure-captured reference resolved at build_server
+    time would always see ``None``. Python closures resolve names at
+    call time, so the lambda picks up the snapshot's current value
+    when invoked.
+
+    Cold-start handling: when the poller hasn't published a successful
+    snapshot yet, the callable returns ``None``. The handler treats
+    this as the cold-start case and returns the unknown placeholder
+    per Q3 disposition.
+
+    Permission: PM and Engineer per ``06-mcp-tools-phase-one.md`` §
+    ``get_window_state``. Implementer/Tester rejected at the handler
+    layer via ``_require_role``.
+    """
+
+    @mcp.tool(
+        name="get_window_state",
+        description=(
+            "PM/Engineer only. Per-bucket window state from the "
+            "daemon's cached /api/oauth/usage snapshot. Returns "
+            "utilization, window_start/end, minutes_to_reset, "
+            "pace_recommendation, snapshot_age_seconds (None on "
+            "cold-start), null_counters, and PM mode fields. Returns "
+            "pace_recommendation='unknown' on cold-start, stale "
+            "snapshot (>120s), null bucket, or api_key_overflow "
+            "(deferred to M5-flag-flips). Bucket defaults to "
+            "subscription_5h (the primary pacing counter)."
+        ),
+    )
+    async def _get_window_state(
+        agent_id: str | None = None,
+        bucket: str = "subscription_5h",
+    ) -> GetWindowStateOutput:
+        caller_agent_id = _resolve_agent_id()
+        await _observe_caller(storage, token_store, "get_window_state")
+        caller_role = _resolve_caller_role_via_token()
+        return await get_window_state(
+            storage=storage,
+            get_snapshot=get_oauth_usage_snapshot,
+            request=GetWindowStateInput(
+                agent_id=agent_id,
+                bucket=bucket,  # type: ignore[arg-type]
+            ),
+            caller_agent_id=caller_agent_id,
             caller_role=caller_role,
         )
 
@@ -862,6 +933,7 @@ async def serve(
     storage: Storage | None = None,
     get_engineer_supervisor: Callable[[], LongRunningSupervisor | None] | None = None,
     get_dispatcher: Callable[[], BridgeDispatcher | None] | None = None,
+    get_oauth_usage_snapshot: SnapshotProvider | None = None,
 ) -> None:
     """Run the MCP HTTP server until cancelled.
 
@@ -882,6 +954,7 @@ async def serve(
         storage=storage,
         get_engineer_supervisor=get_engineer_supervisor,
         get_dispatcher=get_dispatcher,
+        get_oauth_usage_snapshot=get_oauth_usage_snapshot,
     )
     app = mcp.streamable_http_app()
     config = uvicorn.Config(

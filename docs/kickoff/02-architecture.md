@@ -119,13 +119,18 @@ PM has two first-class operating modes:
 
 `get_window_state` returns per-bucket state for the requested counter. PM consumes `get_window_state(bucket="subscription_5h")` on every planning iteration as the primary pacing signal; per-model 7-day counters (`subscription_7d_opus`, `subscription_7d_sonnet`) drive routing-tier decisions. The pace recommendations apply within a bucket; cross-bucket behavior is overlaid below.
 
+The recommendation is computed by precedence (first matching rule wins):
+
 | Window state (within a bucket) | Pace | Behavior |
 |---|---|---|
-| > 50% remaining, > 2h to reset | `normal` | Dispatch as needed |
-| > 50% remaining, < 1h to reset | `upgrade` | Actively promote lower-priority work into unused capacity |
-| < 50% remaining, > 1h to reset | `normal` (defer optional polish-tier) | Continue at normal pace; defer non-essential work to next window |
-| < 20% remaining | `conserve` | Finish in-flight work, no new high-token dispatches *into this bucket* |
-| Rate-limited | `rate_limited` | Surface to Mike, resume aggressively at reset |
+| `utilization >= 100` (rate-limited; inclusive boundary) | `rate_limited` | Surface to Mike, resume aggressively at reset |
+| `remaining < 20%` | `conserve` | Finish in-flight work, no new high-token dispatches *into this bucket* |
+| `remaining > 50%` AND `minutes_to_reset < 60` | `upgrade` | Actively promote lower-priority work into unused capacity |
+| All other states | `normal` | Dispatch as needed; defer non-essential / polish-tier work to next window when `remaining < 50%` |
+
+The precedence-ordered formulation gap-fills the prior table's two unmapped ranges (`> 50% remaining, 1h ≤ minutes_to_reset ≤ 2h` and `20% ≤ remaining ≤ 50%, minutes_to_reset < 1h`) by routing them to `normal` per M5-pm-mode-and-window-state commit 6 prep Q1 disposition. The `defer non-essential work` guidance applies whenever `remaining < 50%` regardless of time-to-reset. The boundary case `utilization == 100.0` is inclusive (rate-limited).
+
+The `unknown` value is returned by `get_window_state` when the cached `/api/oauth/usage` snapshot is absent (cold-start), stale beyond 120 seconds, or when the requested bucket's counter is null in the latest poll. Callers treat `unknown` as "do not make pacing decisions on this bucket"; routing logic degrades accordingly.
 
 **Cross-bucket overlay:**
 

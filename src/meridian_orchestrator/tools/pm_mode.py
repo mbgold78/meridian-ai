@@ -92,6 +92,48 @@ class SetPmModeOutput(BaseModel):
     transition_logged: bool
 
 
+# ----- Shared lookup helper ------------------------------------------------
+
+
+async def read_current_pm_mode(storage: Storage) -> str | None:
+    """Return PM's current mode = the most recent ``pm_mode_log`` row's
+    ``mode`` value, or ``None`` if the table is empty.
+
+    Centralized here at M5-pm-mode-and-window-state commit 6 (Q8
+    disposition) because three call sites use the same lookup pattern:
+    :func:`set_pm_mode` (commit 4), :func:`bridge.activity.record_oauth_pm_auto_flip`
+    (commit 5), and :func:`tools.budget.get_window_state` (commit 6 —
+    new). Centralizing keeps the rationale for the rowid-DESC ordering
+    in one place.
+
+    **Why ``ORDER BY rowid DESC LIMIT 1`` and not ``ORDER BY timestamp
+    DESC``**: the timestamp column has 1-second resolution from
+    ``datetime('now')`` (SQLite's default expression). Two rapid
+    INSERTs in the same second would tie on timestamp but never on
+    rowid. Using rowid for the "most recent" ordering makes the lookup
+    deterministic under burst writes — a property that matters because
+    the auto-flip writer and PM's ``set_pm_mode`` calls can happen in
+    the same second when Mike sends an MCP request just as PM's
+    continuous loop ticks.
+
+    Returns ``None`` when ``pm_mode_log`` is empty (Q3 None-baseline
+    contract per commit 4 prep). Callers treating this as "no current
+    mode" rather than an implicit ``continuous`` default keep the
+    state-machine semantics explicit and avoid the
+    implicit-default-pattern fragility that the Q3 disposition
+    rejected.
+    """
+    row = await storage.fetch_one(
+        "SELECT mode FROM pm_mode_log ORDER BY rowid DESC LIMIT 1"
+    )
+    if row is None:
+        return None
+    mode = row["mode"]
+    if not isinstance(mode, str):
+        return None
+    return mode
+
+
 # ----- Permissions ---------------------------------------------------------
 
 
@@ -155,17 +197,12 @@ async def set_pm_mode(
     # Plus the partial-failure rollback property — see module docstring
     # § Atomicity. Keep the full-sequence wrapping.
     async with storage.transaction():
-        # Read current mode = most recent pm_mode_log row by rowid.
-        # rowid is more reliable than timestamp for "most recent"
-        # because timestamp has 1-second resolution from
-        # datetime('now') — two rapid INSERTs in the same second
-        # would tie on timestamp but never on rowid.
-        current_row = await storage.fetch_one(
-            "SELECT mode FROM pm_mode_log ORDER BY rowid DESC LIMIT 1"
-        )
-        current_mode = (
-            current_row["mode"] if current_row is not None else None
-        )
+        # Centralized lookup — see read_current_pm_mode for the
+        # rowid-DESC rationale. Pre-extraction this was inlined here
+        # at commit 4; centralized at commit 6 (Q8 disposition) to
+        # share with bridge.activity.record_oauth_pm_auto_flip and
+        # tools.budget.get_window_state.
+        current_mode = await read_current_pm_mode(storage)
 
         transition_logged = current_mode != request.mode
         pm_mode_log_id: str | None = None
@@ -219,5 +256,6 @@ __all__ = [
     "PmMode",
     "SetPmModeInput",
     "SetPmModeOutput",
+    "read_current_pm_mode",
     "set_pm_mode",
 ]
