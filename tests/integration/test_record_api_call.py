@@ -829,3 +829,460 @@ async def test_record_api_call_audit_details_include_observability_fields(
     assert details["workflow_id"] == "wf-audit-test"
     assert details["agent_role"] == "engineer"
     assert details["task_type"] == "research"
+
+
+# ---------------------------------------------------------------------------
+# Workflow_id alpha-denormalization (M5-continuous-pm-driver commit 1)
+# ---------------------------------------------------------------------------
+#
+# Per F1.1 / D1.1 + Q1 Reading B disposition: the chain root of the
+# caller's bound dispatch's task is resolved server-side via
+# tools/budget.py:_resolve_workflow_id_from_dispatch and stamped on
+# api_usage.workflow_id at write time. Resolution precedence: server-
+# derived wins when present; caller-supplied falls through when
+# server-derived returns None.
+#
+# These tests pin: chain-root resolution at varying chain depths,
+# Reading B precedence (server wins over caller-supplied), conflict
+# logging when both differ, fallback for PM-direct OAuth callers,
+# fallback for dispatches with NULL task_id, and cycle defense.
+
+
+async def _seed_task_chain(
+    s: SqliteStorage, *, ids: list[str]
+) -> None:
+    """Seed a chain of tasks where ids[0] is the root (parent_task_id
+    NULL) and each subsequent id has the previous as parent. Used by
+    chain-depth tests to build the parent_task_id walk.
+    """
+    for i, task_id in enumerate(ids):
+        parent = ids[i - 1] if i > 0 else None
+        await s.execute(
+            "INSERT INTO tasks "
+            "(id, company_id, project_id, parent_task_id, agent_role, description) "
+            "VALUES (?, 'co1', 'proj1', ?, 'implementer', 'chain-test')",
+            (task_id, parent),
+        )
+
+
+async def test_workflow_id_alpha_resolves_chain_root_at_one_hop(
+    storage: SqliteStorage,
+) -> None:
+    """Direct task (1 hop): dispatch's task has parent_task_id NULL, so
+    the task itself IS the chain root. Server-derived workflow_id =
+    dispatch's task_id. Reading B: server-derived wins over None
+    caller-supplied.
+
+    The fixture's task-1 already has parent_task_id NULL, so this is
+    the canonical 1-hop case.
+    """
+    token_store = TokenStore(service="workflow-alpha-1hop")
+    issued = token_store.issue("agent-1", "implementer", "alpha-1hop")
+    await _seed_dispatch(
+        storage,
+        dispatch_id="d-alpha-1",
+        role="implementer",
+        status="running",
+        token_id=issued.record.token_id,
+    )
+
+    out = await record_api_call(
+        storage=storage,
+        request=RecordApiCallInput(
+            model="claude-sonnet-4-6", input_tokens=100, output_tokens=50
+        ),
+        caller_agent_id="agent-1",
+        caller_agent_role="implementer",
+        caller_token_id=issued.record.token_id,
+    )
+
+    row = await storage.fetch_one(
+        "SELECT workflow_id FROM api_usage WHERE id = ?", (out.usage_id,)
+    )
+    assert row is not None
+    assert row["workflow_id"] == "task-1", (
+        f"workflow_id={row['workflow_id']!r}, expected 'task-1'. "
+        "alpha-denormalization should stamp the chain root id; the "
+        "1-hop case is dispatch's task with parent_task_id NULL — "
+        "the task itself is the root."
+    )
+
+
+async def test_workflow_id_alpha_resolves_chain_root_at_three_hops(
+    storage: SqliteStorage,
+) -> None:
+    """Nested task chain (3 hops): PM submits root, Engineer submits
+    child of root, Implementer dispatches against grandchild. Server-
+    derived workflow_id = root's task_id (the chain root, walked via
+    parent_task_id from the dispatch's bound task).
+    """
+    await _seed_task_chain(
+        storage, ids=["task-root-3", "task-mid-3", "task-leaf-3"]
+    )
+    token_store = TokenStore(service="workflow-alpha-3hop")
+    issued = token_store.issue("agent-1", "implementer", "alpha-3hop")
+    # Dispatch bound to the leaf (deepest) task; chain walk goes
+    # leaf → mid → root.
+    await storage.execute(
+        "INSERT INTO dispatches "
+        "(id, task_id, role, status, working_directory, timeout_seconds, "
+        "token_id) "
+        "VALUES ('d-alpha-3', 'task-leaf-3', 'implementer', 'running', "
+        "'/tmp/wt', 300, ?)",
+        (issued.record.token_id,),
+    )
+
+    out = await record_api_call(
+        storage=storage,
+        request=RecordApiCallInput(
+            model="claude-sonnet-4-6", input_tokens=100, output_tokens=50
+        ),
+        caller_agent_id="agent-1",
+        caller_agent_role="implementer",
+        caller_token_id=issued.record.token_id,
+    )
+
+    row = await storage.fetch_one(
+        "SELECT workflow_id FROM api_usage WHERE id = ?", (out.usage_id,)
+    )
+    assert row is not None
+    assert row["workflow_id"] == "task-root-3", (
+        f"workflow_id={row['workflow_id']!r}, expected 'task-root-3'. "
+        "Recursive CTE chain walk should reach the root via "
+        "parent_task_id pointers; if the helper returns the dispatch's "
+        "own task instead of the root, the recursive case isn't firing."
+    )
+
+
+async def test_workflow_id_alpha_resolves_at_max_depth_minus_one(
+    storage: SqliteStorage,
+) -> None:
+    """Defensive coverage: a chain at exactly one less than
+    _WORKFLOW_CHAIN_MAX_DEPTH still resolves correctly. Pins the
+    boundary so a future tightening of the depth limit surfaces as a
+    test failure rather than silent over-defense.
+
+    Real production chains are 1-3 hops; this test sits well above the
+    real-world distribution and below the defensive limit.
+    """
+    chain_ids = [f"task-deep-{i:03d}" for i in range(50)]  # 50-hop chain
+    await _seed_task_chain(storage, ids=chain_ids)
+    token_store = TokenStore(service="workflow-alpha-deep")
+    issued = token_store.issue("agent-1", "implementer", "alpha-deep")
+    await storage.execute(
+        "INSERT INTO dispatches "
+        "(id, task_id, role, status, working_directory, timeout_seconds, "
+        "token_id) "
+        "VALUES ('d-alpha-deep', ?, 'implementer', 'running', "
+        "'/tmp/wt', 300, ?)",
+        (chain_ids[-1], issued.record.token_id),
+    )
+
+    out = await record_api_call(
+        storage=storage,
+        request=RecordApiCallInput(
+            model="claude-sonnet-4-6", input_tokens=100, output_tokens=50
+        ),
+        caller_agent_id="agent-1",
+        caller_agent_role="implementer",
+        caller_token_id=issued.record.token_id,
+    )
+
+    row = await storage.fetch_one(
+        "SELECT workflow_id FROM api_usage WHERE id = ?", (out.usage_id,)
+    )
+    assert row is not None
+    assert row["workflow_id"] == chain_ids[0], (
+        f"workflow_id={row['workflow_id']!r}, expected {chain_ids[0]!r}. "
+        "50-hop chain should resolve to the root; if it falls through "
+        "to the caller-supplied None or returns mid-chain, the CTE's "
+        "depth bound or ORDER BY clause has regressed."
+    )
+
+
+async def test_workflow_id_alpha_falls_through_for_oauth_caller(
+    storage: SqliteStorage,
+) -> None:
+    """PM-direct OAuth call (no bound dispatch): server-derived
+    returns None; Reading B falls through to caller-supplied
+    workflow_id. Operator agency preserved for the edge case.
+
+    Mirrors test_record_api_call_oauth_caller_no_dispatch_update's
+    setup but asserts on workflow_id specifically.
+    """
+    out = await record_api_call(
+        storage=storage,
+        request=RecordApiCallInput(
+            model="claude-opus-4-7",
+            input_tokens=500,
+            output_tokens=200,
+            workflow_id="wf-mike-interactive-2026-05-03",
+        ),
+        caller_agent_id="pm-agent-id",
+        caller_agent_role="pm",
+        caller_token_id="oauth-token-no-dispatch",
+    )
+
+    row = await storage.fetch_one(
+        "SELECT workflow_id FROM api_usage WHERE id = ?", (out.usage_id,)
+    )
+    assert row is not None
+    assert row["workflow_id"] == "wf-mike-interactive-2026-05-03", (
+        f"workflow_id={row['workflow_id']!r}, expected the caller-supplied "
+        "value. Reading B fallback should preserve operator agency for "
+        "PM-direct calls — server-derived returns None when no dispatch "
+        "binds to the token, and the caller-supplied workflow_id should "
+        "land on the row instead of being dropped."
+    )
+
+
+async def test_workflow_id_alpha_server_overrides_caller_supplied(
+    storage: SqliteStorage,
+) -> None:
+    """Reading B precedence: when both server-derived and caller-supplied
+    are present, server-derived wins. The chain-root resolution is
+    authoritative for dispatched calls; caller-supplied is preserved
+    only as fallback.
+    """
+    token_store = TokenStore(service="workflow-alpha-override")
+    issued = token_store.issue("agent-1", "implementer", "alpha-override")
+    await _seed_dispatch(
+        storage,
+        dispatch_id="d-alpha-ovr",
+        role="implementer",
+        status="running",
+        token_id=issued.record.token_id,
+    )
+
+    out = await record_api_call(
+        storage=storage,
+        request=RecordApiCallInput(
+            model="claude-sonnet-4-6",
+            input_tokens=100,
+            output_tokens=50,
+            workflow_id="wf-caller-supplied-disagrees",
+        ),
+        caller_agent_id="agent-1",
+        caller_agent_role="implementer",
+        caller_token_id=issued.record.token_id,
+    )
+
+    row = await storage.fetch_one(
+        "SELECT workflow_id FROM api_usage WHERE id = ?", (out.usage_id,)
+    )
+    assert row is not None
+    assert row["workflow_id"] == "task-1", (
+        f"workflow_id={row['workflow_id']!r}, expected 'task-1' "
+        "(server-derived chain root). Reading B requires server-derived "
+        "to win over caller-supplied when both are present; this test "
+        "enforces that precedence."
+    )
+
+
+async def test_workflow_id_alpha_conflict_emits_warning(
+    storage: SqliteStorage,
+) -> None:
+    """When caller-supplied and server-derived workflow_ids differ, a
+    structlog WARNING is emitted with all four contextual fields per
+    Q3 Reading A: caller_supplied_workflow_id, server_derived_workflow_id,
+    caller_agent_id, dispatch_id. No audit row (high-frequency soft
+    conflict; audit log not the right surface).
+
+    Uses ``structlog.testing.capture_logs`` per the codebase's
+    structlog-test convention (see test_supervisor_base.py for
+    precedent); pytest's caplog captures stdlib logging which doesn't
+    reach structlog's BoundLogger output.
+    """
+    import structlog.testing
+
+    token_store = TokenStore(service="workflow-alpha-conflict")
+    issued = token_store.issue("agent-1", "implementer", "alpha-conflict")
+    await _seed_dispatch(
+        storage,
+        dispatch_id="d-alpha-conf",
+        role="implementer",
+        status="running",
+        token_id=issued.record.token_id,
+    )
+
+    with structlog.testing.capture_logs() as captured:
+        await record_api_call(
+            storage=storage,
+            request=RecordApiCallInput(
+                model="claude-sonnet-4-6",
+                input_tokens=100,
+                output_tokens=50,
+                workflow_id="wf-disagrees-with-chain-root",
+            ),
+            caller_agent_id="agent-1",
+            caller_agent_role="implementer",
+            caller_token_id=issued.record.token_id,
+        )
+
+    conflict_logs = [
+        r for r in captured
+        if r.get("event") == "record_api_call.workflow_id_conflict"
+    ]
+    assert len(conflict_logs) == 1, (
+        f"expected exactly one workflow_id_conflict WARNING; got "
+        f"{len(conflict_logs)}. Conflict-detection log per Q3 Reading A "
+        "is required when caller-supplied and server-derived disagree; "
+        "without it, tier-2 observability has no signal for the soft "
+        "conflict."
+    )
+    log = conflict_logs[0]
+    assert log["log_level"] == "warning"
+    assert log["caller_supplied_workflow_id"] == (
+        "wf-disagrees-with-chain-root"
+    )
+    assert log["server_derived_workflow_id"] == "task-1"
+    assert log["caller_agent_id"] == "agent-1"
+    assert log["dispatch_id"] == "d-alpha-conf"
+
+    # No audit row for this conflict — Q3 Reading A explicitly rejected
+    # audit-log routing for high-frequency soft conflicts.
+    audits = await storage.fetch_all(
+        "SELECT action FROM audit_log "
+        "WHERE action LIKE '%workflow_id_conflict%'"
+    )
+    assert audits == [], (
+        "workflow_id_conflict should not write an audit row per Q3 "
+        "Reading A; audit log is reserved for higher-stakes events. "
+        "If audit routing was added, the high-frequency call site will "
+        "inflate audit_log volume materially."
+    )
+
+
+async def test_workflow_id_alpha_falls_through_for_null_task_id_dispatch(
+    storage: SqliteStorage,
+) -> None:
+    """Dispatch with NULL task_id (post-M4c-supervisor-base supervisor
+    rows per migration 0007's NOT NULL relaxation): server-derived
+    returns None; Reading B falls through to caller-supplied. Pin the
+    behavior so a future commit that tightens the helper to fail on
+    NULL task_id surfaces as a test failure.
+    """
+    token_store = TokenStore(service="workflow-alpha-null-task")
+    issued = token_store.issue(
+        "agent-1", "engineer", "alpha-null-task"
+    )
+    # Supervisor-row dispatch with NULL task_id (the M4c-supervisor-base
+    # case post-0007). Insert directly because _seed_dispatch helper
+    # always sets task_id='task-1'.
+    await storage.execute(
+        "INSERT INTO dispatches "
+        "(id, task_id, role, status, working_directory, timeout_seconds, "
+        "token_id) "
+        "VALUES ('d-alpha-null', NULL, 'engineer-supervisor', 'running', "
+        "'/tmp/wt', 300, ?)",
+        (issued.record.token_id,),
+    )
+
+    out = await record_api_call(
+        storage=storage,
+        request=RecordApiCallInput(
+            model="claude-sonnet-4-6",
+            input_tokens=100,
+            output_tokens=50,
+            workflow_id="wf-supervisor-self-tag",
+        ),
+        caller_agent_id="agent-1",
+        caller_agent_role="engineer",
+        caller_token_id=issued.record.token_id,
+    )
+
+    row = await storage.fetch_one(
+        "SELECT workflow_id FROM api_usage WHERE id = ?", (out.usage_id,)
+    )
+    assert row is not None
+    assert row["workflow_id"] == "wf-supervisor-self-tag", (
+        f"workflow_id={row['workflow_id']!r}, expected the caller-supplied "
+        "fallback. Dispatch with NULL task_id has no chain to walk; "
+        "server-derived returns None and Reading B should preserve the "
+        "caller's annotation."
+    )
+
+
+async def test_workflow_id_alpha_cycle_defense_returns_none(
+    storage: SqliteStorage,
+) -> None:
+    """Defensive cycle protection: a parent_task_id cycle (intentionally
+    seeded; production code shouldn't create cycles but the schema
+    doesn't enforce acyclicity) should not hang the recursive CTE or
+    fail the api_usage write. The depth-bounded CTE returns no
+    NULL-parent row; the helper logs and returns None; Reading B falls
+    through to caller-supplied (None in this test) and writes NULL
+    workflow_id rather than failing.
+    """
+    import structlog.testing
+
+    # Two-task cycle: A.parent=B, B.parent=A. Build by inserting both
+    # with NULL parent first, then UPDATE to create the cycle (the FK
+    # constraint allows this; the schema doesn't prohibit cycles).
+    await storage.execute(
+        "INSERT INTO tasks "
+        "(id, company_id, project_id, agent_role, description) "
+        "VALUES ('task-cycle-A', 'co1', 'proj1', 'implementer', 'cycle-A')"
+    )
+    await storage.execute(
+        "INSERT INTO tasks "
+        "(id, company_id, project_id, agent_role, description) "
+        "VALUES ('task-cycle-B', 'co1', 'proj1', 'implementer', 'cycle-B')"
+    )
+    await storage.execute(
+        "UPDATE tasks SET parent_task_id = 'task-cycle-B' "
+        "WHERE id = 'task-cycle-A'"
+    )
+    await storage.execute(
+        "UPDATE tasks SET parent_task_id = 'task-cycle-A' "
+        "WHERE id = 'task-cycle-B'"
+    )
+
+    token_store = TokenStore(service="workflow-alpha-cycle")
+    issued = token_store.issue("agent-1", "implementer", "alpha-cycle")
+    await storage.execute(
+        "INSERT INTO dispatches "
+        "(id, task_id, role, status, working_directory, timeout_seconds, "
+        "token_id) "
+        "VALUES ('d-alpha-cyc', 'task-cycle-A', 'implementer', 'running', "
+        "'/tmp/wt', 300, ?)",
+        (issued.record.token_id,),
+    )
+
+    with structlog.testing.capture_logs() as captured:
+        out = await record_api_call(
+            storage=storage,
+            request=RecordApiCallInput(
+                model="claude-sonnet-4-6",
+                input_tokens=100,
+                output_tokens=50,
+            ),
+            caller_agent_id="agent-1",
+            caller_agent_role="implementer",
+            caller_token_id=issued.record.token_id,
+        )
+
+    row = await storage.fetch_one(
+        "SELECT workflow_id FROM api_usage WHERE id = ?", (out.usage_id,)
+    )
+    assert row is not None
+    assert row["workflow_id"] is None, (
+        f"workflow_id={row['workflow_id']!r}, expected None. Cycle "
+        "defense should yield NULL workflow_id rather than failing the "
+        "api_usage write or returning a mid-cycle task. The depth-"
+        "bounded CTE produces no NULL-parent row; the helper logs and "
+        "returns None."
+    )
+
+    overflow_logs = [
+        r for r in captured
+        if r.get("event") == "record_api_call.workflow_id_chain_overflow"
+    ]
+    assert len(overflow_logs) == 1, (
+        f"expected one workflow_id_chain_overflow WARNING for the "
+        f"intentional cycle; got {len(overflow_logs)}. The defensive "
+        "log surfaces pathological chains so operators can investigate."
+    )
+    assert overflow_logs[0]["log_level"] == "warning"
+    assert overflow_logs[0]["dispatch_id"] == "d-alpha-cyc"
+    assert overflow_logs[0]["max_depth"] == 100

@@ -207,6 +207,94 @@ def _compute_cost_usd(
 _TERMINAL_STATES_SQL_LIST = ",".join(f"'{s}'" for s in sorted(_TERMINAL_STATES))
 
 
+# Defensive depth limit on the parent_task_id chain walk for
+# workflow_id alpha-denormalization (M5-continuous-pm-driver commit 1).
+# Real production chains are 1-3 hops (PM → Engineer → Implementer);
+# 100 is generous defensive-only protection against accidental cycles
+# in the parent_task_id DAG. Schema doesn't enforce acyclicity (no DDL
+# constraint on tasks.parent_task_id beyond the FK), so a buggy
+# submit_task in the future could create a cycle. The recursive CTE
+# stops at this depth and the helper returns None + emits a
+# structlog WARNING. Sentinel test pins the value.
+_WORKFLOW_CHAIN_MAX_DEPTH: int = 100
+
+
+async def _resolve_workflow_id_from_dispatch(
+    storage: Storage, dispatch_id: str | None
+) -> str | None:
+    """Resolve the chain-root task_id (workflow_id alpha-denormalization)
+    by walking ``tasks.parent_task_id`` from the dispatch's bound task.
+
+    Returns the chain root's task_id when the caller has a bound
+    dispatch with a resolvable task chain. Returns ``None`` when:
+
+    - ``dispatch_id`` is None (caller has no bound dispatch — Mike's
+      interactive OAuth PM is the canonical case)
+    - the dispatch's ``task_id`` is NULL (post-M4c-supervisor-base
+      dispatches may carry NULL ``task_id`` per migration 0007's
+      relaxation; the supervisor-row case)
+    - the chain exceeds :data:`_WORKFLOW_CHAIN_MAX_DEPTH` (cycle
+      protection; emits a ``record_api_call.workflow_id_chain_overflow``
+      WARNING). Real production chains are 1-3 hops; the limit is
+      defensive-only.
+
+    Uses a recursive CTE for atomic single-query resolution within the
+    enclosing ``storage.transaction()`` scope. The CTE's base case
+    joins through ``dispatches`` to fetch the dispatch's task; the
+    recursive case walks ``parent_task_id`` to the chain root
+    (``parent_task_id IS NULL``).
+
+    **Recursive CTE — first instance in this codebase.** The pattern
+    is durable for tree/chain traversal (workflow chains, agent
+    management hierarchies, knowledge subtrees, ``get_subtasks`` reads
+    at M4d). Per the watch-for-pattern entry in the M5-continuous-pm-
+    driver grounding doc, threshold-of-three triggers same-commit
+    extraction of a shared helper.
+
+    Caller is responsible for the resolution-precedence semantics
+    against any caller-supplied workflow_id — see ``record_api_call``
+    handler for the Reading B disposition (server-derived wins when
+    present; caller-supplied falls through when server-derived returns
+    None).
+    """
+    if dispatch_id is None:
+        return None
+    sql = """
+    WITH RECURSIVE chain(id, parent_task_id, depth) AS (
+        SELECT t.id, t.parent_task_id, 0
+        FROM dispatches d
+        INNER JOIN tasks t ON t.id = d.task_id
+        WHERE d.id = ?
+        UNION ALL
+        SELECT t.id, t.parent_task_id, c.depth + 1
+        FROM tasks t
+        INNER JOIN chain c ON t.id = c.parent_task_id
+        WHERE c.depth < ?
+    )
+    SELECT id, parent_task_id, depth FROM chain
+    ORDER BY depth DESC LIMIT 1
+    """
+    row = await storage.fetch_one(
+        sql, (dispatch_id, _WORKFLOW_CHAIN_MAX_DEPTH)
+    )
+    if row is None:
+        return None
+    if row["parent_task_id"] is None:
+        return str(row["id"])
+    # Deepest reachable row has a non-NULL parent — chain hit the
+    # defensive depth limit. Almost certainly a cycle in the
+    # parent_task_id DAG (real chains are 1-3 hops). Log and return
+    # None; cohort-key write proceeds with NULL workflow_id rather
+    # than failing the api_usage write on a pathological chain.
+    logger.warning(
+        "record_api_call.workflow_id_chain_overflow",
+        dispatch_id=dispatch_id,
+        max_depth=_WORKFLOW_CHAIN_MAX_DEPTH,
+        deepest_task_id=row["id"],
+    )
+    return None
+
+
 async def record_api_call(
     *,
     storage: Storage,
@@ -275,13 +363,37 @@ async def record_api_call(
     actual_tokens increments" must join against the actual_tokens
     timeline rather than infer from ``target`` alone.
 
-    **Atomicity**: INSERT api_usage + dispatch SELECT + conditional
-    UPDATE dispatches + audit_log write are wrapped in a single
-    ``storage.transaction()`` — partial failures roll back to a clean
-    pre-call state. Without this wrapper, an UPDATE failure after the
-    INSERT succeeded would leave an api_usage row claiming the call
-    consumed tokens while ``dispatches.actual_tokens`` disagreed,
-    silently breaking budget reasoning.
+    **Atomicity**: dispatch SELECT + workflow_id chain-CTE + INSERT
+    api_usage + conditional UPDATE dispatches + audit_log write are
+    wrapped in a single ``storage.transaction()`` — partial failures
+    roll back to a clean pre-call state. Without this wrapper, an
+    UPDATE failure after the INSERT succeeded would leave an api_usage
+    row claiming the call consumed tokens while
+    ``dispatches.actual_tokens`` disagreed, silently breaking budget
+    reasoning.
+
+    **Workflow_id alpha-denormalization** (M5-continuous-pm-driver commit
+    1; per F1.1 / D1.1 + Q1 Reading B disposition): the chain root of
+    the caller's bound dispatch's task is resolved server-side via
+    :func:`_resolve_workflow_id_from_dispatch` and stamped on
+    ``api_usage.workflow_id`` at write time. **Resolution precedence**
+    is Reading B: server-derived wins when present; caller-supplied
+    falls through when server-derived returns None (PM-direct OAuth
+    case, dispatches with NULL ``task_id``, chain-overflow defensive
+    fallback). When both are present and disagree, server-derived wins
+    and a ``record_api_call.workflow_id_conflict`` WARNING surfaces
+    via structlog (no audit row — soft conflict at high-frequency call
+    site).
+
+    The resolution lives in the same ``storage.transaction()`` envelope
+    as the dispatch SELECT and the INSERT; the chain CTE is a single
+    query (no per-hop round-trip) bounded at
+    :data:`_WORKFLOW_CHAIN_MAX_DEPTH` for cycle protection.
+
+    Operator workflow_id annotations on PM-direct calls (no bound
+    dispatch) preserve their semantics — Reading B's fallback path
+    means caller-supplied workflow_id reaches the row when no
+    server-derive is possible.
     """
     usage_id = uuid.uuid4().hex
     window_start = datetime.now(tz=UTC).isoformat(timespec="microseconds")
@@ -304,6 +416,61 @@ async def record_api_call(
         )
 
     async with storage.transaction():
+        # Resolve caller's active dispatch (if any) for the audit target,
+        # the actual_tokens increment, and the workflow_id chain-root
+        # resolution. The status-NOT-IN guard mirrors
+        # bridge.activity.record_mcp_call.
+        #
+        # Reordered to land BEFORE the INSERT api_usage so the resolved
+        # workflow_id can be stamped on the row at write time
+        # (M5-continuous-pm-driver commit 1; F2.1 reordering
+        # disposition). Atomicity guarantees are unchanged — the
+        # surrounding storage.transaction() rolls back the INSERT and
+        # audit on any failure, regardless of whether the failing step
+        # is the dispatch SELECT, the workflow-chain CTE, the INSERT,
+        # the conditional UPDATE, or the audit write.
+        dispatch_row = await storage.fetch_one(
+            "SELECT id FROM dispatches "
+            f"WHERE token_id = ? AND status NOT IN ({_TERMINAL_STATES_SQL_LIST})",
+            (caller_token_id,),
+        )
+        dispatch_id: str | None = (
+            dispatch_row["id"] if dispatch_row is not None else None
+        )
+
+        # Resolve workflow_id alpha-denormalization: server-derived from
+        # the bound dispatch's task chain root wins when present;
+        # caller-supplied falls through when server-derived returns
+        # None (PM-direct OAuth case + dispatches with NULL task_id).
+        # Per F1.1 / D1.1 + Q1 Reading B disposition.
+        server_derived_workflow_id = (
+            await _resolve_workflow_id_from_dispatch(storage, dispatch_id)
+        )
+        if (
+            request.workflow_id is not None
+            and server_derived_workflow_id is not None
+            and request.workflow_id != server_derived_workflow_id
+        ):
+            # Soft conflict: caller annotated a workflow_id that
+            # disagrees with the chain-root derivation. Server-derived
+            # wins (Reading B precedence), but the conflict surfaces
+            # via structlog WARNING for tier-2 observability
+            # investigation. Per Q3 Reading A: WARNING level, no audit
+            # row (high-frequency soft conflict; audit log not the
+            # right surface).
+            logger.warning(
+                "record_api_call.workflow_id_conflict",
+                caller_supplied_workflow_id=request.workflow_id,
+                server_derived_workflow_id=server_derived_workflow_id,
+                caller_agent_id=caller_agent_id,
+                dispatch_id=dispatch_id,
+            )
+        resolved_workflow_id = (
+            server_derived_workflow_id
+            if server_derived_workflow_id is not None
+            else request.workflow_id
+        )
+
         await storage.execute(
             "INSERT INTO api_usage "
             "(id, agent_id, model, input_tokens, output_tokens, cost_usd, "
@@ -320,22 +487,10 @@ async def record_api_call(
                 request.task_id,
                 window_start,
                 request.notes,
-                request.workflow_id,
+                resolved_workflow_id,
                 caller_agent_role,
                 request.task_type,
             ),
-        )
-
-        # Resolve caller's active dispatch (if any) for the audit target
-        # and the actual_tokens increment. The status-NOT-IN guard mirrors
-        # bridge.activity.record_mcp_call.
-        dispatch_row = await storage.fetch_one(
-            "SELECT id FROM dispatches "
-            f"WHERE token_id = ? AND status NOT IN ({_TERMINAL_STATES_SQL_LIST})",
-            (caller_token_id,),
-        )
-        dispatch_id: str | None = (
-            dispatch_row["id"] if dispatch_row is not None else None
         )
 
         if dispatch_id is not None:
@@ -368,7 +523,7 @@ async def record_api_call(
                 "task_id": request.task_id,
                 "dispatch_id": dispatch_id,
                 "notes": request.notes,
-                "workflow_id": request.workflow_id,
+                "workflow_id": resolved_workflow_id,
                 "agent_role": caller_agent_role,
                 "task_type": request.task_type,
             },

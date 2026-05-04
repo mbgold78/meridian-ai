@@ -350,3 +350,5 @@ End of addendum.
 ## Implementation status
 
 The addendum's architectural commitments land in M3-M7 sub-milestones. Sub-milestone close reviews under `docs/closeouts/` are the canonical retrospective for each chain. As of M5-subscription-routing's close, the routing layer (`record_api_call`, `get_token_usage`, `get_burn_rate`, `check_budget_for_task`), the OAuth usage poller (M5-pm-mode-and-window-state), and the per-bucket attribution model are all shipped. See `docs/closeouts/M5-subscription-routing.md` for chain summary.
+
+M5-continuous-pm-driver (in progress) commit 1 ships `workflow_id` alpha-denormalization on `record_api_call`'s INSERT path — chain-root resolution via recursive CTE through `tasks.parent_task_id` from the caller's bound dispatch. Resolution precedence Reading B (server-derived wins; caller-supplied falls through). See `docs/kickoff/06-mcp-tools-phase-one.md` § `record_api_call` for the schema-level documentation.

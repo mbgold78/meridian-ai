@@ -382,3 +382,28 @@ def test_resolve_window_handles_malformed_resets_at() -> None:
     assert resolution.fallback == "calendar_24h"
     assert resolution.window_start == now - timedelta(hours=24)
     assert resolution.window_end == now
+
+
+
+def test_workflow_chain_max_depth_sentinel() -> None:
+    """Pin _WORKFLOW_CHAIN_MAX_DEPTH at 100. The constant bounds the
+    recursive CTE in _resolve_workflow_id_from_dispatch (M5-continuous-
+    pm-driver commit 1) for cycle protection. Real production chains
+    are 1-3 hops; 100 is generous defensive-only protection.
+
+    Sentinel pattern matches _PRIORITY_TIER_DELTA / _TIER_HIERARCHY /
+    _AGENT_ROLE_SUBTREE from M5-subscription-routing — the value is a
+    deliberate design decision and a future change should be
+    deliberate (failing this sentinel forces the diff to surface the
+    rationale).
+    """
+    from meridian_orchestrator.tools.budget import _WORKFLOW_CHAIN_MAX_DEPTH
+
+    assert _WORKFLOW_CHAIN_MAX_DEPTH == 100, (
+        f"_WORKFLOW_CHAIN_MAX_DEPTH={_WORKFLOW_CHAIN_MAX_DEPTH}, expected "
+        "100. The constant bounds the recursive CTE depth in "
+        "_resolve_workflow_id_from_dispatch. Tightening is fine in "
+        "principle but should be deliberate; a future commit changing "
+        "this value must update this sentinel and surface the rationale "
+        "in its prep checkpoint."
+    )
