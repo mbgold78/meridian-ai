@@ -131,7 +131,44 @@ Mike: (a) edits `pm.yaml` to remove `get_dashboard_summary` from the allowlist, 
 
 Mike walks through a real PM→Engineer→Implementer→Engineer→PM cycle in his interactive Claude Code session, observes the work happening in `meridian-homepoc` (via the daemon's substrate-canonical clone fast-forwarded to upstream main, which Mike's working tree pulls from), queries the audit log, sees the chain. **This is Phase 1's load-bearing demo: the company actually staffs itself.**
 
-### M4 trajectory (closed 2026-05-01)
+### M4 status (REOPENED 2026-05-03)
+
+**M4 was marked closed on 2026-05-01 but acceptance was not met.** During
+M5-continuous-pm-driver prep checkpoint (F2.1 commit-1 contradiction
+surface, 2026-05-03), grounding scan revealed `tools/tasks.py` and the six
+task-management MCP tools (`submit_task`, `get_queue`, `update_task_status`,
+`set_task_priority`, `claim_task`, `get_subtasks`) were never implemented.
+
+The M4 acceptance criteria at lines 122-128 require, among others, the
+PM→Engineer→Implementer→Engineer→PM cycle (the "load-bearing demo"
+checkpoint at line 132) and the double-claim CONFLICT / role-mismatch
+PERMISSION_DENIED behaviors. Without `submit_task`, the cycle's first hop
+has no production code path. Without `claim_task`, the conflict-and-role
+behaviors aren't verifiable.
+
+The integration test path that does work uses direct SQL fixture inserts
+(e.g., `tests/integration/test_dispatch_parallel_and_merge.py:92`:
+`INSERT INTO tasks (id, company_id, project_id, agent_role, description) ...`).
+Production-side MCP path is structurally non-functional today.
+
+**Disposition:** M4 reopens. This is a spec-vs-implementation drift, not
+an authorized deferral. Permitting "M4 is closed despite unmet acceptance"
+retroactively redefines every closure under the closeout convention to
+mean "we stopped working on it" rather than "we verified it works." That
+redefinition is rejected.
+
+**Remediation routing:** M4d-task-management-surface, scheduled after
+M5-continuous-pm-driver and before Phase 1 closeout. See M4d entry below.
+
+**Discovery context:** the **phase-boundary acceptance-criteria-coverage
+scan** convention (newly established 2026-05-03; see
+`docs/kickoff/00-README.md` § Phase-boundary acceptance-criteria-coverage
+scan) was triggered during M5-continuous-pm-driver grounding to verify
+no further phantom-surface drift exists. Output:
+`docs/working/phase-1-acceptance-drift.md`. Result: drift localized to
+M4 task-management surface; no other M-level drift discovered.
+
+### M4 trajectory (closed 2026-05-01; reopened 2026-05-03)
 
 M4 shipped in eight commits across four sub-milestones plus one mid-milestone fix:
 
@@ -163,6 +200,82 @@ Surfaced during M4c prep checkpoints; tracked in `BACKLOG.md` and dedicated proj
 ### Pattern observation: M4 built; M5 wires
 
 M4 shipped complete machinery. M5's task is to wire the machinery into production-exercisable paths. Every M5 deliverable should be evaluable against this lens — what M4 piece does this enable to actually run? See M5 § Deliverables for the explicit forward-references (production dispatch wrapper closure, engineer-supervisor flag flip, engineer compaction production trigger wiring).
+
+**Caveat (2026-05-03):** the "M4 built complete machinery" claim is
+*partly* true — the dispatch surface is complete; the task-management
+surface (six MCP tools) was not built. The pattern observation holds for
+the dispatch surface only. M4d (below) closes the task-management gap
+before Phase 1 closeout.
+
+---
+
+## M4d — Task management surface (REOPENING REMEDIATION)
+
+**Status:** scheduled. Lands after M5-continuous-pm-driver and before
+Phase 1 closeout.
+
+**Trigger:** M4 reopened 2026-05-03 (see M4 status section above).
+Acceptance criteria at lines 122-128 not met because `tools/tasks.py` and
+the six task-management MCP tools were never implemented.
+
+### Deliverables
+
+- `tools/tasks.py` implementing six MCP tools per
+  `06-mcp-tools-phase-one.md:30-122`:
+  - `submit_task` — caller-role-managed-target hierarchy check; optional
+    `parent_task_id` with claimed-by-or-submitted-by enforcement; audit
+    `task.submit`. **Optional `task_type` field** lands here per the
+    M5-continuous-pm-driver F1.1 disposition (deferred from
+    M5-continuous-pm-driver to M4d so it ships with the seed-task
+    population path).
+  - `get_queue` — hierarchy-scoped read; not audited (high frequency).
+  - `update_task_status` — claimed-by-or-submitted-by enforcement;
+    state-machine-validated transitions; audit `task.status_change`.
+  - `set_task_priority` — submitter-or-claimed-by-or-ancestor; audit
+    `task.priority_change`.
+  - `claim_task` — conditional UPDATE (`WHERE status = 'pending'`) for
+    idempotency; audit `task.claim`.
+  - `get_subtasks` — hierarchy-scoped read.
+- Migration `0010_tasks_task_type.sql` — `ALTER TABLE tasks ADD COLUMN
+  task_type TEXT;` Schema-version 10. Pairs with `submit_task`'s
+  task_type schema field.
+- Server.py wrappers for the six tools, mirroring the established pattern
+  (`_resolve_agent_id` → `_observe_caller` → handler call → typed
+  output). Pairs with the M5-wrapper-closure pattern from M5 kickoff.
+- Hierarchy enforcement: `submit_task` calls into
+  `agents/permissions.py:is_descendant` (caller's-direct-report check);
+  `update_task_status` and `set_task_priority` call descendant + claimed-by
+  helpers.
+- Integration tests: PM → Engineer → Implementer chain via real MCP path
+  (no direct SQL fixture seed). Covers double-claim CONFLICT, role-mismatch
+  PERMISSION_DENIED, decline propagation upward through
+  `update_task_status('declined', notes=...)`.
+- Acceptance demo: Mike walks the PM→Engineer→Implementer→Engineer→PM
+  cycle in his interactive Claude Code session (the load-bearing demo
+  from M4 acceptance line 132).
+
+### Acceptance
+
+- M4 acceptance criteria at lines 122-128 met end-to-end via production
+  MCP path, not test fixtures.
+- Audit log captures full chain via `get_audit_log` (M6 deliverable; if
+  M6 hasn't shipped before M4d, audit reconstruction via direct SQL is
+  acceptable for M4d closure pending M6).
+- Mike's load-bearing demo runs without manual SQL.
+
+### Remediation discipline
+
+M4d's closeout doc (`docs/closeouts/M4d-task-management-surface.md`)
+follows the M5-subscription-routing closeout convention. Drift-detection
+scan at chain close. Phase-boundary acceptance-criteria-coverage scan at
+Phase 1 closeout.
+
+### Pre-M4d discovery
+
+The M4d remediation was discovered during M5-continuous-pm-driver
+grounding's F2.1 commit-1 contradiction surface (2026-05-03). See
+`docs/working/phase-1-acceptance-drift.md` for the scan that confirmed
+drift was localized to M4 task-management.
 
 ---
 
