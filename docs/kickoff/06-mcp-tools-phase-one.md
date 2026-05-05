@@ -285,6 +285,79 @@ PM uses this for deliberate self-reported mode transitions (entering `paused_que
 
 **Audited.** Action: `pm_mode.transition`.
 
+#### `declare_current_focus`
+
+```python
+class DeclareCurrentFocusInput(BaseModel):
+    objective: str
+    output_type: Literal[
+        'document', 'code_change', 'decision', 'review', 'investigation'
+    ]
+    acceptance_criteria: str
+    bound_workflow_id: str | None = None     # chain root task_id when workflow-bound
+
+class DeclareCurrentFocusOutput(BaseModel):
+    focus_id: str
+    superseded_prior_focus_id: str | None    # set when auto-supersede fired
+```
+
+Ships at M5-continuous-pm-driver commit 2 alongside `pm_current_focus` table + `complete_current_focus` + `get_current_focus`. PM declares the active work-unit boundary: an objective ("ship the X feature"), an `output_type` (one of five closed-enum values per F3.6 Q1 disposition), and acceptance criteria the loop validates the actual output against at completion (loop-side validation per F2.2 A1 disposition). Optional `bound_workflow_id` ties the focus to a top-level submitted task chain when applicable; NULL for review/investigation work that doesn't map to a dispatched task chain (per F3.6 Q3 + Q8 dispositions).
+
+**Auto-supersede semantics** (F3.6 Q8 Reading A): when a prior incomplete focus exists at declare time, the prior row is auto-completed in the same transaction with `contract_finding_text='superseded'` (and `contract_validated_bool` left NULL — supersede is not a validation outcome). Two audit rows emit on the auto-supersede path: `pm.current_focus.superseded` (target = prior focus) then `pm.current_focus.declared` (target = new focus). The at-most-one-active-focus invariant is preserved across Mike-interrupt-driven pivots.
+
+**Allowed for PM only.**
+
+**Audited.** Actions: `pm.current_focus.declared` (always); `pm.current_focus.superseded` (when auto-supersede fired). Full per-action payloads per F3.6 Q4 disposition; see `11-engineer-bridge.md` § Audit log entries.
+
+#### `complete_current_focus`
+
+```python
+class CompleteCurrentFocusInput(BaseModel):
+    contract_validated: bool
+    finding_text: str | None = None
+    actual_output_summary: str | None = None  # used in contract_violation audit
+
+class CompleteCurrentFocusOutput(BaseModel):
+    focus_id: str
+    contract_validated: bool
+```
+
+Closes the active focus with the loop's validation result. The loop computes `contract_validated` (True if actual output matches `acceptance_criteria` within the declared `output_type`; False if mismatch surfaced); this writer records the result. **Implicit-current shape** (F3.6 Q9 Reading B): no `focus_id` parameter — PM has at-most-one active focus per the Q8 invariant; the handler reads it implicitly and completes that one. Calling with no active focus raises an error (the loop's logic is expected to declare-then-complete; a no-active call indicates a contract violation in the loop, not a silent no-op).
+
+**Audit shape** (F3.6 Q4 Reading A): `pm.current_focus.completed` always emits; `pm.current_focus.contract_violation` emits in the same transaction when `contract_validated=False`. Both target the focus_id; payloads diverge per Q4 spec.
+
+**Allowed for PM only.**
+
+**Audited.** Actions: `pm.current_focus.completed` (always); `pm.current_focus.contract_violation` (when `contract_validated=False`).
+
+#### `get_current_focus`
+
+```python
+class GetCurrentFocusOutput(BaseModel):
+    current_focus: PmCurrentFocus | None  # None when no active focus
+
+class PmCurrentFocus(BaseModel):
+    id: str
+    objective: str
+    output_type: Literal[
+        'document', 'code_change', 'decision', 'review', 'investigation'
+    ]
+    acceptance_criteria: str
+    bound_workflow_id: str | None
+    declared_at: str
+    completed_at: str | None                 # None when active
+    contract_validated_bool: bool | None     # None until completed
+    contract_finding_text: str | None        # None on declare; set on complete or supersede
+```
+
+Returns the active `pm_current_focus` row or `None`. Daemon-internal MCP read consumed by the continuous-loop driver subprocess at commits 7-8. Per F3.6.C Q6 Reading A disposition, ships co-shipping with `declare_current_focus` / `complete_current_focus` rather than deferring to commit 7 — co-design with the table schema avoids prep-debt at commit 7. Per `BACKLOG.md` § Observability roadmap scope clarification 2026-05-04, the "read-side post-flag-flips" sequencing applies to operator-facing tier-2 surfaces, not daemon-internal subprocess reads; a planned subprocess consumer is sufficient justification to ship the read alongside the write.
+
+**Empty-state contract**: `current_focus = None` when no active focus exists. The discriminated container shape lets the loop driver distinguish "no focus declared yet" from "RPC failed" cleanly.
+
+**Allowed for PM only.** Engineer's mode-aware planning may eventually need read access (mirror Q4 set_pm_mode disposition pattern); promote at M5-flag-flips if Engineer's continuous-loop spec lands with that need.
+
+**Not audited** (read-only, called frequently from PM's loop). Mirrors `get_window_state`'s not-audited convention.
+
 #### `get_utilization_report`
 
 ```python
@@ -642,6 +715,9 @@ class GetAuditLogOutput(BaseModel):
 | get_dispatch_result | yes | subtree | own | no | no |
 | get_window_state | yes | yes | yes | no | no |
 | set_pm_mode | no | yes | no | no | no |
+| declare_current_focus | no | yes | no | no | no |
+| complete_current_focus | no | yes | no | no | no |
+| get_current_focus | no | yes | no | no | no |
 | get_utilization_report | yes | yes | no | no | no |
 | notify_human | no | yes | no | no | no |
 | get_unread_replies | no | yes | no | no | no |

@@ -247,6 +247,43 @@ Observability table — not load-bearing state. Records PM mode transitions for 
 
 PM does not read this table to determine its own current mode — that is held in memory by the running PM process. **However**, PM does read this table to detect *Mike's* mode-flip activity (per item 2 above): continuous-mode PM polls `pm_mode_log` on each planning iteration, reads the **most recent row's timestamp and mode**, and adjusts its planning loop based on whether `mode='interactive'` is fresh enough to indicate Mike's presence. The two reads are distinct — PM's own current mode is in-memory state (never read from this table); Mike-presence detection is the most recent row's timestamp and mode (read from this table). The log exists for auditing, the utilization report, the dashboard, and Mike-presence detection.
 
+### `pm_current_focus`
+
+Narration tier-1 table per `BACKLOG.md` § Observability roadmap (M5-continuous-pm-driver scope). Each row captures one work-unit boundary PM declares for itself: an objective, the kind of output it produces (`output_type`), and the acceptance criteria the actual output is validated against at completion. Loop-side validation (F2.2 A1 disposition) computes the contract-validated finding; the writer records the result.
+
+```sql
+CREATE TABLE pm_current_focus (
+    id TEXT PRIMARY KEY,
+    objective TEXT NOT NULL,
+    output_type TEXT NOT NULL CHECK (output_type IN (
+        'document', 'code_change', 'decision', 'review', 'investigation'
+    )),
+    acceptance_criteria TEXT NOT NULL,
+    bound_workflow_id TEXT REFERENCES tasks(id) ON DELETE NO ACTION,
+    declared_at TEXT NOT NULL DEFAULT (datetime('now')),
+    completed_at TEXT,
+    contract_validated_bool INTEGER,
+    contract_finding_text TEXT
+);
+
+CREATE INDEX idx_pm_focus_declared_at ON pm_current_focus(declared_at);
+```
+
+Three write paths (all PM-initiated; see `06-mcp-tools-phase-one.md`):
+
+1. `declare_current_focus` — opens a new focus and (per F3.6 Q8 Reading A) auto-supersedes any prior incomplete focus in the same transaction. The prior row's `completed_at` is set, `contract_finding_text='superseded'`, `contract_validated_bool` left NULL. The at-most-one-active-focus invariant is preserved across Mike-interrupt-driven pivots.
+2. `complete_current_focus` — closes the active focus with the loop's validation result. Sets `completed_at`, `contract_validated_bool` (1 for True / 0 for False), and `contract_finding_text` from the request.
+3. Auto-supersede via path (1) above — implicit closure of a prior focus when a new one is declared.
+
+**Constraint shape** (per F3.6 dispositions, 2026-05-04):
+
+- `output_type` CHECK enforces the closed 5-value enum (Q1 Reading A). Defense-in-depth alongside the `tools/pm_focus.py:OutputType` Literal.
+- `bound_workflow_id` FK with NO ACTION on delete (Q3 Reading A): write-time integrity catches PM-references-nonexistent-task; deletion blocks if focus rows reference. SET NULL would silently destroy narration record fidelity. Different shape from `api_usage.workflow_id` (which is dual-path and ships without FK at 0009).
+- `contract_validated_bool` and `contract_finding_text` nullable: only set on complete; declare-time rows leave both NULL. SQLite stores bool as INTEGER (0/1).
+- `pm_current_focus` does NOT carry a `pm_mode_log_id` FK (Q2 Reading B): foci change at PM's deliberate declaration; modes flip asynchronously on Mike-interrupts. Co-incident-not-owned relationships use timestamp-join, not FK coupling. The operator-side "what mode was PM in when this focus landed" question reconstructs via `pm_mode_log` timestamp comparison.
+
+**Single index on `declared_at`** (Q5 Reading B): the loop's at-most-once-per-tick `read_current_focus` lookup uses sequential scan well within bounds. `idx_pm_focus_bound_workflow` deferred per `BACKLOG.md` § Deferred (entry dated 2026-05-04); revisit when workflow-cohort queries against `pm_current_focus` materialize. The `api_usage.workflow_id` index from migration 0009 is the load-bearing surface for cost-cohort queries; pm_current_focus row counts stay 100x+ smaller.
+
 ## Filesystem layout
 
 Root: `${MERIDIAN_ORCH_DATA_DIR}` (default `~/.meridian-orchestrator/`).
@@ -298,6 +335,7 @@ Phase 1 migration plan:
 | `0003_pm_mode.sql` | M5 | `pm_mode_log` table + `idx_pm_mode_timestamp` |
 | `0004_notifications.sql` | M6 | `inbound_messages`, `outbound_messages`, plus partial indexes |
 | `0009_observability_cost_tier1.sql` | M5 | `api_usage` cohort columns (`notes`, `workflow_id`, `agent_role`, `task_type`) + indexes (`idx_api_usage_workflow`, `idx_api_usage_role_type`) per `BACKLOG.md` § Observability roadmap |
+| `0010_pm_current_focus.sql` | M5-continuous-pm-driver | `pm_current_focus` table + `idx_pm_focus_declared_at` per `BACKLOG.md` § Observability roadmap (narration tier 1, M5-continuous-pm-driver scope) |
 
 No `bucket` column ships in `api_usage`. The premium-first cost model superseded by the subscription-first architecture (Experiment 4, 2026-05-01) drops per-call bucket attribution from the schema in favor of query-time derivation from `model` plus the daemon's polled `/api/oauth/usage` snapshot. See `project_subscription_first_architecture` memory.
 

@@ -1474,10 +1474,11 @@ New patterns this sub-milestone may surface or compound:
   `tools/pm_focus.py:write_current_focus`. If both land, that's
   instances 3 and 4 — well past threshold. Layer-split reconsideration
   triggers per the BACKLOG entry.
-- **Migration count.** Three new migrations (0010, 0011, 0012,
-  0013 — four, actually) at this sub-milestone. Migration boilerplate
-  is small but not zero; if the rate continues, watch for migration-
-  template extraction.
+- **Migration count.** Three new migrations (0010, 0011, 0012) at
+  this sub-milestone (revised 2026-05-04 from "four (0010-0013)" after
+  F2.1 chain revision dropped the `tasks.task_type` migration to M4d).
+  Migration boilerplate is small but not zero; if the rate continues,
+  watch for migration-template extraction.
 
 ---
 
@@ -1505,6 +1506,17 @@ Per D1.1, capture in the closeout doc:
   was load-bearing — without it I would have silently descoped task
   budgets to ship effort first. Capture as evidence the directive
   worked as intended.
+- **F2.1 surface-as-finding rule first invoked at commit 2 prep
+  (2026-05-04).** +35.7% test-count divergence (14 → 19) dispositioned
+  as scope-correct (driven by Q3 + Q4 + Q6 disposition decisions, not
+  silent drift); documented and rolled forward per F2.1's "(a) actual
+  differs from precedent, acceptable if documented" branch; precedent
+  established for future invocations of the rule. The disposition
+  shape — "test-count divergence is scope-correct when driven by
+  disposition decisions, not silent implementation drift" — keeps
+  F2.1 estimates honest as estimates while preventing them from
+  becoming budgets that constrain disposition quality at prep time.
+  Captured here for the closeout § Discipline-pattern observations.
 
 ---
 
@@ -1528,3 +1540,751 @@ for commit 1 → commit 1 lands → repeat through commit 10 → e2e tests
 + closeout doc → sub-milestone closes.
 
 **End of Followup-2.**
+
+---
+
+# Followup-3 — commit 2 prep checkpoint (pm_current_focus + write/read API + completion-validation audit event-kind)
+
+**Date:** 2026-05-04. **Sub-milestone:** M5-continuous-pm-driver.
+**Commit scope:** F2.1 row 2 (revised 9-commit chain, post-rollback).
+**Prerequisites landed:** commit 1 (workflow_id α-denormalization, ff47573).
+**Pre-prep tidy applied at session open:** F2.4 watch-for-pattern entry
+"Migration count" corrected from "(0010, 0011, 0012, 0013 — four,
+actually)" to "(0010, 0011, 0012)" — drift introduced during the F2.1
+revision (2026-05-03) when the original 0010/`tasks.task_type` row
+moved to M4d but F2.4 wasn't synced. F1.1's references at lines 631
+and 643 are within the historical-record-of-withdrawn-position scope
+(the F2.1 rollback note explicitly defers the M4d migration namespace
+to "TBD when M4d preps") — left as-is.
+
+---
+
+## F3.1 — touch points
+
+Per F2.1 row 2: `storage/sql/0010_*.sql`, `tools/pm_focus.py` (new),
+`audit/logger.py`. Resolved file-by-file:
+
+| File | Status | Touch shape |
+|---|---|---|
+| `src/meridian_orchestrator/storage/sql/0010_pm_current_focus.sql` | NEW | Table DDL with `id / objective / output_type / acceptance_criteria / bound_workflow_id (nullable FK to tasks) / declared_at / completed_at / contract_validated_bool / contract_finding_text`; indexes per Q5 disposition. CHECK constraint on `output_type` only if Q1 closed-enum lands. |
+| `src/meridian_orchestrator/tools/pm_focus.py` | NEW | Pydantic schemas (`DeclareFocusInput/Output`, `CompleteFocusInput/Output`, `GetCurrentFocusOutput`, `PmCurrentFocus` row model); `read_current_focus` helper (mirrors `read_current_pm_mode`); `declare_current_focus` / `complete_current_focus` handlers; `OutputType` Literal; `_PM_FOCUS_AUDIT_ACTIONS` constants. |
+| `src/meridian_orchestrator/audit/logger.py` | UNCHANGED | Audit-log `action` column is free-form TEXT (no schema enum), so "event-kind extension" lands as new namespaced action constants in `tools/pm_focus.py` — `pm.current_focus.declared`, `pm.current_focus.completed`, `pm.current_focus.contract_violation`. No code change to `audit/logger.py` itself; spec amendment to `11-engineer-bridge.md` § Audit log entries is the documentation surface. |
+| `src/meridian_orchestrator/server.py` | EDIT | `_register_pm_focus_tools` helper added; called from `build_server` alongside `_register_pm_mode_tools` (line 314). MCP tools per Q6 disposition. |
+| `src/meridian_orchestrator/main.py` | UNCHANGED | No lifespan changes — `tools/pm_focus.py` uses only `Storage`, no new daemon dependencies. (Compaction-trigger writer at commit 8 may need lifespan; not this commit.) |
+| `docs/kickoff/06-mcp-tools-phase-one.md` | EDIT | New tool entries per Q6 closed disposition. |
+| `docs/kickoff/05-data-model.md` | EDIT | New `pm_current_focus` table entry mirroring `pm_mode_log` shape. |
+| `docs/kickoff/11-engineer-bridge.md` | EDIT | Audit-log entries table extended with `pm.current_focus.*` actions per Q4 disposition. |
+| `tests/unit/storage/test_migrations.py` | EDIT | Migration-applied smoke test for 0010 (mirror existing 0009 pattern). |
+| `tests/unit/tools/test_pm_focus.py` | NEW | Mirrors `test_pm_mode.py` shape (declare / complete / read / atomicity / output_type sentinel if closed-enum). |
+| `tests/integration/test_pm_focus_mcp_wrapper.py` | NEW | Mirrors `test_pm_mode_mcp_wrapper.py` (PM-allowed, non-PM-rejected, audit-row emitted). |
+
+**Spec amendments ride at commit 2** per established convention
+(`feat(M5-pm-mode-and-window-state): commit 6 — get_window_state + Q8
+helper + spec amendments` precedent). The 06 / 05 / 11 doc edits
+co-locate with the implementing commit so future drift-scan can pin
+spec text to landed code via single-commit blame.
+
+---
+
+## F3.2 — open questions (Q1-Q9)
+
+### Q1 — `output_type` typing: closed enum or open text?
+
+The deliverable contract per F1's Section 2:
+`(objective / output_type / acceptance_criteria)`. `output_type`
+classifies what the focus produces.
+
+- **Reading A — closed enum.** `Literal["document", "code_change",
+  "decision", "review", "investigation"]` + CHECK constraint on
+  `pm_current_focus.output_type` + sentinel test pinning the enum.
+  Forces taxonomic discipline; cohort queries trivial; cohort signal
+  for tier-2 narration evolution. Mirrors `pm_mode_log.mode` /
+  `dispatches.status` / pending Q3 `pm_spin_rationale_log.rationale_tag`
+  pattern. Risk: forced-fit on early validation against real workload
+  (echoes the F1.1-Section-1 task_type α rejection). Mitigation: the
+  five-value taxonomy is already operator-meaningful and can evolve
+  via future migration (precedent: `0008_dispatches_status_check.sql`).
+- **Reading B — open text.** No CHECK; PM writes free-form output_type
+  values per yaml prompt convention. Lower discipline; higher noise;
+  cohort queries collapse. Same downside shape as the rejected
+  rationale_tag-as-free-text in Q3.
+- **Reading C — open text now, closed-enum after one real-loop
+  cycle.** Ship Reading B at commit 2; convert to closed enum at
+  M5-flag-flips after observing what PM actually writes. Avoids
+  forced-fit but defers discipline; the dead-text-values produced
+  during the open-text window become permanent rows the eventual
+  CHECK constraint must accommodate (or rewrite via UPDATE).
+
+**Recommendation: Reading A (closed enum).** The five-value taxonomy
+is already operator-meaningful and matches the BACKLOG observability
+roadmap's tier-1 narration framing ("PM declares deliverable contract;
+contract validates at completion"). `code_change` / `document` /
+`decision` / `review` / `investigation` cover the narration shapes
+this loop produces. Forced-fit risk is lower than for task_type
+because output_type classifies the focus's PRODUCT rather than the
+work-shape itself; product taxonomies evolve more slowly than work
+taxonomies. If a sixth shape emerges, future migration (mirror
+`0008_dispatches_status_check.sql` precedent) is the right tool.
+Reading C's gradual approach trades current discipline for future
+backfill cost; not worth it.
+
+### Q2 — `pm_mode_log_id` FK on `pm_current_focus`?
+
+F1's Section 2 schema sketch named `pm_mode_log_id` as a column.
+Surface as a question because the relationship semantics are weak.
+
+- **Reading A — keep the FK.** Each focus declaration links to the
+  most-recent pm_mode_log row at declaration time. Audit-trail
+  property: "this focus was declared while PM was in mode X."
+  Operator-side reconstruction of "what mode was PM in when this
+  focus landed" via single JOIN.
+- **Reading B — drop the FK.** `pm_current_focus` is independent of
+  pm_mode transitions. Modes change asynchronously (Mike messages
+  flip continuous → interactive); foci change at PM's deliberate
+  declaration. The semantic relationship is "co-incident at a moment
+  in time," not "owned by." Operator queries reconstruct via
+  timestamp-join (`WHERE pm_mode_log.timestamp <= pm_current_focus.declared_at`),
+  not FK-join.
+
+**Recommendation: Reading B (drop the FK).** The operator-side
+"what mode was PM in" question is answerable via timestamp-join
+against pm_mode_log without coupling the schema. Coupling produces
+maintenance friction: every pm_mode-transition that happens between
+declare and complete (Mike messages flipping to interactive then
+back) makes the recorded pm_mode_log_id stale. Independent tables
+with timestamp coordination is the more honest shape.
+
+### Q3 — `bound_workflow_id` storage shape
+
+Per F2.3 Q8 disposition (Reading C): `pm_current_focus.bound_workflow_id`
+is the chain root task_id when the focus is workflow-bound; NULL
+when the focus is unrelated to dispatched work. Implementation
+question:
+
+- **Reading A — `bound_workflow_id TEXT REFERENCES tasks(id)`,
+  nullable.** Foreign-key constraint enforces referential integrity;
+  workflow_id must point at a real task row. Matches the existing
+  `api_usage.task_id REFERENCES tasks(id)` pattern.
+- **Reading B — `bound_workflow_id TEXT`, no FK.** Free-text storage.
+  Lower constraint cost; admits typos / dangling references. Same
+  shape as `api_usage.workflow_id` in 0009 (no FK there because
+  caller-supplied workflow_id may predate the task rows or be
+  operator-meaningful labels rather than chain roots).
+
+**Recommendation: Reading A (FK with nullable).** Unlike
+`api_usage.workflow_id` (which is caller-supplied OR
+server-derived from chain-root walk in commit 1's wrapper),
+`pm_current_focus.bound_workflow_id` is set at declare-time by PM
+asserting "this focus is the operator's intent for workflow X."
+PM has the bound task in scope (it's the workflow root it submitted);
+referential integrity is cheap and catches the
+PM-references-nonexistent-task bug class at write time. ON DELETE
+behavior: leave default (NO ACTION) — if a workflow root task is
+deleted, the focus row's FK constraint blocks; cascade or SET NULL
+would silently corrupt narration.
+
+### Q4 — Audit-log `action` namespace and shape
+
+Three new namespaced actions land at this commit:
+`pm.current_focus.declared`, `pm.current_focus.completed`,
+`pm.current_focus.contract_violation`. Question is target + details
+shape per action.
+
+- **Reading A — target = focus_id; per-action details payloads
+  fully-specified.**
+  - `pm.current_focus.declared`: target=focus_id; details={objective,
+    output_type, acceptance_criteria, bound_workflow_id, declared_at}
+  - `pm.current_focus.completed`: target=focus_id; details={focus_id,
+    contract_validated, finding_text (if any), completed_at,
+    declared_at_for_join}
+  - `pm.current_focus.contract_violation`: target=focus_id;
+    details={focus_id, contract_validated=false, finding_text,
+    actual_output_summary}
+- **Reading B — minimal details; reconstruction via FK-join to
+  pm_current_focus.** target=focus_id; details only carries data not
+  in the table row (e.g., contract_violation's actual_output_summary).
+
+**Recommendation: Reading A (full payloads).** Audit log is the
+durable timeline; full payloads make the timeline self-contained
+without requiring future-Claude / operators to JOIN through
+pm_current_focus to reconstruct what happened. Storage cost is
+trivial (audit details_json is a TEXT column, no row count
+explosion). Mirrors the dispatch.* audit action precedent in
+`11-engineer-bridge.md` § Audit log entries (full per-action
+payloads).
+
+The third action `pm.current_focus.contract_violation` is the
+completion-validation finding type promised by F1's Section 2. It
+fires alongside `pm.current_focus.completed` when
+`contract_validated=false`. Per F2.2 A1 disposition (loop-side
+validation), the loop computes the validated/finding result and
+calls `complete_current_focus`; the writer emits both
+`pm.current_focus.completed` AND `pm.current_focus.contract_violation`
+(when applicable) in the same transaction.
+
+### Q5 — Indexes on `pm_current_focus`
+
+What indexes ship at the migration?
+
+- **Reading A — `idx_pm_focus_declared_at` (BTREE on declared_at)
+  + `idx_pm_focus_bound_workflow` (BTREE on bound_workflow_id) +
+  `idx_pm_focus_active` (partial INDEX where `completed_at IS NULL`).**
+  Three indexes. The first supports "most recent focus" lookups;
+  the second supports "all foci for workflow X" queries; the third
+  supports "is there an active focus right now" — the loop's hot path.
+- **Reading B — `idx_pm_focus_declared_at` only.** Single index; rely
+  on `ORDER BY rowid DESC LIMIT 1` for read_current_focus (mirrors
+  `read_current_pm_mode`'s rowid-DESC ordering).
+- **Reading C — no indexes.** Table is low-volume; sequential scan
+  acceptable.
+
+**Recommendation: Reading B (declared_at only).** SQLite partial
+indexes are supported but add maintenance cost; the active-focus
+lookup happens at most once per loop tick (~30s — see commit 7
+prep), well within sequential-scan bounds even at 1000+ row table
+size. The bound_workflow_id index is premature — workflow-cohort
+queries land post-M5-flag-flips per BACKLOG observability
+sequencing, and the workflow_id-on-api_usage index from 0009 is
+the load-bearing surface for those queries (api_usage rows
+outnumber pm_current_focus rows by 100x+). Add bound_workflow_id
+index later if the cohort workload tips.
+
+### Q6 — MCP tool surface at commit 2
+
+Three handlers in `tools/pm_focus.py`. Question is which ship as MCP
+tools at commit 2 vs deferred.
+
+- **Reading A — three MCP tools at commit 2:** `declare_current_focus`
+  (PM-only), `complete_current_focus` (PM-only), `get_current_focus`
+  (PM/Engineer per get_window_state precedent).
+- **Reading B — two MCP tools at commit 2:** declare + complete only
+  (PM-only). Read API exists in `tools/pm_focus.py` for daemon-side
+  reuse but no MCP wrapper.
+- **Reading C — zero MCP tools at commit 2.** Module exposes
+  Python-API only; MCP wrappers ship at commit 7 alongside the loop
+  driver that consumes them.
+
+**Recommendation: Reading B (declare + complete).** The continuous
+PM is a Claude Code subprocess and consumes pm_focus via MCP — so
+declare + complete MUST be MCP-exposed by the time commit 7 lands.
+Shipping them at commit 2 lets commit 7's loop integrate against the
+real MCP surface without a co-shipping coupling.
+
+`get_current_focus` MCP exposure is deferred per BACKLOG observability
+read-side-ships-post-M5-flag-flips sequencing. The Python-side
+`read_current_focus` helper is needed at this commit for the writer's
+dangling-detection logic (Q9) and for commit 7's loop reuse, but
+it's not wrapped as an MCP tool until a real consumer surfaces.
+Engineer's mode-aware planning may eventually need it (mirror Q4
+disposition pattern); promote at that time.
+
+### Q7 — Atomicity envelope for declare / complete
+
+Mirrors set_pm_mode's envelope. Question is whether to special-case
+declare's dangling-detection.
+
+- **Reading A — single-transaction wrap.** declare:
+  `transaction { read_dangling_focus → optional auto-complete-as-superseded
+  → INSERT new focus → write_audit }`. complete:
+  `transaction { read_focus_by_id → UPDATE focus completed → write_audit
+  (× 1 or 2 depending on contract_validated) }`. Mirrors set_pm_mode.
+- **Reading B — separate transactions for dangling-detection vs new
+  declare.** Reduces transaction scope; admits TOCTOU between read and
+  INSERT.
+
+**Recommendation: Reading A (single transaction).** TOCTOU
+concerns are real (concurrent declare calls during a Mike-interrupt
+race) and the transaction cost is negligible for low-volume writes.
+Per `set_pm_mode`'s precedent rationale at lines 188-198 of
+`tools/pm_mode.py`. Not contested.
+
+### Q8 — Dangling-incomplete-focus handling on new declare
+
+When PM calls `declare_current_focus` while a prior focus has
+NULL `completed_at` (no explicit complete call landed), what
+happens?
+
+- **Reading A — auto-complete prior with `contract_validated=NULL` +
+  `contract_finding_text='superseded'`.** Treat the prior as implicitly
+  superseded; the new declaration succeeds. Dangling rows never
+  accumulate.
+- **Reading B — reject the new declaration with
+  `OrchestratorPermissionError`-shaped error.** PM must explicitly
+  complete-or-abandon the prior first. Forces discipline.
+- **Reading C — allow concurrent multiple-active-foci.** No constraint;
+  any number of incomplete focus rows can coexist.
+
+**Recommendation: Reading A (auto-complete-as-superseded).** The
+continuous loop's reality includes Mike-interrupts that can arrive
+mid-focus and cause PM to pivot without a clean completion. Reading B
+is too rigid for that workload. Reading C loses the
+"current_focus is one thing at a time" semantic that the read-side
+queries depend on (`read_current_focus` returning "the active focus"
+implies at-most-one). Reading A preserves the at-most-one invariant
+while admitting the operational reality. The auto-completion writes
+a separate audit row `pm.current_focus.superseded` (fourth audit
+action at this commit — surface for Q4 amendment if Reading A
+sticks).
+
+### Q9 — `complete_current_focus` shape: id-required or current-implicit?
+
+Does `complete_current_focus` require the caller to pass the
+`focus_id`, or does it implicitly target the current (most-recent
+incomplete) focus?
+
+- **Reading A — required `focus_id` parameter.** Caller passes the
+  id of the focus being completed. Explicit; admits backfill /
+  out-of-order completions; matches REST-shaped expectations.
+- **Reading B — implicit current focus.** Handler reads
+  `read_current_focus()` and completes that one. Caller omits id.
+  Fewer error modes; cannot accidentally complete the wrong focus;
+  matches `set_pm_mode`'s pattern (no id required).
+
+**Recommendation: Reading B (implicit current).** PM in the loop
+has exactly one active focus at any time (per Q8 Reading A
+invariant). Requiring id is friction without value — PM can't
+complete a prior focus that's already been auto-superseded, and
+there's no concurrent-focus case where id-disambiguation matters.
+Mirrors `set_pm_mode`'s id-free shape. The audit row records
+`focus_id` in details for downstream join.
+
+If Mike wants Reading A: add ~10 lines to pm_focus.py for the
+explicit lookup + lookup-error handling.
+
+---
+
+## F3.3 — watch-for-pattern checks
+
+| Pattern | Status pre-commit | Commit 2 instance | Threshold? |
+|---|---|---|---|
+| Closed-enum CHECK + sentinel test | 3 (pm_mode_log.mode, pm_mode_log.triggered_by, dispatches.status; pending: pm_spin_rationale_log.rationale_tag at commit 3) | +1 if Q1 Reading A: `pm_current_focus.output_type` (5-value Literal). | Pattern is durable; threshold-of-extraction not yet triggered (no shared utility worth pulling out). |
+| `read_current_X` helper with rowid-DESC ordering | 1 (`read_current_pm_mode`) | +1: `read_current_focus`. | Threshold-of-three: at the THIRD instance, surface for shared utility extraction. Watch at commit 3 (`pm_spin_rationale_log` may add a third). |
+| Nullable optional FK to `tasks(id)` | 1 (`api_usage.task_id`) | +1 if Q3 Reading A: `pm_current_focus.bound_workflow_id`. | Pattern is small, no extraction warranted. |
+| Audit action namespacing `pm.<surface>.<verb>` | 1 (`pm_mode.transition`) | +3 (or +4 if Q8-A adds `pm.current_focus.superseded`): `pm.current_focus.declared` / `.completed` / `.contract_violation`. | First multi-action surface in the `pm.*` namespace; sets precedent for commit 3 (`pm.spin_rationale.recorded`) and commit 4 (`pm.audit_sample.*`). |
+| Single-transaction declare-with-dangling-detection | 0 | +1: declare auto-supersede pattern. | Net-new pattern. May surface in commit 3's spin-rationale writer if rate-limit collapsing applies; watch then. |
+| Production-code-surface-for-testability | 2 pre-chain (token_store=None defensive surface; `_run_lifespan_body` refactor) | 0 expected; pm_focus's helpers don't introduce new test seams beyond established patterns. | Per F2.4 watch — third instance hypothesized at commit 8 (loop driver injectable clock). Commit 2 doesn't trip it. |
+| `bridge/` → `tools/` cross-layer imports | 2 pre-chain | 0 at commit 2 (pm_focus.py is `tools/`-only). | Per F2.4 watch — commits 7-8 may add instances 3-4. |
+| Migration count | 1 added at commit 1 zero (commit 1 was wrapper-only) | +1: 0010_pm_current_focus.sql. | Per F2.4 watch (revised today): 3 total at this sub-milestone (0010/0011/0012). Boilerplate-extraction threshold not yet tripped. |
+
+---
+
+## F3.4 — test-target estimate
+
+F2.1 estimate: +14. Working breakdown against that target:
+
+| Layer | Count | Notes |
+|---|---|---|
+| Migration smoke tests | 1 | `test_migration_0010_creates_pm_current_focus` — table + indexes + FK + CHECK present after apply. Unit, mirrors 0009 tests. |
+| CHECK-constraint sentinel | 1 | `test_pm_current_focus_output_type_check_constraint` — INSERT each closed-enum value succeeds; INSERT bogus value raises. Lands only if Q1 Reading A. |
+| `read_current_focus` helper | 2 | empty-table → None; populated → most-recent-by-rowid. |
+| `declare_current_focus` writer | 4 | basic declare; declare-with-bound-workflow; declare-while-prior-active (Q8-A auto-supersede); audit row emitted with full payload (Q4-A). |
+| `complete_current_focus` writer | 3 | basic complete (contract_validated=true); complete-with-finding (contract_validated=false → second audit row for `pm.current_focus.contract_violation` per Q4-A); complete-when-no-active raises. |
+| MCP wrappers | 2 | PM-allowed (declare + complete each smoke); non-PM-rejected (one path tests the gate). |
+| Audit-action namespace | 1 | All four (or three) `pm.current_focus.*` actions emit with correct namespace + payload — table-driven test. |
+| Total | **14** | Aligns with F2.1 estimate. |
+
+**Range under disposition variance:** Q1 Reading B drops the
+CHECK-constraint sentinel (-1 → 13). Q8 Reading B drops the
+auto-supersede test path (-1 → 13). Q9 Reading A adds the explicit
+focus_id lookup test path (+2 → 16). Per F2.1's surface-as-finding
+rule: divergence > 20% (i.e., < 11 or > 17) surfaces; this range
+sits within tolerance.
+
+**Verification gates per project pattern:** ruff, mypy --strict,
+pytest. Integrated-state-green; per-commit isolation not strictly
+required at this commit (no destructive history rewrites in scope).
+
+---
+
+## F3.5 — what lands at the diff checkpoint
+
+After Mike + reviewing-Claude disposition Q1-Q9 above:
+
+- 0010 migration drafted with chosen constraints
+- `tools/pm_focus.py` drafted with chosen handler shapes
+- `server.py` `_register_pm_focus_tools` drafted
+- Spec amendments drafted for 06 / 05 / 11
+- Test fixtures + assertions drafted
+
+Diff checkpoint surfaces commit-by-commit for review; commit 2
+lands; commit 3 prep checkpoint opens (`pm_spin_rationale_log` —
+will share `read_current_X` helper rowid-DESC pattern; rationale_tag
+closed enum per F2.3 Q3 Reading A).
+
+**End of Followup-3.**
+
+---
+
+# Followup-6 — F3.2 disposition feedback + Q3/Q6 re-prep + Q4 update
+
+**Date:** 2026-05-04. **Trigger:** Mike's F3.2 disposition pass surfaced
+three items needing re-prep before commit 2 drafts open: Q3 collapsed
+three readings into one; Q6 contradiction between "Python helper for
+daemon-side reuse" and the subprocess-MCP-only consumer reality at
+commits 7-8; Q4 framing of the fourth audit action as conditional on
+Q8 should be made explicit now that Q8 Reading A is dispositioned.
+Six accepts noted at section close. F3.4 test-target update triggered
+by the re-prep dispositions surfaced as F2.1-shape finding.
+
+Section numbered F3.6 (skipping F3.5's "diff checkpoint" sub-section
+slot reserved for the next round when Q3/Q6 disposition lands).
+
+---
+
+## F3.6.A — accepts noted (Q1 / Q2 / Q5 / Q7 / Q8 / Q9)
+
+| Q | Disposition | Notes |
+|---|---|---|
+| Q1 | Reading A (closed-enum `output_type`) | 5-value Literal + CHECK + sentinel test. Closed-enum sentinel pattern continuing per F3.3. |
+| Q2 | Reading B (drop `pm_mode_log_id` FK) | Independent tables with timestamp coordination > FK coupling for co-incident-not-owned relationships. |
+| Q5 | Reading B (declared_at index only) | bound_workflow_id index deferred-with-rationale. **BACKLOG entry surfaced 2026-05-04** at `BACKLOG.md` § Deferred (entry titled "Add idx_pm_focus_bound_workflow..."). Trigger named: real workflow-cohort query against `pm_current_focus` surfacing in operator-side ad-hoc SQL or typed output field on a future tool. |
+| Q7 | Reading A (single transaction) | Mirrors set_pm_mode precedent. Not contested. |
+| Q8 | Reading A (auto-complete-as-superseded) | Fourth audit action `pm.current_focus.superseded` ships with this disposition. Payload spec'd in updated Q4 below. |
+| Q9 | Reading B (implicit current focus) | Mirrors set_pm_mode id-free shape. |
+
+These six accepts compose the fixed-scope baseline. Re-prep targets
+below produce dispositions that compose with the accepts to fix
+commit 2's full scope.
+
+---
+
+## F3.6.B — Q3 re-prep with three explicit readings
+
+**Original framing collapsed Reading A's NO ACTION vs SET NULL choice
+into prose; the no-FK alternative was treated implicitly via the
+`api_usage.workflow_id` precedent reference but not surfaced as a
+distinct Reading.** Re-prep below.
+
+### Q3 (re-prepped) — `bound_workflow_id` storage shape
+
+Per F2.3 Q8 disposition (Reading C): `pm_current_focus.bound_workflow_id`
+is the chain root task_id when the focus is workflow-bound; NULL
+when the focus is unrelated to dispatched work. Three implementation
+shapes:
+
+- **Reading A — `bound_workflow_id TEXT REFERENCES tasks(id)` with
+  ON DELETE NO ACTION (default), nullable.** Foreign-key constraint
+  enforces referential integrity at write time (PM-references-
+  nonexistent-task bug class caught immediately) and at task-deletion
+  time (deleting a task with referencing focus rows is BLOCKED;
+  operator must explicitly resolve before deletion).
+- **Reading B — `bound_workflow_id TEXT REFERENCES tasks(id)` with
+  ON DELETE SET NULL, nullable.** Foreign-key constraint at write
+  time same as A; on task deletion, referencing focus rows have
+  their `bound_workflow_id` silently NULLed. Narration record
+  loses the historical "this focus was bound to workflow X" claim
+  without trace.
+- **Reading C — `bound_workflow_id TEXT`, no FK, nullable.** Free-text
+  storage. No write-time integrity check; PM may store typos,
+  stale ids, or operator-meaningful labels that aren't task ids.
+  Same shape as `api_usage.workflow_id` in 0009.
+
+**Recommendation: Reading A (FK with NO ACTION).**
+
+**Reading A vs Reading C (defending FK at all):**
+`pm_current_focus.bound_workflow_id` is materially different from
+`api_usage.workflow_id` in shape. `api_usage.workflow_id` is set
+along two paths: (a) caller-supplied free-form annotation (operator
+labels, not necessarily task ids); (b) server-derived from the
+recursive chain-root walk in commit 1's wrapper (always a real
+task_id when present). Path (a) is why no FK was added at 0009 —
+caller-supplied labels may not point at task rows. Path (b) does
+point at real task_ids but lands as a derived stamp, not an
+operator-deliberate claim.
+
+`pm_current_focus.bound_workflow_id` is single-path: PM declares
+the focus's workflow binding at `declare_current_focus` time,
+asserting "this focus is the operator's intent for workflow X."
+PM has the workflow root task in scope (it's the task PM submitted
+or was directed to). The deliberate-claim shape benefits from
+referential integrity at write — a typo or stale id should fail
+loudly at declare-time, not silently land as a dangling reference
+in the narration record.
+
+The constraint cost is borne once per declare call (low frequency:
+one-per-work-unit-boundary, ~once per 30s loop iteration at most
+per commit 7's pacing), with strong typo-catching value. Reading C
+trades that integrity for symmetry with `api_usage.workflow_id`,
+but the symmetry is false — the two columns have different
+populating paths and different operator semantics.
+
+**Reading A vs Reading B (defending NO ACTION over SET NULL):**
+The narration record is the durable timeline. Pre-deletion, a
+focus row asserts "I was bound to workflow X, and here is what I
+produced." Post-SET-NULL, that row asserts "I was bound to NULL"
+— the historical claim is silently destroyed. The operator who
+later asks "what foci were bound to workflow X?" sees a query
+result that's missing rows because the workflow row was deleted
+afterward, not because no foci were bound to X.
+
+NO ACTION inverts the cost: task deletion fails when referencing
+focus rows exist, forcing the operator to acknowledge the
+narration record before destroying its referent. The operational
+cost is real (an operator-driven `DELETE FROM tasks WHERE id=...`
+fails when narration references it) but the cost is catching a
+data-integrity decision the operator should be making consciously,
+not absorbing silently.
+
+Phase 1 has no `tools/tasks.py` (M4d) — task deletion is not a
+production code path until M4d ships, and even then it's likely
+tomb-stoning (status='archived') rather than DELETE. The
+NO-ACTION-blocks branch is rarely-triggered in real operation;
+when it does trigger, it surfaces a real operator decision rather
+than swallowing it.
+
+**Reading A is recommended.** Both alternatives addressed
+explicitly: Reading C loses write-time typo-catching at the cost
+of symmetry with a column that has different population semantics;
+Reading B loses narration-record fidelity at the cost of
+deletion-flow ergonomics that aren't load-bearing in Phase 1.
+
+If Reading A creates operational friction post-M4d (operators
+deleting tasks legitimately and tripping over focus references):
+revisit at M4d's prep checkpoint, with the option to re-migrate to
+SET NULL or add a `pm_current_focus.bound_workflow_archived_at`
+column to soft-record the deletion event.
+
+### Q3 disposition impact on commit 2 scope
+
+- 0010 migration: `bound_workflow_id TEXT REFERENCES tasks(id)`
+  — no explicit `ON DELETE` clause needed (NO ACTION is SQLite's
+  default).
+- Migration smoke test gains FK-constraint check: INSERT
+  pm_current_focus row with bogus `bound_workflow_id` → IntegrityError.
+- Test count delta: +1 (FK-constraint sentinel test).
+
+---
+
+## F3.6.C — Q6 re-prep with subprocess-MCP constraint named
+
+**Original Reading B contained a contradiction:** "Python-side
+read_current_focus helper is needed at this commit for the writer's
+dangling-detection logic (Q9) and for commit 7's loop reuse." The
+loop driver at commits 7-8 runs as a Claude Code subprocess and
+consumes the daemon via MCP — it cannot import `tools.pm_focus`
+directly. Re-prep below resolves the contradiction.
+
+### Q6 (re-prepped) — `get_current_focus` MCP tool: ship at commit 2 or defer to commit 7?
+
+The Python-side `read_current_focus` helper is needed at commit 2
+for the declare writer's dangling-detection logic (Q8 Reading A
+auto-supersede path) regardless of disposition — the writer is
+daemon-internal Python, not subprocess. The question is whether
+the MCP wrapper (`get_current_focus`) ships at commit 2 or defers
+to commit 7.
+
+**Resolved scope of "read-side post-flag-flips" sequencing:** The
+BACKLOG observability roadmap's "read-side ships post-M5-flag-flips"
+applies to operator-facing tier-2 surfaces (cohort queries,
+dashboards, ad-hoc SQL replacements like `get_audit_log`). The
+continuous-loop driver reading its own focus via MCP at commits 7-8
+is a daemon-internal-consumer surface — same shape as
+`get_window_state` (PM/Engineer reading their own pace state via
+MCP, not an operator-facing dashboard). The post-flag-flips
+sequencing does not gate `get_current_focus`.
+
+Two coherent paths:
+
+- **Reading A — ship `get_current_focus` MCP tool at commit 2.**
+  Three MCP tools at commit 2: `declare_current_focus` (PM-only),
+  `complete_current_focus` (PM-only), `get_current_focus` (PM-only
+  — see permission discussion below). Read surface co-ships with
+  write surface; future-Claude reading commit history sees
+  focus-management ship as one unit. Test count delta: +3 (PM
+  allowed; empty-state returns None / sentinel; with-active-focus
+  returns full row).
+- **Reading B — defer `get_current_focus` MCP tool to commit 7
+  alongside loop driver.** Two MCP tools at commit 2; Python
+  `read_current_focus` helper exists for declare's dangling-detection.
+  Third MCP tool ships with its real consumer at commit 7.
+
+**Recommendation: Reading A (ship at commit 2).**
+
+**Reading A vs Reading B (defending co-ship over defer):**
+
+1. **Re-litigation cost under Reading B is real.** Deferring
+   `get_current_focus` to commit 7 means commit 7's prep checkpoint
+   has to settle four design points that should be settled with
+   the table schema:
+   - **Output schema:** does `GetCurrentFocusOutput` return the
+     full pm_current_focus row, a subset (objective + output_type
+     + acceptance_criteria + bound_workflow_id), or wrap it in a
+     `current_focus: PmCurrentFocus | None` discriminated shape?
+   - **Empty-state contract:** when no active focus exists, does
+     the handler return `None` (Optional in Python; null in MCP
+     output), raise an error, or return a sentinel object with
+     `is_active=false`?
+   - **Permission scope:** PM-only (matches declare/complete) or
+     PM/Engineer (matches get_window_state precedent for
+     mode-aware planning)?
+   - **Caller-context:** does the subprocess loop call the same
+     read path as a hypothetical operator-facing future tool, or
+     is there a separate read API?
+   These four design points are co-design with the table schema
+   (e.g., output schema reflects the column choices in 0010;
+   empty-state contract interacts with Q8's at-most-one invariant).
+   Settling them at commit 7 means commit 7's prep re-traces the
+   commit 2 table-design conversation. Prep-debt accumulating is
+   the F3.5 risk pattern Mike named.
+
+2. **Audit-trail cohesion.** Co-shipping write + read surface in
+   one commit gives future-Claude reading commit history a single
+   blame-point for "focus management surface lands." Reading B
+   spreads it across commits 2 and 7 with a Python-helper-only
+   intermediate state at commits 3-6 that has no real consumer.
+
+3. **Test surface completeness.** Commit 2's tests under Reading A
+   exercise the full write→read→complete round-trip via the MCP
+   wrappers. Reading B's commit 2 tests exercise write paths only;
+   the read path's test coverage rides at commit 7 where it's
+   harder to isolate from the loop driver's own tests.
+
+4. **The "no consumer yet" argument is weak here.** It applies
+   when the consumer is speculative or unbound. Commit 7's loop
+   driver is a committed deliverable in this sub-milestone's chain;
+   designing for a planned consumer is different from designing
+   for a hypothetical future surface. The BACKLOG roadmap's
+   "ship when consumer materializes" guidance targets speculative
+   surfaces, not ones with planned consumers two commits away.
+
+**Reading A is recommended.** Reading B's surface savings (~3
+tests, ~30 LOC of MCP wrapper) don't offset the re-litigation
+cost on commit 7.
+
+**Permission scope under Reading A:** PM-only at commit 2.
+Engineer's mode-aware planning may eventually need read access
+(mirror Q4 disposition pattern of the M5-pm-mode-and-window-state
+flow), but Engineer's actual loop logic doesn't yet read PM's
+focus — that surfaces (if at all) at M5-flag-flips when Engineer's
+own continuous loop spec lands. Promote PM-only → PM/Engineer if
+that need surfaces; don't pre-grant.
+
+### Q6 disposition impact on commit 2 scope
+
+- New MCP tool: `_register_pm_focus_tools` registers three tools
+  (declare / complete / get) instead of two.
+- New Pydantic schema: `GetCurrentFocusOutput` with
+  `current_focus: PmCurrentFocus | None` shape (None on empty;
+  full row when active).
+- New tests: 3 (PM-allowed smoke; empty-state returns None;
+  with-active-focus returns full row).
+- Test count delta: +3 (vs original Reading B baseline).
+
+---
+
+## F3.6.D — Q4 prose update with fourth audit action explicit
+
+Per Mike's Q4 disposition: ship the four-action shape, not three +
+conditional. Fourth action `pm.current_focus.superseded` lands as
+durable Q4-A spec.
+
+### Q4 (updated) — Audit-log `action` namespace and shape
+
+Four namespaced actions land at this commit per the
+auto-complete-as-superseded disposition (Q8 Reading A). Reading A's
+recommendation stands; payload table updated:
+
+- **`pm.current_focus.declared`** — emitted on every successful
+  declare (after any auto-supersede write).
+  - target=focus_id (the new focus)
+  - details={objective, output_type, acceptance_criteria,
+    bound_workflow_id, declared_at}
+- **`pm.current_focus.completed`** — emitted on every successful
+  complete; emitted in the same transaction as
+  `pm.current_focus.contract_violation` when applicable.
+  - target=focus_id
+  - details={focus_id, contract_validated, finding_text (if any),
+    completed_at, declared_at_for_join}
+- **`pm.current_focus.contract_violation`** — emitted alongside
+  `pm.current_focus.completed` when `contract_validated=false`.
+  Same transaction.
+  - target=focus_id
+  - details={focus_id, contract_validated=false, finding_text,
+    actual_output_summary}
+- **`pm.current_focus.superseded`** — emitted in the declare-when-
+  prior-active path (Q8 Reading A); fires before
+  `pm.current_focus.declared` in the same transaction. The prior
+  focus row's `completed_at` is set to declare-time and
+  `contract_finding_text='superseded'` per Q8 Reading A.
+  - target=focus_id (the prior focus that was superseded)
+  - details={focus_id, superseded_at, superseded_by_focus_id,
+    prior_objective_summary}
+
+**Storage cost** of the fourth action: trivial. `audit_log` is a
+TEXT-column table with no row-count gate; one extra row per
+declare-while-prior-active path is negligible.
+
+**Reading B (minimal details + reconstruction via FK-join) is
+explicitly rejected.** Audit log is the durable timeline; full
+payloads make it self-contained. Joining through pm_current_focus
+post-deletion (if a focus row is ever pruned for retention) loses
+the audit detail; full payloads survive table evolution.
+
+### Q4 disposition impact on commit 2 scope
+
+- Fourth audit-action constant in `tools/pm_focus.py`:
+  `_PM_FOCUS_AUDIT_ACTIONS = {"declared", "completed",
+  "contract_violation", "superseded"}` (or named-constant style
+  per project convention).
+- New test: superseded action emitted with full payload on
+  declare-while-prior-active path. Test count delta: +1.
+- Spec amendment to `11-engineer-bridge.md` § Audit log entries
+  table includes all four actions.
+
+---
+
+## F3.6.E — F3.4 test-target update (F2.1-shape finding)
+
+The dispositions above push commit 2's test count above the
+F2.1 estimate of 14. F2.1's surface-as-finding rule (>20%
+divergence on any single commit) triggers a finding for commit 2
+disposition state. Net deltas vs original F3.4 baseline:
+
+| Source | Δ tests |
+|---|---|
+| Original F3.4 baseline | 14 |
+| Q3 Reading A (FK constraint sentinel) | +1 |
+| Q4-updated (superseded action emitted with full payload) | +1 |
+| Q6 Reading A (3 new `get_current_focus` MCP tests) | +3 |
+| **Revised total** | **19** |
+
+**19 / 14 = 35.7% over the F2.1 estimate.** Surfaces as F2.1
+finding for commit 2: actual test surface differs from
+analogous-precedent extrapolation by more than 20%. Finding
+disposition (per F2.1's "(a) actual differs from precedent,
+acceptable if documented" branch): the divergence is driven by
+Q3 + Q6 dispositions that landed AFTER F2.1's per-commit
+estimate; the dispositions are scope-correct and the test
+count reflects the real surface needed to verify them. Document
+in F3.6 (this section) and roll forward; do not re-litigate
+F2.1's per-commit estimate retroactively (per F2.1 directive
+"future prep checkpoints should not treat per-commit numbers
+as budgets the chain has to hit").
+
+**Chain-wide impact:** ~+5 tests vs F2.1's commit-2 estimate.
+Chain-wide F2.1 total of ~101 becomes ~106. Within F2.1's
+chain-wide order-of-magnitude tolerance; no chain-wide finding
+needed.
+
+---
+
+## F3.6.F — what lands at the diff checkpoint
+
+After Mike disposition Q3 + Q6 above:
+
+- 0010 migration drafted with FK NO ACTION constraint per Q3
+- `tools/pm_focus.py` drafted with three handlers (declare /
+  complete / get) per Q6
+- `server.py` `_register_pm_focus_tools` registers three MCP
+  tools per Q6
+- Audit-action namespace expanded to four actions per Q4 update
+- Spec amendments drafted for 06 / 05 / 11 reflecting the above
+- Test fixtures + assertions drafted (~19 tests)
+- Q5 BACKLOG entry already landed (2026-05-04)
+
+Diff checkpoint surfaces commit-by-commit; commit 2 lands; commit
+3 prep opens (`pm_spin_rationale_log` — will share `read_current_X`
+helper rowid-DESC pattern as third instance, surfacing the
+extraction question per F3.3 watch).
+
+**End of Followup-6.**

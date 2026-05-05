@@ -263,8 +263,14 @@ Per-dispatch lifecycle writes the following `audit_log` rows. All rows include `
 | `dispatch.merged` | Dispatch branch fast-forwarded into canonical main and pushed | `branch`, `new_upstream_head` |
 | `dispatch.merge_conflict` | Worktree merge into main fails | `branch`, `conflicting_files` |
 | `dispatch.canonical_diverged` | Canonical clone has diverged from upstream (should never happen) | `canonical_head`, `upstream_head` |
+| `pm.current_focus.declared` | PM's `declare_current_focus` MCP call inserts a new pm_current_focus row | `objective`, `output_type`, `acceptance_criteria`, `bound_workflow_id` (nullable), `declared_at` |
+| `pm.current_focus.completed` | PM's `complete_current_focus` MCP call closes the active focus | `focus_id`, `contract_validated`, `finding_text` (nullable), `completed_at`, `declared_at_for_join` |
+| `pm.current_focus.contract_violation` | Same transaction as `pm.current_focus.completed` when `contract_validated=False` | `focus_id`, `contract_validated=false`, `finding_text`, `actual_output_summary` |
+| `pm.current_focus.superseded` | `declare_current_focus` auto-supersedes a prior incomplete focus in the same transaction (Q8 Reading A invariant) | `focus_id`, `superseded_at`, `superseded_by_focus_id`, `prior_objective_summary` |
 
 The chain from `task.submit` → `task.claim` → `dispatch.issued` → ... → `dispatch.subprocess_terminated` → `task.status_change` is the load-bearing audit trail Mike inspects via `get_audit_log` to reconstruct the cycle.
+
+The `pm.current_focus.*` namespace ships at M5-continuous-pm-driver commit 2 alongside `pm_current_focus` table + the three MCP tools (`declare_current_focus` / `complete_current_focus` / `get_current_focus`); see `06-mcp-tools-phase-one.md` § PM continuous-mode tools and `05-data-model.md` § `pm_current_focus`. Full per-action payloads per F3.6 Q4 Reading A — audit log is the durable timeline; full payloads make it self-contained without requiring future-Claude / operators to JOIN through `pm_current_focus` to reconstruct events.
 
 ### Storage shape
 

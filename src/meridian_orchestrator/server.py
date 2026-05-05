@@ -109,6 +109,17 @@ from meridian_orchestrator.tools.dispatch import (
     get_dispatch_status,
     get_recent_dispatches,
 )
+from meridian_orchestrator.tools.pm_focus import (
+    CompleteCurrentFocusInput,
+    CompleteCurrentFocusOutput,
+    DeclareCurrentFocusInput,
+    DeclareCurrentFocusOutput,
+    GetCurrentFocusOutput,
+    OutputType,
+    complete_current_focus,
+    declare_current_focus,
+    get_current_focus,
+)
 from meridian_orchestrator.tools.pm_mode import (
     PmMode,
     SetPmModeInput,
@@ -312,6 +323,7 @@ def build_server(
             mcp, storage, token_store, get_oauth_usage_snapshot
         )
         _register_pm_mode_tools(mcp, storage, token_store)
+        _register_pm_focus_tools(mcp, storage, token_store)
 
     if storage is not None and get_oauth_usage_snapshot is not None:
         _register_window_state_tools(
@@ -693,6 +705,118 @@ def _register_pm_mode_tools(
             storage=storage,
             request=SetPmModeInput(mode=mode, reason=reason),
             caller_agent_id=agent_id,
+            caller_role=caller_role,
+        )
+
+
+def _register_pm_focus_tools(
+    mcp: FastMCP, storage: Storage, token_store: TokenStore
+) -> None:
+    """Register declare_current_focus, complete_current_focus,
+    get_current_focus (M5-continuous-pm-driver commit 2).
+
+    Three MCP tools ship co-shipping per F3.6.C Q6 Reading A
+    disposition: write surface (declare + complete) and daemon-internal
+    read surface (get) co-design with the table schema. Deferring the
+    read surface to commit 7 would force commit 7's prep to re-litigate
+    output schema, empty-state contract, permission scope, and
+    caller-context decisions that should settle here with the table
+    design conversation. Per BACKLOG § Observability roadmap scope
+    clarification 2026-05-04, the "read-side post-flag-flips" sequencing
+    applies to operator-facing tier-2 surfaces, not daemon-internal
+    subprocess reads — the continuous-loop driver subprocess at
+    commits 7-8 IS the planned daemon-internal consumer of get.
+
+    Permission: all three PM-only at the handler layer per
+    ``06-mcp-tools-phase-one.md`` § ``declare_current_focus`` /
+    ``complete_current_focus`` / ``get_current_focus``. Engineer
+    promotion deferred per Q6 disposition.
+    """
+
+    @mcp.tool(
+        name="declare_current_focus",
+        description=(
+            "PM only. Declare the active work-unit boundary: an "
+            "objective, an output_type (one of document, code_change, "
+            "decision, review, investigation), and acceptance criteria "
+            "for completion-time validation. Optional bound_workflow_id "
+            "ties the focus to a top-level submitted task chain. "
+            "Auto-supersedes any prior incomplete focus in the same "
+            "transaction (the prior row's contract_finding_text becomes "
+            "'superseded'); the at-most-one-active-focus invariant is "
+            "preserved across Mike-interrupt-driven pivots. Emits "
+            "pm.current_focus.declared (and pm.current_focus.superseded "
+            "when a prior focus was active)."
+        ),
+    )
+    async def _declare_current_focus(
+        objective: str,
+        output_type: OutputType,
+        acceptance_criteria: str,
+        bound_workflow_id: str | None = None,
+    ) -> DeclareCurrentFocusOutput:
+        agent_id = _resolve_agent_id()
+        await _observe_caller(storage, token_store, "declare_current_focus")
+        caller_role = _resolve_caller_role_via_token()
+        return await declare_current_focus(
+            storage=storage,
+            request=DeclareCurrentFocusInput(
+                objective=objective,
+                output_type=output_type,
+                acceptance_criteria=acceptance_criteria,
+                bound_workflow_id=bound_workflow_id,
+            ),
+            caller_agent_id=agent_id,
+            caller_role=caller_role,
+        )
+
+    @mcp.tool(
+        name="complete_current_focus",
+        description=(
+            "PM only. Close the active focus with the loop's validation "
+            "result. contract_validated=False emits an additional "
+            "pm.current_focus.contract_violation audit row alongside "
+            "pm.current_focus.completed in the same transaction. "
+            "Implicit-current shape: no focus_id parameter; the "
+            "at-most-one invariant means the active focus is "
+            "unambiguous. Raises an error when no active focus exists."
+        ),
+    )
+    async def _complete_current_focus(
+        contract_validated: bool,
+        finding_text: str | None = None,
+        actual_output_summary: str | None = None,
+    ) -> CompleteCurrentFocusOutput:
+        agent_id = _resolve_agent_id()
+        await _observe_caller(storage, token_store, "complete_current_focus")
+        caller_role = _resolve_caller_role_via_token()
+        return await complete_current_focus(
+            storage=storage,
+            request=CompleteCurrentFocusInput(
+                contract_validated=contract_validated,
+                finding_text=finding_text,
+                actual_output_summary=actual_output_summary,
+            ),
+            caller_agent_id=agent_id,
+            caller_role=caller_role,
+        )
+
+    @mcp.tool(
+        name="get_current_focus",
+        description=(
+            "PM only. Returns the active pm_current_focus row "
+            "(current_focus field) or None when no active focus "
+            "exists. Daemon-internal read consumed by the "
+            "continuous-loop driver subprocess; not audited "
+            "(read-only, called frequently)."
+        ),
+    )
+    async def _get_current_focus() -> GetCurrentFocusOutput:
+        _resolve_agent_id()
+        await _observe_caller(storage, token_store, "get_current_focus")
+        caller_role = _resolve_caller_role_via_token()
+        return await get_current_focus(
+            storage=storage,
             caller_role=caller_role,
         )
 

@@ -20,11 +20,12 @@ from meridian_orchestrator.storage.sqlite import SqliteStorage
 #   0007_dispatches_task_id_nullable.sql      (M4c-supervisor-base)
 #   0008_dispatches_status_check.sql          (M4c-compaction)
 #   0009_observability_cost_tier1.sql         (M5-subscription-routing)
+#   0010_pm_current_focus.sql                 (M5-continuous-pm-driver commit 2)
 # Reservation gap remaining: 0004 reserved for inbound_messages +
 # outbound_messages (Telegram notifications); milestone-attribution
 # pending resolution between data-model.md (M6) and the M5 sub-milestone
 # breakdown memory (M5-telegram-foundation).
-EXPECTED_VERSIONS = [1, 2, 3, 5, 6, 7, 8, 9]
+EXPECTED_VERSIONS = [1, 2, 3, 5, 6, 7, 8, 9, 10]
 
 
 @pytest_asyncio.fixture
@@ -52,6 +53,7 @@ async def test_run_migrations_creates_tables(storage: SqliteStorage) -> None:
         "audit_log",
         "dispatches",
         "pm_mode_log",
+        "pm_current_focus",
         "_schema_version",
     }
     missing = expected - table_names
@@ -100,6 +102,9 @@ async def test_indexes_created(storage: SqliteStorage) -> None:
         # 0009 — observability tier-1 cohort indexes on api_usage
         "idx_api_usage_workflow",
         "idx_api_usage_role_type",
+        # 0010 — pm_current_focus single index on declared_at (Q5 Reading B
+        # disposition; bound_workflow_id index deferred to BACKLOG)
+        "idx_pm_focus_declared_at",
     }
     missing = expected - index_names
     assert not missing, f"Missing indexes: {missing}"
@@ -334,3 +339,173 @@ async def test_api_usage_has_observability_tier1_columns(
             "these columns nullable so pre-migration rows remain valid "
             "and so optional-input fields default to NULL."
         )
+
+
+async def test_pm_current_focus_columns_match_spec(
+    storage: SqliteStorage,
+) -> None:
+    """0010_pm_current_focus.sql columns match 05-data-model.md §
+    pm_current_focus: id (PK), objective (NOT NULL), output_type (NOT
+    NULL with enum CHECK), acceptance_criteria (NOT NULL),
+    bound_workflow_id (nullable, FK to tasks(id)), declared_at (NOT
+    NULL, default now), completed_at (nullable),
+    contract_validated_bool (nullable INTEGER), contract_finding_text
+    (nullable TEXT).
+    """
+    await run_migrations(storage)
+    cols = await storage.fetch_all(
+        "PRAGMA table_info(pm_current_focus)"
+    )
+    by_name = {c["name"]: c for c in cols}
+
+    expected_names = {
+        "id",
+        "objective",
+        "output_type",
+        "acceptance_criteria",
+        "bound_workflow_id",
+        "declared_at",
+        "completed_at",
+        "contract_validated_bool",
+        "contract_finding_text",
+    }
+    assert set(by_name.keys()) == expected_names, (
+        f"pm_current_focus columns drift: got {set(by_name.keys())!r}, "
+        f"expected {expected_names!r}. Schema must match "
+        "05-data-model.md § pm_current_focus."
+    )
+
+    assert by_name["id"]["pk"] == 1
+    assert by_name["objective"]["notnull"] == 1
+    assert by_name["output_type"]["notnull"] == 1
+    assert by_name["acceptance_criteria"]["notnull"] == 1
+    assert by_name["declared_at"]["notnull"] == 1
+    assert by_name["bound_workflow_id"]["notnull"] == 0
+    assert by_name["completed_at"]["notnull"] == 0
+    assert by_name["contract_validated_bool"]["notnull"] == 0
+    assert by_name["contract_finding_text"]["notnull"] == 0
+
+
+async def test_pm_current_focus_output_type_check_constraint(
+    storage: SqliteStorage,
+) -> None:
+    """The output_type column's CHECK enforces the spec'd 5-value
+    enum (Q1 Reading A, F3.6.A): document, code_change, decision,
+    review, investigation. Defense-in-depth alongside the
+    tools/pm_focus.py:OutputType Literal — Python types catch typos at
+    edit time, the CHECK catches the same class of bug from manual
+    SQL or future external integrations.
+
+    Sentinel test: every spec'd value passes the CHECK; bogus values
+    reject. Failure here means the migration's CHECK list drifted from
+    the OutputType Literal.
+    """
+    await run_migrations(storage)
+    # Each spec'd value passes.
+    for i, ot in enumerate(
+        ["document", "code_change", "decision", "review", "investigation"]
+    ):
+        await storage.execute(
+            "INSERT INTO pm_current_focus "
+            "(id, objective, output_type, acceptance_criteria) "
+            "VALUES (?, ?, ?, ?)",
+            (f"focus-ot-{i}", "obj", ot, "criteria"),
+        )
+
+    rows = await storage.fetch_all(
+        "SELECT output_type FROM pm_current_focus "
+        "WHERE id LIKE 'focus-ot-%' ORDER BY id"
+    )
+    assert {r["output_type"] for r in rows} == {
+        "document",
+        "code_change",
+        "decision",
+        "review",
+        "investigation",
+    }
+
+    # Bogus value rejects.
+    with pytest.raises(Exception, match=r"(?i)check"):
+        await storage.execute(
+            "INSERT INTO pm_current_focus "
+            "(id, objective, output_type, acceptance_criteria) "
+            "VALUES (?, ?, ?, ?)",
+            ("focus-bogus", "obj", "not-a-real-output-type", "criteria"),
+        )
+
+
+async def test_pm_current_focus_bound_workflow_fk_constraint(
+    storage: SqliteStorage,
+) -> None:
+    """The bound_workflow_id FK to tasks(id) blocks INSERTs with
+    non-existent task ids and accepts NULL plus valid task ids.
+    Q3 Reading A disposition (F3.6.B): NO ACTION on delete; FK at
+    write catches the PM-references-nonexistent-task bug class.
+
+    SQLite FK enforcement is enabled at SqliteStorage.connect via
+    PRAGMA foreign_keys=ON — without that pragma this test would
+    silently pass on bogus ids.
+    """
+    await run_migrations(storage)
+    # Seed a real task to reference.
+    await storage.execute(
+        "INSERT INTO companies (id, name) VALUES ('co-fk', 'co')"
+    )
+    await storage.execute(
+        "INSERT INTO projects (id, company_id, name) VALUES "
+        "('proj-fk', 'co-fk', 'p')"
+    )
+    await storage.execute(
+        "INSERT INTO tasks (id, company_id, project_id, agent_role, "
+        "description) VALUES ('task-fk', 'co-fk', 'proj-fk', "
+        "'implementer', 'no-op')"
+    )
+
+    # NULL passes.
+    await storage.execute(
+        "INSERT INTO pm_current_focus "
+        "(id, objective, output_type, acceptance_criteria) "
+        "VALUES ('focus-null-fk', 'obj', 'document', 'criteria')"
+    )
+
+    # Valid task_id passes.
+    await storage.execute(
+        "INSERT INTO pm_current_focus "
+        "(id, objective, output_type, acceptance_criteria, "
+        "bound_workflow_id) "
+        "VALUES ('focus-valid-fk', 'obj', 'document', 'criteria', "
+        "'task-fk')"
+    )
+
+    # Bogus task_id rejects.
+    with pytest.raises(Exception, match=r"(?i)foreign key"):
+        await storage.execute(
+            "INSERT INTO pm_current_focus "
+            "(id, objective, output_type, acceptance_criteria, "
+            "bound_workflow_id) "
+            "VALUES ('focus-bogus-fk', 'obj', 'document', 'criteria', "
+            "'task-does-not-exist')"
+        )
+
+
+async def test_pm_current_focus_declared_at_default_populates(
+    storage: SqliteStorage,
+) -> None:
+    """declared_at has DEFAULT (datetime('now')) per the migration;
+    INSERTs without an explicit declared_at must populate it rather
+    than fail the NOT NULL constraint. Mirrors
+    test_pm_mode_timestamp_default_populates_on_insert."""
+    await run_migrations(storage)
+    await storage.execute(
+        "INSERT INTO pm_current_focus "
+        "(id, objective, output_type, acceptance_criteria) "
+        "VALUES ('focus-default', 'obj', 'document', 'criteria')"
+    )
+    row = await storage.fetch_one(
+        "SELECT declared_at FROM pm_current_focus "
+        "WHERE id = 'focus-default'"
+    )
+    assert row is not None
+    assert row["declared_at"] is not None
+    # SQLite datetime('now') format: 'YYYY-MM-DD HH:MM:SS'.
+    assert len(row["declared_at"]) >= 19
