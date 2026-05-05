@@ -126,6 +126,13 @@ from meridian_orchestrator.tools.pm_mode import (
     SetPmModeOutput,
     set_pm_mode,
 )
+from meridian_orchestrator.tools.pm_spin import (
+    Decision,
+    RationaleTag,
+    RecordSpinRationaleInput,
+    RecordSpinRationaleOutput,
+    record_spin_rationale,
+)
 from meridian_orchestrator.tools.supervisor import (
     SignalCompactionInput,
     SignalCompactionOutput,
@@ -324,6 +331,7 @@ def build_server(
         )
         _register_pm_mode_tools(mcp, storage, token_store)
         _register_pm_focus_tools(mcp, storage, token_store)
+        _register_pm_spin_tools(mcp, storage, token_store)
 
     if storage is not None and get_oauth_usage_snapshot is not None:
         _register_window_state_tools(
@@ -817,6 +825,60 @@ def _register_pm_focus_tools(
         caller_role = _resolve_caller_role_via_token()
         return await get_current_focus(
             storage=storage,
+            caller_role=caller_role,
+        )
+
+
+def _register_pm_spin_tools(
+    mcp: FastMCP, storage: Storage, token_store: TokenStore
+) -> None:
+    """Register record_spin_rationale (M5-continuous-pm-driver commit 3).
+
+    Single MCP tool ships at this commit per F4.2 Q5 Reading A
+    disposition: PM-continuous subprocess at commits 7-8 is the
+    committed consumer; co-shipping the writer with the table avoids
+    prep-debt at commit 7 (mirrors commit 2's Q6 Reading A
+    re-litigation-cost reasoning, asymmetric on read-side per Q4
+    Reading B).
+
+    No read-side MCP tool at commit 3 — pm_spin_rationale_log's
+    consumers are aggregations (tier-2 observability roll-ups), not
+    most-recent-active reads. Read surfaces ship post-M5-flag-flips
+    per BACKLOG observability sequencing.
+
+    Permission: PM-only at the handler layer per
+    ``06-mcp-tools-phase-one.md`` § ``record_spin_rationale``.
+    """
+
+    @mcp.tool(
+        name="record_spin_rationale",
+        description=(
+            "PM only. Record one loop-iteration keep-alive-vs-shutdown "
+            "decision with closed-enum rationale_tag (queued_work, "
+            "mike_presence, heartbeat_cheap, forgot_to_shutdown). "
+            "Per-tick emission; no dedup — every iteration produces a "
+            "row regardless of whether the (decision, rationale_tag) "
+            "tuple matches the prior iteration. Optional "
+            "rationale_free_text carries supplementary diagnostic "
+            "context. Not audited — pm_spin_rationale_log IS itself "
+            "the durable record."
+        ),
+    )
+    async def _record_spin_rationale(
+        decision: Decision,
+        rationale_tag: RationaleTag,
+        rationale_free_text: str | None = None,
+    ) -> RecordSpinRationaleOutput:
+        _resolve_agent_id()
+        await _observe_caller(storage, token_store, "record_spin_rationale")
+        caller_role = _resolve_caller_role_via_token()
+        return await record_spin_rationale(
+            storage=storage,
+            request=RecordSpinRationaleInput(
+                decision=decision,
+                rationale_tag=rationale_tag,
+                rationale_free_text=rationale_free_text,
+            ),
             caller_role=caller_role,
         )
 

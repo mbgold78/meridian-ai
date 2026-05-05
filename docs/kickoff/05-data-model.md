@@ -284,6 +284,38 @@ Three write paths (all PM-initiated; see `06-mcp-tools-phase-one.md`):
 
 **Single index on `declared_at`** (Q5 Reading B): the loop's at-most-once-per-tick `read_current_focus` lookup uses sequential scan well within bounds. `idx_pm_focus_bound_workflow` deferred per `BACKLOG.md` § Deferred (entry dated 2026-05-04); revisit when workflow-cohort queries against `pm_current_focus` materialize. The `api_usage.workflow_id` index from migration 0009 is the load-bearing surface for cost-cohort queries; pm_current_focus row counts stay 100x+ smaller.
 
+### `pm_spin_rationale_log`
+
+Fitness tier-1 table per `BACKLOG.md` § Observability roadmap (M5-continuous-pm-driver scope). Each row captures one loop-iteration keep-alive-vs-shutdown decision: whether PM kept itself alive (`kept_alive`) or surfaced a shutdown recommendation (`shutdown_recommended`), classified by a closed-enum `rationale_tag` (`queued_work` / `mike_presence` / `heartbeat_cheap` / `forgot_to_shutdown`). Optional `rationale_free_text` carries supplementary diagnostic context.
+
+```sql
+CREATE TABLE pm_spin_rationale_log (
+    id TEXT PRIMARY KEY,
+    iteration_timestamp TEXT NOT NULL DEFAULT (datetime('now')),
+    decision TEXT NOT NULL CHECK (decision IN (
+        'kept_alive', 'shutdown_recommended'
+    )),
+    rationale_tag TEXT NOT NULL CHECK (rationale_tag IN (
+        'queued_work', 'mike_presence', 'heartbeat_cheap', 'forgot_to_shutdown'
+    )),
+    rationale_free_text TEXT
+);
+
+CREATE INDEX idx_pm_spin_iteration_timestamp ON pm_spin_rationale_log(iteration_timestamp);
+```
+
+One write path: PM-initiated `record_spin_rationale` MCP tool (PM-only). Per-tick emission, no dedup (F4.2 Q1 Reading A) — every loop iteration produces a row regardless of whether the (decision, rationale_tag) tuple matches the prior iteration. Faithful timeline preserves operator-relevant oscillation signals; coalescing would hide them. The loop driver at commits 7-8 will be the production caller; commit 3 ships persistence + writer + MCP wrapper so the consumer can integrate against the real surface without co-shipping coupling.
+
+**Constraint shape** (per F4.2 dispositions, 2026-05-04):
+
+- `decision` CHECK enforces the 2-value enum (Q2 Reading A). Defense-in-depth alongside the `tools/pm_spin.py:Decision` Literal.
+- `rationale_tag` CHECK enforces the 4-value enum (F3.6 Q3 Reading A from Followup-2). Defense-in-depth alongside `RationaleTag` Literal.
+- `rationale_free_text` nullable: `rationale_tag` is the primary cohort signal; free_text is supplementary detail PM may attach for diagnostic context. Most rows leave it NULL.
+
+**Single index on `iteration_timestamp`** (mirrors commit 2's Q5 Reading B disposition): the loop's append-only writes don't need indexed lookup at write time; time-windowed roll-up queries (the primary read path for tier-2 fitness surfaces) benefit from the timestamp index. `rationale_tag`-cohort and `decision`-cohort indexes deferred — operator-side ad-hoc SQL is sequential-scan cheap on a <1M-row table; promote to typed indexes when a real query workload materializes.
+
+**No audit_log integration** (Q6 Reading A per F4.5.3 reasoning): `pm_spin_rationale_log` IS itself the durable record. Cross-recording into `audit_log` would create two-write-paths-for-same-event with divergence risk between table and audit, plus operator confusion about canonical source. `audit_log` scope is cross-cutting events needing cross-domain query; pm_spin events query target IS this table directly. Volume is a second-order observation (~2880 rows/day at 30s tick cadence; commit 7 finalizes cadence) but not the load-bearing reason for skipping audit integration.
+
 ## Filesystem layout
 
 Root: `${MERIDIAN_ORCH_DATA_DIR}` (default `~/.meridian-orchestrator/`).
@@ -336,6 +368,7 @@ Phase 1 migration plan:
 | `0004_notifications.sql` | M6 | `inbound_messages`, `outbound_messages`, plus partial indexes |
 | `0009_observability_cost_tier1.sql` | M5 | `api_usage` cohort columns (`notes`, `workflow_id`, `agent_role`, `task_type`) + indexes (`idx_api_usage_workflow`, `idx_api_usage_role_type`) per `BACKLOG.md` § Observability roadmap |
 | `0010_pm_current_focus.sql` | M5-continuous-pm-driver | `pm_current_focus` table + `idx_pm_focus_declared_at` per `BACKLOG.md` § Observability roadmap (narration tier 1, M5-continuous-pm-driver scope) |
+| `0011_pm_spin_rationale_log.sql` | M5-continuous-pm-driver | `pm_spin_rationale_log` table + `idx_pm_spin_iteration_timestamp` per `BACKLOG.md` § Observability roadmap (fitness tier 1, M5-continuous-pm-driver scope) |
 
 No `bucket` column ships in `api_usage`. The premium-first cost model superseded by the subscription-first architecture (Experiment 4, 2026-05-01) drops per-call bucket attribution from the schema in favor of query-time derivation from `model` plus the daemon's polled `/api/oauth/usage` snapshot. See `project_subscription_first_architecture` memory.
 

@@ -1517,6 +1517,62 @@ Per D1.1, capture in the closeout doc:
   F2.1 estimates honest as estimates while preventing them from
   becoming budgets that constrain disposition quality at prep time.
   Captured here for the closeout § Discipline-pattern observations.
+- **F2.1 surface-as-finding rule second invocation at commit 2 draft
+  (2026-05-04).** 27 collected / 25 unique vs F3.6.E's 19 estimate
+  (+92.9% over F2.1's 14 baseline). Two-reason pattern observation
+  surfaced: (1) precedent-mirror tests added at draft time uniformly
+  with established module patterns (parametrize blow-ups,
+  default-populates-on-insert mirrors, sentinel-test mirrors);
+  (2) pushback-driven additions at review time (test surface added
+  in response to reviewing-Claude implementation-discipline
+  pushbacks — Item 2's boundary-aware truncation surfaced 4
+  truncation-branch tests). Both surface as F2.1 findings, both
+  disposition as scope-correct, both accept rolling-forward without
+  re-prep. Pattern is durable across two invocations in two commits.
+- **Threshold-of-three watch is trigger-to-evaluate, not
+  trigger-to-extract (F4.5.2, 2026-05-04).** At three instances,
+  the discipline is to ASK the question, not to answer "yes" by
+  default. Surface similarity does not imply shared semantic load.
+  Reject extraction when the abstraction unit doesn't carry
+  semantic weight; the rule-of-three is a heuristic, not a mandate.
+  This frames the May 3 UTC-coercion precedent correctly:
+  extraction landed there because the abstraction unit
+  (timezone-aware-then-naive coercion) was load-bearing semantic
+  logic, not just shared SQL shape. Future watch-for-pattern
+  entries reading this trail should evaluate "what's the
+  abstraction unit?" before assuming extraction at three is
+  automatic. (Carried into Followup-7 Q3 disposition; threshold
+  reframed to "anticipated commits 7-8" without commit-3
+  extraction.)
+- **F2.1 surface-as-finding rule third invocation at commit 3 draft
+  (2026-05-04).** 15 collected / 11 unique vs F4.4's 8/10 estimate
+  (87.5% over F2.1's +8 baseline). Three reasons identified for
+  systematic low-by-25%-to-90% F2.1 estimate divergence (durable
+  framing for chain-wide tolerance, established across commits
+  2-3): (1) **precedent-mirror tests added at draft time** —
+  defaults, parametrize blow-ups, sentinel mirrors uniform with
+  established module patterns; (2) **pushback-driven additions at
+  review time** — test surface added in response to reviewing-Claude
+  pushback (e.g., commit 2's boundary-aware-truncation tests from
+  Item 2 pushback resolution); (3) **disposition-driven invariant
+  pins at draft time** — sentinel tests pinning disposition reasoning
+  into durable regression (e.g., commit 3's `no_dedup_emits_per_tick`
+  pinning Q1 Reading A and `does_not_write_audit_log` pinning Q6
+  Reading A + F4.5.3 reasoning). All three reasons disposition as
+  scope-correct + absorbed-pattern; chain-wide estimate accepts
+  these as healthy discipline cost rather than budget overrun.
+- **Carry-forward note convention established at commit 3
+  (Decision 5 disposition, 2026-05-04).** Scope-determines-location
+  routing: same-sub-milestone → grounding doc § Carry-forward notes;
+  cross-sub-milestone → `BACKLOG.md` § Carry-forward to future
+  sub-milestones (lazy-created on first cross-boundary entry). First
+  sub-milestone-internal entry: cadence-volume interaction → commit 7.
+  No cross-sub-milestone entries yet. Convention defends against
+  pure-(a) "grounding doc only" (incomplete for cross-boundary) and
+  pure-(b) "BACKLOG.md only" (junk-drawer risk + redundant with
+  grounding doc surface that's already opened at every commit prep).
+  Convention-reference lives in grounding doc § Carry-forward notes
+  header note for future-Claude findability.
 
 ---
 
@@ -1858,7 +1914,7 @@ explicit lookup + lookup-error handling.
 | Pattern | Status pre-commit | Commit 2 instance | Threshold? |
 |---|---|---|---|
 | Closed-enum CHECK + sentinel test | 3 (pm_mode_log.mode, pm_mode_log.triggered_by, dispatches.status; pending: pm_spin_rationale_log.rationale_tag at commit 3) | +1 if Q1 Reading A: `pm_current_focus.output_type` (5-value Literal). | Pattern is durable; threshold-of-extraction not yet triggered (no shared utility worth pulling out). |
-| `read_current_X` helper with rowid-DESC ordering | 1 (`read_current_pm_mode`) | +1: `read_current_focus`. | Threshold-of-three: at the THIRD instance, surface for shared utility extraction. Watch at commit 3 (`pm_spin_rationale_log` may add a third). |
+| `read_current_X` helper with rowid-DESC ordering | 1 (`read_current_pm_mode`) | +1: `read_current_focus`. | Threshold-of-three: at the THIRD instance, surface for shared utility extraction. Watch at commit 3 (`pm_spin_rationale_log` may add a third). **REFRAMED 2026-05-04 (F4.5.1, Followup-7):** commit 3's pm_spin is write-only per Q1+Q4 dispositions; no third instance introduced at commit 3. Reset watch to "anticipated third instance at commits 7-8 when continuous-loop driver's read consumers land." Commit-3-no-extraction is NOT discipline drift — it's the writer-only nature of the pm_spin commit, plus the Q4 disposition (no daemon-side read helper) plus the Q3-Reading-E observation that surface similarity doesn't necessarily mean shared semantic load. |
 | Nullable optional FK to `tasks(id)` | 1 (`api_usage.task_id`) | +1 if Q3 Reading A: `pm_current_focus.bound_workflow_id`. | Pattern is small, no extraction warranted. |
 | Audit action namespacing `pm.<surface>.<verb>` | 1 (`pm_mode.transition`) | +3 (or +4 if Q8-A adds `pm.current_focus.superseded`): `pm.current_focus.declared` / `.completed` / `.contract_violation`. | First multi-action surface in the `pm.*` namespace; sets precedent for commit 3 (`pm.spin_rationale.recorded`) and commit 4 (`pm.audit_sample.*`). |
 | Single-transaction declare-with-dangling-detection | 0 | +1: declare auto-supersede pattern. | Net-new pattern. May surface in commit 3's spin-rationale writer if rate-limit collapsing applies; watch then. |
@@ -2288,3 +2344,299 @@ helper rowid-DESC pattern as third instance, surfacing the
 extraction question per F3.3 watch).
 
 **End of Followup-6.**
+
+---
+
+# Followup-7 — commit 3 prep checkpoint (pm_spin_rationale_log + writer + closed-enum sentinel)
+
+**Date:** 2026-05-04. **Sub-milestone:** M5-continuous-pm-driver.
+**Commit scope:** F2.1 row 3.
+**Prerequisites landed:** commit 1 (workflow_id α-denormalization,
+ff47573); commit 2 (pm_current_focus + write/read API, b1ad27a);
+.gitignore chore (414728f).
+
+**Migration number pin:** F2.1's revised chain table (line 1103)
+already lists `storage/sql/0011_*.sql` for commit 3. Pre-rollback
+F2.0 had this slot at 0012; the F2.1 revision (2026-05-03) shifted
+to 0011 when 0010/`tasks.task_type` moved to M4d. No further
+renumber needed at commit 3 prep open.
+
+**Q3 closed-enum disposition pinned:** F3.6 Q3 dispositioned
+rationale_tag closed enum (Reading A: queued_work / mike_presence /
+heartbeat_cheap / forgot_to_shutdown). Not re-surfaced as a new
+question at this prep; spec amendment uses that disposition
+directly.
+
+---
+
+## F4.1 — touch points
+
+Per F2.1 row 3: `storage/sql/0011_*.sql`, `tools/pm_spin.py` (new).
+Resolved file-by-file (extraction-conditional rows marked):
+
+| File | Status | Touch shape |
+|---|---|---|
+| `src/meridian_orchestrator/storage/sql/0011_pm_spin_rationale_log.sql` | NEW | Table DDL with `id / iteration_timestamp / decision (closed enum CHECK) / rationale_tag (closed enum CHECK) / rationale_free_text` + single index on iteration_timestamp (mirrors commit 2's Q5 Reading B disposition). |
+| `src/meridian_orchestrator/tools/pm_spin.py` | NEW | Pydantic schemas (`RecordSpinRationaleInput / Output`); `Decision` Literal; `RationaleTag` Literal; `record_spin_rationale` handler. Read-helper conditional on Q4 disposition below. |
+| `src/meridian_orchestrator/server.py` | EDIT | `_register_pm_spin_tools` helper conditional on Q5 (MCP wrapper at commit 3 vs deferred). |
+| `docs/kickoff/06-mcp-tools-phase-one.md` | EDIT | Tool entry + permission table row, conditional on Q5. |
+| `docs/kickoff/05-data-model.md` | EDIT | New `pm_spin_rationale_log` table entry + migration table row for 0011. |
+| `docs/kickoff/11-engineer-bridge.md` | UNCHANGED IF Q6 Reading A | If Q6 Reading B (audit_log integration), audit-log-entries table extends with `pm.spin_rationale.recorded`. |
+| `tests/unit/storage/test_migrations.py` | EDIT | EXPECTED_VERSIONS update; columns/indexes/CHECK assertions for 0011 (mirror commit 2's pattern, ~3-4 new tests). |
+| `tests/integration/test_daemon_lifecycle.py` | EDIT | Lifecycle version-set update for 0011. |
+| `tests/unit/tools/test_pm_spin.py` | NEW | Direct-handler tests + closed-enum sentinels. |
+| `tests/integration/test_pm_spin_mcp_wrapper.py` | NEW IF Q5 Reading A | MCP wrapper tests parallel to commit 2's pattern. |
+
+**Conditional touchpoints (extraction question Q3):**
+
+| File | Status if extraction lands at commit 3 |
+|---|---|
+| `src/meridian_orchestrator/storage/most_recent.py` (or alternative location per Q3-sub-question) | NEW shared helper module |
+| `src/meridian_orchestrator/tools/pm_mode.py` | EDIT — refactor `read_current_pm_mode` to use shared utility |
+| `src/meridian_orchestrator/tools/pm_focus.py` | EDIT — refactor `read_current_focus` to use shared utility |
+| `tests/unit/storage/test_most_recent.py` | NEW — direct unit tests for the shared utility |
+
+---
+
+## F4.2 — open questions (Q1-Q7)
+
+### Q1 — Spin-rationale emission cadence + dedup
+
+What triggers a `record_spin_rationale` call, and is dedup applied?
+
+- **Reading A — per-tick, no dedup.** Loop emits one row per planning iteration (~30s cadence per F2 Section 2). Volume bounded at ~2880 rows/day; cohort aggregation happens at query time. Simplest writer: single INSERT per call, no read-back. **Does not introduce a third `read_current_X` helper instance.**
+- **Reading B — per-rationale-change only.** Subprocess tracks last-emitted rationale in memory; only writes when (decision, rationale_tag) tuple changes from prior emission. Lower volume; subprocess-side state required; loses fidelity on duration ("kept_alive for 47 ticks" requires inferring from gaps). **Does not introduce a daemon-side read helper.**
+- **Reading C — per-tick with server-side dedup.** Writer reads last row's (decision, rationale_tag); skips INSERT if same tuple. Moderate volume; daemon-side state via the read-back; **introduces the third `read_current_X` helper instance, tripping the threshold-of-three for Q3 extraction.**
+
+**Recommendation: Reading A (per-tick, no dedup).** The narration log is durable timeline of "what PM was doing every tick"; coalescing loses temporal fidelity. ~2880 rows/day is bounded; aggregate at query time via GROUP BY rationale_tag with COUNT and time-window roll-ups (mirrors api_usage's append-only + query-time-aggregation shape per `project_subscription_first_architecture`).
+
+**Disposition impact on Q3:** Reading A means commit 3 does NOT introduce a third `read_current_X` instance. The threshold-of-three claim in Mike's framing depends on Q1 Reading C; surface this at the bottom of the prep as anticipated pushback.
+
+**[DISPOSITIONED 2026-05-04: Reading A accepted.]** Per-tick no dedup gives faithful timeline; dedup hides operator-relevant oscillation signal. **Carry-forward note for commit 7 prep:** pm_spin row volume scales with the loop's tick cadence, which commit 7 actually decides (F2 Section 2 framed "30s? — surface for prep"; commit 7 is where it lands). 30s cadence = ~2880 rows/day; if commit 7 lands materially different cadence (e.g., 5s for tighter responsiveness or 5min for cost-conscious operation), the volume framing in Q6 below revisits and the BACKLOG retention/coalescing question reopens. Pin this dependency for commit 7 prep checkpoint — cadence-volume interaction needs explicit naming when tick cadence is decided.
+
+### Q2 — `decision` column closed-enum CHECK
+
+The `decision` column carries values `kept_alive` or `shutdown_recommended` per F2 Section 2 schema sketch. Should it be a closed-enum CHECK like rationale_tag (Q3 disposition Reading A)?
+
+- **Reading A — closed-enum CHECK + sentinel test.** `Literal["kept_alive", "shutdown_recommended"]` + CHECK + sentinel. Mirrors output_type / mode / rationale_tag patterns.
+- **Reading B — free TEXT, no CHECK.** Lower discipline; admits future-decision-types without migration; mirrors `tasks.status` historical lack-of-CHECK (later added at 0008).
+
+**Recommendation: Reading A.** Closed-enum sentinel pattern continuing per F3.3 watch. Two-value enum is small enough that forced-fit risk is negligible; future expansion (e.g., `kept_alive_partial`, `shutdown_pending_handoff`) lands via a future migration mirroring `0008_dispatches_status_check.sql`. Sentinel test confirms the Pydantic Literal and CHECK list stay in sync.
+
+### Q3 — `read_current_X` helper extraction (threshold-of-three)
+
+**Status of pattern at commit 3 open:**
+
+1. `tools/pm_mode.py:read_current_pm_mode` (M5-pm-mode-and-window-state commit 6) — `SELECT mode FROM pm_mode_log ORDER BY rowid DESC LIMIT 1`. Returns `str | None`.
+2. `tools/pm_focus.py:read_current_focus` (M5-continuous-pm-driver commit 2, b1ad27a) — `SELECT (...columns...) FROM pm_current_focus WHERE completed_at IS NULL ORDER BY rowid DESC LIMIT 1`. Returns `PmCurrentFocus | None`.
+
+**Is there a third instance at commit 3?** Conditional on Q1.
+
+**Sub-question (regardless of Q1 disposition): is "rowid-DESC LIMIT 1 with optional WHERE" the right abstraction unit?** The two existing instances differ on:
+- Return type (single string vs full Pydantic model)
+- WHERE clause (none vs `completed_at IS NULL`)
+- Result-row parsing (single column vs multi-column with bool coercion)
+
+Common only at the SQL-shape level (rowid-DESC LIMIT 1 + None-on-empty). The behavior — what columns to fetch, what to return — is per-call-site distinct. Extraction options:
+
+- **Reading A — Same-commit extraction at commit 3 (assuming Q1-C lands).** Shared helper module location: `storage/most_recent.py` (next to `datetime_utils.py` precedent). Signature: a generic `fetch_most_recent_row(storage, table, columns, where=None) -> dict | None` returning the raw row dict; per-call-site code parses into typed return values. Refactor: `read_current_pm_mode` and `read_current_focus` rewritten to call the helper. Test: shared utility unit tests + verify pm_mode + pm_focus tests still pass.
+- **Reading B — Defer extraction; let third instance materialize organically.** If Q1-A or Q1-B lands, no third helper at commit 3; threshold not really tripped. Continue watch-for-pattern entry. Most likely third instance: commits 7-8 loop driver reading own most-recent dispatch outcome for diagnostic logic.
+- **Reading C — Pre-emptive extraction NOW at commit 3, regardless of Q1 disposition.** Acknowledge anticipated third instance within next 5 commits; avoid the multi-commit refactor by extracting at the second instance with the third in scope. Risks premature abstraction on a pattern whose shape may evolve.
+- **Reading D — Split commit 3 into 3a (extraction + refactor pm_mode + pm_focus) and 3b (pm_spin_rationale_log table + writer). Only viable if Q1-C; otherwise 3a has no consumer and the F2.2 verification-surface argument applies (extracting without a consumer = no integration test for the contract).
+- **Reading E — Pattern doesn't justify extraction.** Per the sub-question above: behavior diverges per call-site enough that a generic helper would be a thin SQL-string-builder wrapper without semantic value. Convert F3.3 watch-for-pattern entry to RESOLVED-as-not-extracted with rationale; future call sites continue to inline the rowid-DESC pattern with their own typed parsing. Rule-of-three is a heuristic, not a mandate; some patterns warrant extraction at 3 instances, others don't.
+
+**Recommendation: contingent.**
+
+- If Q1 disposition lands as Reading A or Reading B (no third instance at commit 3): Reading B for Q3 (defer extraction to organic third instance) OR Reading E (resolve the watch entry as not-extractable).
+- If Q1 lands as Reading C (writer reads back for dedup): Reading A for Q3 (same-commit extraction) — the dedup-read introduces a real third instance with non-trivial integration test surface.
+
+**My lean across both Q1 dispositions: Reading E (pattern doesn't justify extraction).** The two existing helpers are thin (5-15 lines each); the abstraction unit is per-call-site result parsing rather than the SQL shape. A generic `fetch_most_recent_row` helper would be a SQL-string-builder that adds attack surface (caller-supplied table/column names) without removing meaningful duplication. Convert F3.3's watch-for-pattern to RESOLVED-as-not-extracted and explicitly document that the rule-of-three is a trigger-to-evaluate, not a mandate-to-extract. UTC-coercion (datetime_utils precedent) was extracted at three because the helper was a pure function with shared semantic load; rowid-DESC SQL is a query template, not a shared semantic unit.
+
+This is the bidirectional-contradiction-discipline pattern: surfacing the question Mike asked produces a pushback against the framing, not just a disposition between Mike's options.
+
+**[DISPOSITIONED 2026-05-04: Q3 dissolves per F4.5.1 reframe.]** Q1-A + Q4-B together mean commit 3 is write-only; no third `read_current_X` instance materializes. Threshold-of-three watch resets to "anticipated commits 7-8" (see F3.3 watch-entry update). Reading E's contrarian framing — "rule-of-three is trigger-to-evaluate, not mandate-to-extract" — captured separately in F2.5 closeout-staging notes as durable framing for future thresholds-of-three.
+
+### Q4 — Dedicated read helper for pm_spin_rationale_log?
+
+Independent of Q1's dedup question, does commit 3 ship a `read_most_recent_spin_rationale` Python helper for daemon-side consumers (loop driver at commits 7-8)?
+
+- **Reading A — Yes, ship a Python helper at commit 3.** Mirrors the prep-debt argument from F3.6.C Q6: defer-to-commit-7 forces re-litigation of output schema, empty-state contract, and caller-context. Even if commit 3's writer doesn't need the helper internally, the loop driver at commit 7-8 likely does (for diagnostic / liveness reporting). Ship at commit 3 with table schema; wire MCP wrapper only if Q5 Reading A.
+- **Reading B — No, defer until a real consumer materializes.** pm_spin_rationale_log is append-only; readers aggregate rather than fetch most-recent. No daemon-side read helper at commit 3.
+
+**Recommendation: Reading B.** The narration-log shape doesn't have an obvious "most recent" consumer in the way pm_mode_log does (read_current_pm_mode powers Mike-presence detection in get_window_state — a real load-bearing read). Spin-rationale's consumers are aggregations (counts, time-window roll-ups for fitness tier 2). If commit 7-8 surfaces a real read-back use case, a helper lands then; speculative shipping risks designing the wrong shape.
+
+This shifts away from the F3.6.C Q6 co-design argument because the use case shape is different — pm_current_focus has at-most-one-active read semantics matching get; pm_spin_rationale_log has "what's the most recent N rows with what aggregation" semantics matching future query tools.
+
+### Q5 — MCP wrapper surface for record_spin_rationale
+
+PM-continuous is a subprocess and writes via MCP. Is the wrapper at commit 3 or deferred?
+
+- **Reading A — `record_spin_rationale` MCP tool ships at commit 3.** PM-only. Same shape as commit 2's declare/complete shipping with the table. Subprocess consumer at commits 7-8 is committed; co-shipping avoids prep-debt.
+- **Reading B — Defer MCP wrapper to commit 7 alongside loop driver.** Writer Python API exists; daemon-side direct callers can use it; MCP wrapper rides with consumer.
+
+**Recommendation: Reading A.** The Q4 disposition (no read helper at commit 3) is asymmetric with Q5 — write is the load-bearing surface for the loop driver, read is speculative. Co-ship the write surface; defer the read.
+
+### Q6 — audit_log integration on record_spin_rationale
+
+Each spin-rationale write also emits an audit_log row?
+
+- **Reading A — No audit_log integration.** pm_spin_rationale_log IS the durable timeline for spin-rationale events. Audit_log row would be redundant with the table row. Volume argument: ~2880 audit rows/day from spin-rationale alone (vs current audit volume of ~tens-to-hundreds/day) is significant noise.
+- **Reading B — Audit each spin-rationale write.** Mirrors `pm_mode.transition` pattern (set_pm_mode writes audit even on no-op same-mode call). Operator-visible "PM is calling record_spin_rationale every tick" trail.
+
+**Recommendation: Reading A.** Volume is the deciding argument; a 30x increase in audit_log row count for redundant content is operational noise, not load-bearing audit. record_api_call (which has similar high-frequency cadence) DOES audit per call — so this isn't "high-frequency tools never audit." But record_api_call's audit row carries cross-table context (dispatch_id, agent_id, model, cost) that the api_usage row alone doesn't capture. pm_spin_rationale_log row IS self-contained; audit row would mirror it byte-for-byte on the durable fields. Skip.
+
+**[DISPOSITIONED 2026-05-04: Reading A accepted with reasoning revision per F4.5.3.]** Load-bearing reasoning is **not** volume — that's tiebreaker observation, not rejection. Real reason: pm_spin_rationale_log IS itself the durable record of spin-rationale decisions. Cross-recording into audit_log creates two-write-paths-for-same-event with divergence risk between table and audit, plus operator confusion about canonical source. Audit_log scope: cross-cutting events needing cross-domain query. pm_spin events query target is pm_spin_rationale_log directly; no cross-domain join required. No audit_log integration needed. Volume argument retained as second-order observation but not the basis for rejection.
+
+### Q7 — Atomicity envelope
+
+- **Reading A — single INSERT, no transaction wrap.** SQLite single-statement INSERTs are atomic by default. If Q1-A + Q4-B + Q6-A, no multi-statement sequence to wrap.
+- **Reading B — explicit transaction wrap.** Defensive consistency with project pattern.
+
+**Recommendation: Reading A.** Single-statement atomicity is sufficient when there's no multi-write sequence. Mirror api_usage when no companion writes fire. (record_api_call DOES wrap because it has the conditional dispatch UPDATE + audit_log write; spin-rationale has neither.)
+
+If Q6 Reading B lands (audit_log added), upgrade to Reading B for atomicity.
+
+---
+
+## F4.3 — watch-for-pattern check
+
+| Pattern | Status pre-commit | Commit 3 instance | Disposition |
+|---|---|---|---|
+| Closed-enum CHECK + sentinel test | 4 (mode, triggered_by, dispatches.status, output_type) | +2: `decision` + `rationale_tag`. | Pattern durable; no extraction warranted. |
+| `read_current_X` rowid-DESC helper | 2 | Conditional on Q1; if zero new instance, threshold not tripped at commit 3. Q3 surfaces re-evaluation: pattern may not justify extraction (Reading E) regardless. |
+| Audit action `pm.<surface>.<verb>` namespace | 5 (`pm_mode.transition` + four `pm.current_focus.*`) | +0 if Q6-A; +1 (`pm.spin_rationale.recorded`) if Q6-B. | Pattern continuing; no extraction surface. |
+| `bridge/` → `tools/` cross-layer imports | 2 | 0 at commit 3 (pm_spin.py is `tools/`-only). Commits 7-8 loop driver may add. | No change. |
+| Production-code-surface-for-testability | 2 pre-chain | 0 at commit 3 (writer is straightforward; no test seam needed). | No change. |
+| Migration count | 2 added at this sub-milestone (0010 commit 2; commit 1 was wrapper-only) | +1: 0011. Total 3 at sub-milestone close (matches F2.4 revised count). | No change. |
+| **F2.1 surface-as-finding rule** | 2 invocations at commit 2 (prep + draft) | Likely +1 at commit 3 draft if test count exceeds F2.1's +8 estimate. Per the closeout pattern observation (F2.5), expected systematic underestimate driven by precedent-mirror tests + pushback-driven additions. | No re-prep; document. |
+
+---
+
+## F4.4 — test-target estimate
+
+F2.1 estimate: +8. Working breakdown under recommended dispositions
+(Q1-A, Q2-A, Q3-E, Q4-B, Q5-A, Q6-A, Q7-A):
+
+| Layer | Count |
+|---|---|
+| Migration smoke tests (columns + index) | 1 |
+| Decision CHECK constraint sentinel | 1 |
+| Rationale_tag CHECK constraint sentinel | 1 |
+| iteration_timestamp default-populates | 1 |
+| Writer happy path (basic; with free_text) | 2 |
+| MCP wrapper PM-allowed | 1 |
+| MCP wrapper non-PM-rejected (parametrized × 3) | 1 unique / 3 collected |
+| **Total under recommendations** | **8 unique / 10 collected** |
+
+**At F2.1's +8 baseline.** Per the closeout § Discipline-pattern
+observation captured at commit 2 (F3.6.E precedent): F2.1 estimates
+run systematically low by ~25% for two reasons; expect actual draft
+count to exceed this estimate, surface as F2.1 finding third
+invocation if so, disposition as scope-correct + absorbed-pattern
+continuation.
+
+**Range under disposition variance:**
+
+- Q3 Reading A or D (extraction lands at commit 3): +3-4 tests for shared utility unit tests + verification refactor. Total ~12 unique.
+- Q4 Reading A (read helper at commit 3): +2 tests. Total ~10 unique.
+- Q6 Reading B (audit_log integration): +1 test (audit row sentinel). Total ~9 unique.
+
+Worst case (all dispositions flip toward more surface): ~14 unique. 14 / 8 = 75% over F2.1 estimate.
+
+---
+
+## F4.5 — anticipated pushbacks
+
+Three weak points in this prep that Mike's review may surface:
+
+1. **Q1 Reading A vs Mike's "third instance" framing.** Mike's commit-3-prep-open instruction stated "this is the third instance of the read_current_X rowid-DESC helper pattern" as fact. My Q1 Reading A recommendation (per-tick, no dedup) means commit 3 introduces NO new read helper, which contradicts Mike's framing. Either (a) Mike was anticipating a specific read-back use case I should surface (most likely: loop driver at commits 7-8 reading own most-recent for hysteresis or diagnostic), in which case the Q1 disposition stands but the Q3 question becomes "extract now in anticipation vs wait for organic third"; or (b) Mike has a different read-back use case I'm missing, which Q1 needs to surface as a fourth Reading. Surface this as the load-bearing pushback — the threshold-of-three trigger depends on whether a real read-back materializes at commit 3 or is anticipated.
+
+2. **Q3 Reading E (pattern doesn't justify extraction) is contrarian to the rule-of-three precedent.** The UTC-coercion extraction at M5-subscription-routing commit 2 was held up as a model in F3.3 watch-for-pattern entries. Reading E argues this case differs (per-call-site result parsing differs; no shared semantic unit). Mike may push back: either "rule-of-three is a mandate, extract regardless" or "you missed a real shared abstraction — the empty-handling and rowid-DESC convention IS shared semantic load." If pushback lands as the latter, the right abstraction is probably a `MostRecentRowReader[T]` typed helper rather than a generic SQL builder — surface as a sub-reading if Reading E doesn't survive.
+
+3. **Q6 Reading A (no audit_log) volume argument may be too facile.** I claimed 2880 audit rows/day from spin-rationale would be "operational noise." That's an unsubstantiated volume comparison without Phase 1 baseline data. The honest framing is: audit_log volume in Phase 1 is unknown; 2880 rows/day from one source is significant relative to what's currently shipped (dispatch lifecycle audit ~10s of rows per dispatch; ~hundreds/day at heavy use). But if Mike values the audit-trail consistency more than volume, Reading B is defensible. The volume argument is a tiebreaker, not a load-bearing rejection. Surface as second-order finding.
+
+---
+
+## F4.6 — what lands at the diff checkpoint
+
+After Mike disposition Q1-Q7 + the three anticipated-pushback items:
+
+- 0011 migration drafted with Q2 + Q3-disposition CHECK constraints
+- `tools/pm_spin.py` drafted with Q1 + Q4 + Q7-disposition writer shape
+- `server.py` `_register_pm_spin_tools` if Q5-A
+- Spec amendments drafted for 06 + 05 (and 11 if Q6-B)
+- Test fixtures + assertions drafted (~8-14 tests depending on dispositions)
+- F3.3 watch-for-pattern entry updated per Q3 disposition (continued / RESOLVED-extracted / RESOLVED-not-extracted)
+
+Diff checkpoint surfaces commit-by-commit; commit 3 lands; commit
+4 prep opens (`audit_sample_log` — third planned migration at this
+sub-milestone; sampling-percentage config + async sampler scaffold).
+
+**End of Followup-7.**
+
+---
+
+# Carry-forward notes
+
+**Convention established 2026-05-04 (Decision 5 disposition, commit 3 prep):**
+Scope-determines-location routing for carry-forward notes between
+commits / sub-milestones / phases:
+
+- **Same-sub-milestone carry-forwards** (note from commit N to commit
+  M within the same sub-milestone) live here in the grounding doc
+  under this `## Carry-forward notes` section. The grounding doc is
+  already opened at every commit prep within the sub-milestone; this
+  section is the canonical surface.
+- **Cross-sub-milestone carry-forwards** (note from sub-milestone X
+  to sub-milestone Y) live in `BACKLOG.md` under a dedicated
+  `## Carry-forward to future sub-milestones` section, distinct from
+  the existing `## Deferred` section. **Lazy-created** on first
+  cross-boundary entry — empty headers are
+  documentation-without-purpose. When the first cross-sub-milestone
+  carry-forward materializes, the BACKLOG.md section gets created
+  with that entry; this convention reference holds until then.
+
+**Format for entries** (both surfaces):
+
+```
+### → commit N (or → <sub-milestone-name>): <topic>
+
+<one-paragraph carry-forward note + cross-reference to detail-prose
+location, e.g., "Detail prose: F4.2 Q1 disposition pin in this
+grounding doc.">
+```
+
+**Grep targets**: `Carry-forward`, `→ commit N`, `→ <sub-milestone-name>`.
+
+---
+
+### → commit 7: pm_spin row volume scales with loop tick cadence
+
+pm_spin_rationale_log emits one row per planning iteration per F4.2
+Q1 Reading A disposition (per-tick, no dedup). Row volume scales
+linearly with the loop's tick cadence, which **commit 7 actually
+decides** (F2 Section 2 framed "30s? — surface for prep"; the F2.1
+chain places loop driver core at commit 7). At a 30s cadence,
+volume is ~2880 rows/day. Materially different cadence shifts the
+volume framing:
+
+- 5s cadence → ~17,280 rows/day. Volume becomes operationally
+  significant; retention / coalescing becomes a real question. F4.2
+  Q1 disposition reopens.
+- 5min cadence → ~288 rows/day. Volume is trivial. The Q6 audit-log
+  volume tiebreaker observation softens.
+
+**Carry-forward to commit 7 prep:** when tick cadence is decided,
+explicitly name the cadence-volume interaction in the prep checkpoint.
+Surface whether the chosen cadence triggers reopening of:
+
+- F4.2 Q1 (per-tick no dedup) — if volume is operationally significant
+- F4.2 Q6 (no audit_log integration) — volume is second-order
+  observation per F4.5.3, but high-volume scenarios may make it
+  load-bearing
+- BACKLOG entry for `pm_spin_rationale_log` retention / coalescing
+  policy — independent of dispositions; pure storage-volume question
+
+**Detail prose**: F4.2 Q1 disposition pin in this grounding doc
+(grep "DISPOSITIONED 2026-05-04: Reading A accepted" within F4.2 Q1).
+

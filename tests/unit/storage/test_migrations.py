@@ -21,11 +21,12 @@ from meridian_orchestrator.storage.sqlite import SqliteStorage
 #   0008_dispatches_status_check.sql          (M4c-compaction)
 #   0009_observability_cost_tier1.sql         (M5-subscription-routing)
 #   0010_pm_current_focus.sql                 (M5-continuous-pm-driver commit 2)
+#   0011_pm_spin_rationale_log.sql             (M5-continuous-pm-driver commit 3)
 # Reservation gap remaining: 0004 reserved for inbound_messages +
 # outbound_messages (Telegram notifications); milestone-attribution
 # pending resolution between data-model.md (M6) and the M5 sub-milestone
 # breakdown memory (M5-telegram-foundation).
-EXPECTED_VERSIONS = [1, 2, 3, 5, 6, 7, 8, 9, 10]
+EXPECTED_VERSIONS = [1, 2, 3, 5, 6, 7, 8, 9, 10, 11]
 
 
 @pytest_asyncio.fixture
@@ -54,6 +55,7 @@ async def test_run_migrations_creates_tables(storage: SqliteStorage) -> None:
         "dispatches",
         "pm_mode_log",
         "pm_current_focus",
+        "pm_spin_rationale_log",
         "_schema_version",
     }
     missing = expected - table_names
@@ -105,6 +107,10 @@ async def test_indexes_created(storage: SqliteStorage) -> None:
         # 0010 — pm_current_focus single index on declared_at (Q5 Reading B
         # disposition; bound_workflow_id index deferred to BACKLOG)
         "idx_pm_focus_declared_at",
+        # 0011 — pm_spin_rationale_log single index on iteration_timestamp
+        # (mirrors commit 2's Q5 Reading B disposition; rationale_tag and
+        # decision cohort indexes deferred to BACKLOG-when-needed)
+        "idx_pm_spin_iteration_timestamp",
     }
     missing = expected - index_names
     assert not missing, f"Missing indexes: {missing}"
@@ -509,3 +515,143 @@ async def test_pm_current_focus_declared_at_default_populates(
     assert row["declared_at"] is not None
     # SQLite datetime('now') format: 'YYYY-MM-DD HH:MM:SS'.
     assert len(row["declared_at"]) >= 19
+
+
+async def test_pm_spin_rationale_log_columns_match_spec(
+    storage: SqliteStorage,
+) -> None:
+    """0011_pm_spin_rationale_log.sql columns match 05-data-model.md §
+    pm_spin_rationale_log: id (PK), iteration_timestamp (NOT NULL,
+    default now), decision (NOT NULL with closed enum CHECK),
+    rationale_tag (NOT NULL with closed enum CHECK), rationale_free_text
+    (nullable).
+    """
+    await run_migrations(storage)
+    cols = await storage.fetch_all(
+        "PRAGMA table_info(pm_spin_rationale_log)"
+    )
+    by_name = {c["name"]: c for c in cols}
+
+    expected_names = {
+        "id",
+        "iteration_timestamp",
+        "decision",
+        "rationale_tag",
+        "rationale_free_text",
+    }
+    assert set(by_name.keys()) == expected_names, (
+        f"pm_spin_rationale_log columns drift: got {set(by_name.keys())!r}, "
+        f"expected {expected_names!r}. Schema must match "
+        "05-data-model.md § pm_spin_rationale_log."
+    )
+
+    assert by_name["id"]["pk"] == 1
+    assert by_name["iteration_timestamp"]["notnull"] == 1
+    assert by_name["decision"]["notnull"] == 1
+    assert by_name["rationale_tag"]["notnull"] == 1
+    assert by_name["rationale_free_text"]["notnull"] == 0
+
+
+async def test_pm_spin_decision_check_constraint(
+    storage: SqliteStorage,
+) -> None:
+    """The decision column's CHECK enforces the spec'd 2-value enum
+    (Q2 Reading A, F4.2): kept_alive, shutdown_recommended.
+    Defense-in-depth alongside the tools/pm_spin.py:Decision Literal —
+    Python types catch typos at edit time, the CHECK catches the same
+    class of bug from manual SQL or future external integrations.
+
+    Sentinel test: every spec'd value passes; bogus values reject.
+    Failure here means the migration's CHECK list drifted from the
+    Decision Literal.
+    """
+    await run_migrations(storage)
+    for i, decision in enumerate(["kept_alive", "shutdown_recommended"]):
+        await storage.execute(
+            "INSERT INTO pm_spin_rationale_log "
+            "(id, decision, rationale_tag) VALUES (?, ?, ?)",
+            (f"spin-dec-{i}", decision, "queued_work"),
+        )
+
+    rows = await storage.fetch_all(
+        "SELECT decision FROM pm_spin_rationale_log "
+        "WHERE id LIKE 'spin-dec-%' ORDER BY id"
+    )
+    assert {r["decision"] for r in rows} == {
+        "kept_alive",
+        "shutdown_recommended",
+    }
+
+    with pytest.raises(Exception, match=r"(?i)check"):
+        await storage.execute(
+            "INSERT INTO pm_spin_rationale_log "
+            "(id, decision, rationale_tag) VALUES (?, ?, ?)",
+            ("spin-bogus-decision", "not-a-real-decision", "queued_work"),
+        )
+
+
+async def test_pm_spin_rationale_tag_check_constraint(
+    storage: SqliteStorage,
+) -> None:
+    """The rationale_tag column's CHECK enforces the spec'd 4-value
+    enum (F3.6 Q3 Reading A from Followup-2): queued_work,
+    mike_presence, heartbeat_cheap, forgot_to_shutdown.
+
+    Sentinel test pins the enum; failure here means the migration's
+    CHECK list drifted from the RationaleTag Literal in
+    tools/pm_spin.py.
+    """
+    await run_migrations(storage)
+    for i, tag in enumerate(
+        [
+            "queued_work",
+            "mike_presence",
+            "heartbeat_cheap",
+            "forgot_to_shutdown",
+        ]
+    ):
+        await storage.execute(
+            "INSERT INTO pm_spin_rationale_log "
+            "(id, decision, rationale_tag) VALUES (?, ?, ?)",
+            (f"spin-tag-{i}", "kept_alive", tag),
+        )
+
+    rows = await storage.fetch_all(
+        "SELECT rationale_tag FROM pm_spin_rationale_log "
+        "WHERE id LIKE 'spin-tag-%' ORDER BY id"
+    )
+    assert {r["rationale_tag"] for r in rows} == {
+        "queued_work",
+        "mike_presence",
+        "heartbeat_cheap",
+        "forgot_to_shutdown",
+    }
+
+    with pytest.raises(Exception, match=r"(?i)check"):
+        await storage.execute(
+            "INSERT INTO pm_spin_rationale_log "
+            "(id, decision, rationale_tag) VALUES (?, ?, ?)",
+            ("spin-bogus-tag", "kept_alive", "not-a-real-tag"),
+        )
+
+
+async def test_pm_spin_iteration_timestamp_default_populates(
+    storage: SqliteStorage,
+) -> None:
+    """iteration_timestamp has DEFAULT (datetime('now')) per the
+    migration; INSERTs without an explicit timestamp must populate
+    it rather than fail the NOT NULL constraint. Mirrors
+    test_pm_current_focus_declared_at_default_populates."""
+    await run_migrations(storage)
+    await storage.execute(
+        "INSERT INTO pm_spin_rationale_log "
+        "(id, decision, rationale_tag) VALUES (?, ?, ?)",
+        ("spin-default", "kept_alive", "queued_work"),
+    )
+    row = await storage.fetch_one(
+        "SELECT iteration_timestamp FROM pm_spin_rationale_log "
+        "WHERE id = 'spin-default'"
+    )
+    assert row is not None
+    assert row["iteration_timestamp"] is not None
+    assert len(row["iteration_timestamp"]) >= 19

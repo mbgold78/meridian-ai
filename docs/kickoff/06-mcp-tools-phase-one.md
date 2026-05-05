@@ -358,6 +358,35 @@ Returns the active `pm_current_focus` row or `None`. Daemon-internal MCP read co
 
 **Not audited** (read-only, called frequently from PM's loop). Mirrors `get_window_state`'s not-audited convention.
 
+#### `record_spin_rationale`
+
+```python
+class RecordSpinRationaleInput(BaseModel):
+    decision: Literal['kept_alive', 'shutdown_recommended']
+    rationale_tag: Literal[
+        'queued_work', 'mike_presence', 'heartbeat_cheap', 'forgot_to_shutdown'
+    ]
+    rationale_free_text: str | None = None
+
+class RecordSpinRationaleOutput(BaseModel):
+    spin_rationale_id: str
+```
+
+Ships at M5-continuous-pm-driver commit 3 alongside `pm_spin_rationale_log` table. PM emits one row per planning-loop iteration capturing the keep-alive-vs-shutdown decision and the rationale_tag classifying why. The closed-enum `rationale_tag` taxonomy is fixed at this commit per F3.6 Q3 Reading A disposition (Followup-2):
+
+- `queued_work`: dispatchable tasks remain in the queue; PM stays alive to drive them to completion.
+- `mike_presence`: Mike is interactive (recent oauth-pm-token activity); PM stays alive to be responsive to interrupts.
+- `heartbeat_cheap`: no queued work and no Mike activity, but periodic heartbeat cost is low enough that staying alive is defensible (vs respawn-from-handoff cost at next demand).
+- `forgot_to_shutdown`: PM should have shut down by some prior tick's logic but didn't; current tick recognizes the missed shutdown and recommends it now.
+
+**Cadence + dedup** (F4.2 Q1 Reading A): per-tick emission, no dedup. Loop driver at commits 7-8 calls `record_spin_rationale` once per planning iteration; volume bounded by tick cadence (commit 7 decides). Faithful timeline preserves operator-relevant oscillation signals that dedup would hide.
+
+**Optional `rationale_free_text`** carries supplementary diagnostic context (e.g., `"queue depth=7; expected drain ~10min"`). The `rationale_tag` closed enum is the primary cohort signal; free_text is detail PM may attach when useful.
+
+**Allowed for PM only.**
+
+**Not audited** (per F4.2 Q6 Reading A with F4.5.3 reasoning). `pm_spin_rationale_log` IS itself the durable record; cross-recording into `audit_log` would create two-write-paths-for-same-event with divergence risk and operator confusion about canonical source. The audit_log scope is cross-cutting events needing cross-domain query; pm_spin events query target IS the table directly. Volume (~2880 rows/day at 30s cadence) is a second-order observation, not the load-bearing reason.
+
 #### `get_utilization_report`
 
 ```python
@@ -718,6 +747,7 @@ class GetAuditLogOutput(BaseModel):
 | declare_current_focus | no | yes | no | no | no |
 | complete_current_focus | no | yes | no | no | no |
 | get_current_focus | no | yes | no | no | no |
+| record_spin_rationale | no | yes | no | no | no |
 | get_utilization_report | yes | yes | no | no | no |
 | notify_human | no | yes | no | no | no |
 | get_unread_replies | no | yes | no | no | no |
