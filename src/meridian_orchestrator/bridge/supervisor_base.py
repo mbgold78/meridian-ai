@@ -93,6 +93,15 @@ class SupervisorLaunchContext:
     prompt: str
     working_directory: Path
     token: str
+    # Effort level for the claude subprocess invocation per
+    # M5-continuous-pm-driver commit 5 effort plumbing. Set at
+    # supervisor construction time from the registry's
+    # AgentConfig.effort for the supervisor's role (PM/Engineer).
+    # Passed to the launcher which threads it into the
+    # `claude --effort <level>` subprocess flag. Phase 1 values
+    # per orchestrator-utilization-addendum: PM xhigh, Engineer
+    # xhigh.
+    effort: str = "high"
     env_extras: dict[str, str] = field(default_factory=dict)
 
 
@@ -141,8 +150,14 @@ async def _default_launcher(
     """
     env = build_subprocess_env(token=ctx.token, dispatch_id=ctx.dispatch_id)
     env.update(ctx.env_extras)
+    # CLI flag literal verified via `claude --help` (2026-05-05):
+    # `--effort <level>` accepts low/medium/high/xhigh/max. Same
+    # ordering as bridge/dispatcher.py:_default_launcher — effort
+    # flag before the prompt's `-p` positional.
     proc = await asyncio.create_subprocess_exec(
         "claude",
+        "--effort",
+        ctx.effort,
         "-p",
         ctx.prompt,
         cwd=str(ctx.working_directory),
@@ -197,6 +212,7 @@ class LongRunningSupervisor(ABC):
         respawn_cap: int = 3,
         respawn_window_seconds: int = 3600,
         grace_seconds: float = _GRACE_SECONDS_DEFAULT,
+        effort: str = "high",
     ) -> None:
         self._storage = storage
         self._token_store = token_store
@@ -210,6 +226,16 @@ class LongRunningSupervisor(ABC):
         self._respawn_cap = respawn_cap
         self._respawn_window = timedelta(seconds=respawn_window_seconds)
         self._grace = grace_seconds
+        # Effort level threaded into SupervisorLaunchContext at each
+        # _spawn() call. Set at construction from the registry's
+        # AgentConfig.effort for the supervisor's role (PM/Engineer)
+        # by main.py's lifespan; held on the supervisor across
+        # respawns so heartbeat-driven respawns reuse the same
+        # effort level (no re-resolution per respawn — yaml hot-reload
+        # picks up new effort at the NEXT supervisor restart, not at
+        # mid-flight respawns, per F6.2 Q9 disposition's
+        # supervisor-granularity acknowledgment).
+        self._effort = effort
 
         # Mutable lifecycle state.
         self._current_dispatch_id: str | None = None
@@ -467,6 +493,7 @@ class LongRunningSupervisor(ABC):
             prompt=self._subprocess_prompt(),
             working_directory=self._working_directory(),
             token=issued.token,
+            effort=self._effort,
         )
         proc = await self._launcher(ctx)
 

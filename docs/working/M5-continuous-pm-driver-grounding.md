@@ -1650,6 +1650,87 @@ Per D1.1, capture in the closeout doc:
   F2.1 estimates have become miscalibrated for the chain's
   actual disposition density. Don't re-baseline now; trigger
   condition activates at commit 5 if hit.
+- **Bidirectional-contradiction-discipline third invocation at
+  commit 5 prep (F6.6.B / F6.5.1, 2026-05-05).** Q1 framing-
+  precedent reset: Reading A (full 5-value Effort Literal) was
+  substantively right but defended via F5.6.B-symmetry framing
+  that didn't carry — F5.6.B was about SQL CHECK migration cost;
+  effort Literal expansion is type-annotation cost. Reviewing-
+  Claude's pushback tested the precedent's actual conditions;
+  Code's reset honestly named "tried to import F5.6.B precedent's
+  authority via symmetric-framing dress-up." Reading A re-defended
+  on operator-agency grounds (Argument 2) — yaml field is operator
+  tuning surface; full Anthropic-supported set admits exploration.
+  First instance was F1.1 task_type γ scope-punt revisit; second
+  was F5.6.B Q1 enum reversal; third is this framing-precedent
+  reset.
+- **Framing-precedent-application discipline emerging as distinct
+  review surface (2026-05-05).** Pattern observation across the
+  three bidirectional-contradiction instances: commits 1-3
+  pushbacks were on **substance** (Code's recommendation was
+  wrong-on-merits; pushback exposed the wrong-ness). Commits 4-5
+  pushbacks were on **framing-precedent-application** (Code's
+  recommendation was substantively right but defended via
+  precedent-shape that didn't quite carry). Different shape;
+  different review-mindset target. The reviewing-Claude habit of
+  testing "does the precedent's actual conditions hold here?"
+  produces real corrections that substance-only review wouldn't
+  catch. Capture as distinct discipline pattern from
+  substance-disposition review.
+- **F2.1 surface-as-finding rule fifth invocation at commit 5
+  draft (2026-05-05) — trigger condition NOT FIRED per metric
+  clarification.** 19 collected / 7 unique vs F2.1's +9 estimate.
+  By collected count: 19/9 = 211% over (would trip 200% trigger);
+  by unique-function count: 7/9 = 78% under (doesn't trip). Mike
+  dispositioned (b) — accept unique-function as primary trigger
+  metric.
+
+  **Metric clarification pin (durable convention):** F2.1
+  surface-as-finding rule uses **unique-function count as primary
+  metric for trigger evaluation**. Reasoning: F2.1 estimates are
+  set at prep time before parametrize-blow-up patterns are
+  visible; estimates implicitly target unique-function intent.
+  Collected count is secondary observation that includes
+  parametrize multiplicity (coverage discipline, not cognitive
+  surface expansion). Trigger evaluation uses unique-function
+  metric; collected-count trajectory tracked as observation.
+
+  This is metric clarification, not retroactive trigger change.
+  The F2.5 trajectory note (commits 2-4: 64% → 93% → 190%) cited
+  collected counts because that was the framing in effect when
+  the trigger was set; (b)'s acceptance clarifies forward without
+  re-litigating prior commits.
+
+  **Unique-function trajectory across commits 2-5:**
+
+  | Commit | Unique actual | F2.1 estimate | Divergence |
+  |---|---|---|---|
+  | 2 | ~21 | ~14 | +50% |
+  | 3 | ~11 | ~8 | +37% |
+  | 4 | ~21 | ~10 | +110% |
+  | 5 | 7 | ~9 | −22% |
+
+  Different shape than collected-count trajectory (commits 2-4
+  ran ~2-3× baseline). Unique-function tracks closer to estimate
+  with one outlier (commit 4); commit 5 is UNDER baseline.
+
+  **Three-reason framing applicability per metric:**
+  - (1) Precedent-mirror tests: applies dominantly to **collected**
+    count (parametrize blow-ups); modestly to unique count
+    (default-populates patterns mirroring established
+    yaml-loading shapes).
+  - (2) Pushback-driven additions: applies to **unique** count
+    (new test functions added in response to review).
+  - (3) Disposition-driven invariant pins: applies to **unique**
+    count (sentinels and invariants are unique cognitive surface,
+    not parametrize multiplicity).
+
+  Three-reason framing applies primarily to unique-function
+  metric. Collected-count divergence dominantly attributable to
+  reason (1) parametrize blow-ups; not load-bearing for trigger
+  evaluation. Trigger condition stays at >200% with the
+  unique-function metric across commits 6-9; collected-count
+  observation continues without trigger-firing role.
 
 ---
 
@@ -3326,6 +3407,411 @@ Diff checkpoint surfaces commit-by-commit; commit 4 lands; commit
 5 prep opens (effort plumbing).
 
 **End of Followup-9.**
+
+---
+
+# Followup-10 — commit 5 prep checkpoint (effort plumbing — agent yaml field + supervisor + dispatcher pass `--effort`)
+
+**Date:** 2026-05-05. **Sub-milestone:** M5-continuous-pm-driver.
+**Commit scope:** F2.1 row 5.
+**Prerequisites landed:** commits 1-4 (workflow_id α, ff47573;
+pm_current_focus, b1ad27a; pm_spin_rationale_log, 433cef5;
+audit_sample_log, 1e323ca); .gitignore chore (414728f).
+
+**Structural shift from commits 1-4:** this commit is **plumbing**,
+not storage-layer expansion. No migration. No new MCP tool. No new
+table. No closed-enum CHECK constraint at the schema layer (Pydantic
+Literal still applies at the AgentConfig boundary). The questions
+shape themselves around **cross-module value flow** —
+yaml → AgentConfig → dispatcher/supervisor constructors → launch
+context → subprocess CLI args. Each step in the flow is a
+verification surface; the dispositions cluster around field
+placement, defaults, legacy-fallback when effort is absent, and
+plumbing-path choice.
+
+**Spec amendment scope deferred to commit 6** per F2.1 chain plan:
+addendum doc `docs/kickoff/opus-4-7-effort-and-thinking-addendum.md`
++ merges into 02 / 07 / 11 ride at commit 6 (docs-only). At commit 5
+the yaml fields land + plumbing wires up; at commit 6 the
+rationale-and-merges land. Commit 5 verifies plumbing without the
+docs being in place. Surface in F6.5.3 as anticipated pushback if
+the split feels wrong.
+
+**Per-role effort assignments per addendum (orchestrator-utilization-
+addendum.md):** PM xhigh, Engineer xhigh, Implementer xhigh, Tester
+high. Locked at this commit.
+
+---
+
+## F6.1 — touch points
+
+Per F2.1 row 5: `config/agents/*.yaml`, `bridge/supervisor_base.py`,
+`bridge/dispatcher.py:_default_launcher`, `agents/config.py`. Resolved
+file-by-file:
+
+| File | Status | Touch shape |
+|---|---|---|
+| `config/agents/pm.yaml` | EDIT | Add `effort: xhigh` line. |
+| `config/agents/engineer.yaml` | EDIT | Add `effort: xhigh` line. |
+| `config/agents/implementer.yaml` | EDIT | Add `effort: xhigh` line. |
+| `config/agents/tester.yaml` | EDIT | Add `effort: high` line. |
+| `src/meridian_orchestrator/agents/config.py` | EDIT | Add `Effort` Literal type alias; add `effort: Effort` field on AgentConfig (default per Q2 disposition). |
+| `src/meridian_orchestrator/bridge/dispatcher.py` | EDIT | Add `effort: str` field on `DispatchLaunchContext`; thread effort through `BridgeDispatcher.dispatch()` kwargs (per Q3 disposition); `_default_launcher` passes `--effort <level>` to subprocess. |
+| `src/meridian_orchestrator/bridge/supervisor_base.py` | EDIT | Add `effort: str` field on `SupervisorLaunchContext`; thread through; `_default_launcher` passes `--effort <level>`. |
+| `src/meridian_orchestrator/bridge/engineer_supervisor.py` | EDIT | When constructing SupervisorLaunchContext, populate effort from AgentConfig (Engineer's). |
+| `src/meridian_orchestrator/bridge/pm_supervisor.py` | EDIT | Same as engineer_supervisor for PM. |
+| `src/meridian_orchestrator/server.py` (or `tools/dispatch.py`) | EDIT | Wrapper / handler resolves effort from registry per Q3 disposition, threads to `dispatcher.dispatch()`. |
+| `src/meridian_orchestrator/main.py` | UNCHANGED OR EDIT | Lifespan-time wiring of registry → supervisor constructors. Whether main.py is touched depends on Q3. |
+| `tests/unit/agents/test_config.py` (existing) | EDIT | Add tests for `effort` field schema + Literal validation + per-yaml-file value assertions. |
+| `tests/unit/bridge/test_dispatcher.py` (existing) | EDIT | Verify `--effort <level>` lands in subprocess args; thread-through correctness. |
+| `tests/unit/bridge/test_supervisor_base.py` (existing) | EDIT | Same for supervisor launcher. |
+| `docs/kickoff/07-agent-configs-phase-one.md` | DEFERRED | Spec amendment lives at commit 6; not touched at commit 5. |
+| `docs/kickoff/{02,11}.md` | DEFERRED | Same. |
+| New addendum doc | DEFERRED | Same. |
+
+---
+
+## F6.2 — open questions (Q1-Q9)
+
+### Q1 — `Effort` Literal value scope: full CLI surface vs Phase-1-actual
+
+What values does the `Effort` Literal accept?
+
+- **Reading A — full CLI surface.** `Literal["low", "medium", "high", "xhigh", "max"]` per F1.3 Source 3 verification (Claude Code CLI accepts these 5 values). Defense-in-depth alongside the CLI's own validation. Operator-tunable: future operator adjustments (Tester to medium for cost; PM to max for high-stakes) admissible without migration.
+- **Reading B — Phase-1-actual.** `Literal["high", "xhigh"]` matching addendum-specified values only. Forced-fit narrower; future operator adjustments require schema change.
+- **Reading C — open string.** Pass through to CLI without pre-validation. Lowest discipline.
+
+**Recommendation: Reading A.** Effort is operator-tunable (different from `source_event_kind` at commit 4 which was bounded by what the loop emits — a system-side constraint). Operators changing effort per-agent should not require schema migration. Closed Literal matching CLI surface gives Pydantic-boundary defense without locking out legitimate operator config space. Reading B's narrowing surfaces the same forced-fit risk F5.6.B Q1 reading reversal exposed in the opposite direction; symmetric framing avoids that error.
+
+### Q2 — Default value when effort field is absent from yaml
+
+What happens if a yaml file is loaded without an `effort` field?
+
+- **Reading A — required field; AgentConfig fails Pydantic validation.** Yamls must declare effort explicitly. Hard-fail at load time. Operator editing a yaml to remove effort surfaces the bug at daemon startup.
+- **Reading B — soft default.** Pydantic field defaults to `"high"` (Claude Code's CLI default per F1.3 Source 3). Yamls without effort silently get the default. WARN log on load.
+- **Reading C — None default + no `--effort` flag passed.** AgentConfig's effort defaults to None; subprocess invocation skips the flag entirely; subprocess inherits Claude Code's own default. No explicit failure mode; no override of CC's behavior when yaml is silent.
+
+**Recommendation: Reading A (required field; hard-fail).** Effort is a deliberate operator config per addendum; missing field is a bug worth surfacing loudly. Soft defaults (B/C) mask config drift — a yaml edit that accidentally removes effort would not produce visible behavior change (CC defaults are reasonable) but would silently disagree with operator intent. Hard-fail forces the yaml to be explicit; pairs with Phase 1 conventions of explicit-config-over-magic-defaults (mirrors `enable_engineer_supervisor=False` opt-in shape in spirit — operator must declare).
+
+**Mitigation for test fixtures:** AgentConfig's pytest fixtures may need to specify effort. Surface as part of the test-target estimate; trivial fixture extension.
+
+### Q3 — Plumbing path: dispatcher kwarg vs registry access vs static mapping
+
+How does effort flow from AgentConfig (loaded by registry) into the launcher's subprocess args?
+
+- **Reading A — kwarg through `dispatcher.dispatch()`.** MCP wrapper layer (server.py's `_register_dispatch_initiation_tools`) resolves effort from registry, passes through `dispatcher.dispatch(..., effort=...)`. Dispatcher appends to `DispatchLaunchContext`. Supervisor symmetric: supervisor's caller (PMSupervisor / EngineerSupervisor) reads its own role's effort from a held registry reference, passes into SupervisorLaunchContext.
+- **Reading B — pass `AgentRegistry` to `BridgeDispatcher` constructor.** Dispatcher does the lookup at dispatch time. BridgeDispatcher's signature gains a registry param.
+- **Reading C — static `effort_per_role` mapping.** Lifespan builds `{role: effort}` from registry once at startup; passes to BridgeDispatcher as a static dict. Dispatcher looks up by role at dispatch time. Dispatcher doesn't depend on AgentRegistry.
+
+**Recommendation: Reading A.** Two reasons:
+1. **Symmetric with existing pattern** — `dispatch_implementer` / `dispatch_tester` MCP handlers already resolve role-specific config (model_tier_default → `tools/dispatch.py:_resolve_model_for_role` calls `registry.get_agent_config(role)`). Adding effort to the same resolution path is a small extension.
+2. **No new dispatcher dependency** — Reading B couples BridgeDispatcher to AgentRegistry, expanding its constructor surface. Reading C requires lifespan to build the mapping at the moment registry is loaded but supervisors aren't yet constructed (correlation order issue). Reading A keeps each constructor's dependency surface minimal.
+
+For supervisors: SupervisorBase / EngineerSupervisor / PMSupervisor are currently constructed with role-specific config at lifespan time. Their effort can be passed at construction (constructor kwarg) and stored as instance state, OR resolved at launch time from a registry reference held by the supervisor. Recommend: constructor kwarg for symmetry with how supervisors already receive role-specific config like `working_directory`.
+
+### Q4 — Per-role effort mapping location
+
+Per addendum: PM/Engineer/Implementer xhigh; Tester high. Where does this mapping live?
+
+- **Reading A — per-yaml hard-coded.** Each yaml file declares its own effort line; no shared constant.
+- **Reading B — shared constant in `agents/config.py`** — `DEFAULT_EFFORT_PER_ROLE: dict[AgentRole, Effort]`. Yamls that omit effort inherit from constant; yamls with explicit effort override.
+- **Reading C — implicit role-based default at load time.** AgentConfig's `effort` defaults via a model-validator that resolves to role-keyed default if not specified.
+
+**Recommendation: Reading A (per-yaml hard-coded).** Phase 1 has 4 yamls; the per-yaml shape mirrors how `model_tier_default` already works (each yaml declares its own value). Reading B/C add indirection without offsetting benefit at this scale; future role additions just declare their own yaml. Operator changes one yaml affects only that agent — clean blast radius.
+
+If Q2 lands as Reading B/C (soft default), Reading B for Q4 becomes natural alignment (the soft default IS the role-keyed mapping). If Q2 stays at Reading A (hard-fail), Reading A here is the right shape — no implicit defaults to manage.
+
+### Q5 — Subprocess CLI flag literal: `--effort` exact name verification
+
+F1.3 Source 3 verified the flag exists; the literal `--effort <level>` shape needs verification at draft time. Possibilities:
+- `--effort <level>`
+- `--effort=<level>`
+- `--effort-level <level>`
+- `--reasoning-effort <level>`
+- Other flag literal
+
+This isn't a multi-Reading question — it's an empirical verification step that lands at draft time via `claude --help` or current Claude Code docs. Surface as a pre-draft verification item.
+
+**Action:** verify the exact flag literal at draft time. If F1.3 Source 3's reading is wrong (e.g., flag is named differently or accepts arg in `=`-glued form), surface as draft deviation per discipline; document the actual flag in the launcher's code comment.
+
+### Q6 — Mike's interactive PM session: documented non-effect
+
+Per F3.6 Q7 disposition: Mike's interactive PM session is not daemon-launched; the daemon has no plumbing path into Mike's Claude Code session. The yaml's effort field documents the daemon-launched PM-continuous subprocess. Mike's tooling defaults to xhigh on Opus 4.7 (per Claude Code v2.1.117+ defaults).
+
+**No question for commit 5.** The effort plumbing applies only to daemon-launched subprocesses (PMSupervisor's PM-continuous, EngineerSupervisor's Engineer, BridgeDispatcher's Implementer/Tester). Documented in the spec amendment at commit 6.
+
+Surfacing this here for completeness — Mike-edited future yaml might assume effort governs Mike's session; the docstring on AgentConfig.effort should make the daemon-only scope explicit.
+
+### Q7 — Test surface shape
+
+Test categories at commit 5:
+
+1. **Yaml loading**: each yaml's effort field parses into the expected value (4 yamls × 1 assertion = 4 unique tests OR 1 parametrized × 4 collected).
+2. **Pydantic Literal validation**: bogus effort value rejected at AgentConfig construction (1 unique).
+3. **Effort Literal sentinel**: closed-enum sentinel pattern (per F2.5 graduation note: "no longer requires watch-for-pattern tracking" — but the sentinel-test pattern continues uniformly). 1 unique listing all 5 values from Reading A.
+4. **Hard-fail on missing effort** (per Q2 disposition): 1 unique test.
+5. **Dispatcher subprocess args**: `--effort <level>` lands in command list; positioning correct. 1-2 unique.
+6. **Supervisor base subprocess args**: same for the supervisor launcher. 1-2 unique.
+7. **Per-role mapping in yamls**: `pm.yaml`'s effort is xhigh; `tester.yaml`'s is high. Either covered by yaml-loading tests or a separate addendum-compliance test.
+
+**Total estimate: 9-12 unique / 12-18 collected** under recommended dispositions. F2.1 estimate: +9. Per closeout pattern observation, expect actual to run higher per the three-reason framing. Expected to NOT trip the 200% trigger condition (>20 collected).
+
+### Q8 — Mock subprocess vs actual subprocess in tests
+
+- **Reading A — mock the launcher.** Verify the subprocess args list contains `--effort <level>` at the expected position. Standard test-injection pattern (existing dispatcher / supervisor tests already mock the launcher).
+- **Reading B — actual claude subprocess invocation.** Integration test that exercises real subprocess. Heavyweight; verifies CC's CLI semantics rather than the daemon's plumbing.
+
+**Recommendation: Reading A (mock).** The CLI flag's actual semantics are Claude Code's contract, not the daemon's. The daemon's responsibility is "produce the right command line"; verifying the produced args list is the discipline target. Existing test fixtures already mock the launcher; effort plumbing tests slot in.
+
+### Q9 — Effort field freeze: once set at AgentConfig, immutable for the daemon's lifetime
+
+Once daemon starts, effort is loaded from yaml and held in registry. If Mike edits a yaml mid-flight (hot-reload via `watchfiles` per existing AgentRegistry behavior), does the running supervisor / dispatcher pick up the new effort?
+
+- **Reading A — hot-reload picks up new effort; subsequent dispatches use new value.** Dispatcher re-resolves at each `dispatch()` call via Reading A's kwarg-from-registry path; supervisor re-reads at next launch (after compaction respawn or restart). Aligns with how `model_tier_default` hot-reloads today.
+- **Reading B — frozen at startup; effort changes require daemon restart.** Snapshot-on-startup; in-flight subprocesses unaffected; new dispatches use the snapshot.
+- **Reading C — depends on Q3.** Reading A on Q3 (kwarg-resolution per dispatch) gives Reading A here naturally. Reading B/C on Q3 (constructor kwarg) gives Reading B here.
+
+**Recommendation: Reading A (hot-reload picks up).** Aligns with existing model_tier_default hot-reload behavior; operator editing yaml expects behavior change. Reading B's freeze is surprising. The supervisors' "next launch" granularity is acceptable — supervisors are long-lived and respawns are infrequent; effort is read at launch time.
+
+This depends on Q3 Reading A (kwarg resolution from registry per dispatch). If Q3 lands as Reading C (static mapping), this question's Reading A becomes harder to honor.
+
+---
+
+## F6.3 — watch-for-pattern check
+
+| Pattern | Status pre-commit | Commit 5 instance | Disposition |
+|---|---|---|---|
+| Closed-enum CHECK + sentinel test | Graduated to established convention at commit 4 (9 instances) | +1 (Effort Literal) at AgentConfig boundary; no SQL CHECK because no migration. Pydantic Literal sentinel test continues. | Pattern uniform; no extraction surface. |
+| Yaml field plumbing through DispatchLaunchContext / SupervisorLaunchContext | NEW pattern | First yaml-field plumbing through both launch contexts. Future yaml fields with subprocess-arg implications would mirror this shape. | Watch — flag for second instance. |
+| `bridge/` ↔ `agents/` cross-layer dependency | NEW potentially | Q3 Reading A's "wrapper resolves effort from registry → dispatch kwarg" doesn't introduce new bridge→agents imports (wrapper layer has both registry and dispatcher). Reading B/C might. | Per Q3 disposition. |
+| Production-code-surface-for-testability | 2 pre-chain (token_store=None, _run_lifespan_body) | Possibly +1 if effort plumbing requires injection seams beyond existing launcher mock. Watch at draft time. | Watch. |
+| F2.1 surface-as-finding rule | 4 invocations | Likely +1 at commit 5 draft. Per closeout trigger condition: re-baseline if >200% over F2.1 estimate (>18 tests vs F2.1's +9). | Surface explicitly at diff checkpoint. |
+
+---
+
+## F6.4 — test-target estimate
+
+F2.1 estimate: +9. Working breakdown under recommended dispositions
+(Q1-A, Q2-A, Q3-A, Q4-A, Q5-verify-at-draft, Q7-default,
+Q8-A, Q9-A):
+
+| Layer | Count |
+|---|---|
+| Effort Literal sentinel (5 values pass + bogus rejects) | 2 |
+| Per-yaml effort assertion (4 agents × 1 unique parametrized) | 1 unique / 4 collected |
+| Hard-fail on missing effort (Q2-A pin) | 1 |
+| AgentConfig schema test (effort field shape) | 1 |
+| Dispatcher launcher: `--effort <level>` in args | 1-2 |
+| Supervisor launcher: `--effort <level>` in args | 1-2 |
+| Engineer/PM supervisor effort threading | 1-2 |
+| **Total under recommendations** | **9-11 unique / 12-15 collected** |
+
+**vs F2.1 estimate of +9: roughly aligned.** Per closeout pattern
+observation (three-reason framing, four prior invocations), expect
+some divergence — disposition-driven invariant pins (Q2 hard-fail,
+Q9 hot-reload behavior) and precedent-mirror tests
+(yaml-loading-per-agent parametrize) likely push collected count
+higher.
+
+**Trajectory observation:** commits 2-4 ran 64% → 93% → 190% over.
+Commit 5's structural shift (no migration, no MCP tool, smaller
+total surface) may break the trajectory if final divergence stays
+under 100%. **Trigger condition for re-baseline activates if
+divergence >200% (>18 tests collected).** Surface explicitly at
+diff checkpoint per F2.5 closeout trigger pin.
+
+---
+
+## F6.5 — anticipated pushbacks
+
+Three weak points likely to surface at review:
+
+1. **Q1 Reading A vs Phase-1-actual narrowing.** Reading B narrows
+   the Effort Literal to {high, xhigh} matching addendum-specified
+   usage. F5.6.B Q1 reading reversal landed Reading A on
+   source_event_kind because the kinds were operationally bounded
+   and operator-tunable scope was limited. Effort is more genuinely
+   operator-tunable (different per-role tunings reasonable for
+   different cost/latency trade-offs). Reading A holds; surface for
+   reviewing-Claude to confirm the symmetry framing isn't sleight
+   of hand.
+
+2. **Q2 Reading A hard-fail vs soft default.** Hard-fail at yaml
+   load is the discipline shape but introduces a friction surface
+   at test-fixture construction (every AgentConfig test fixture
+   must specify effort). Reading C (None default + skip flag) is
+   the friction-minimizing alternative. The discipline argument
+   wins on operator-config integrity grounds, but I should
+   acknowledge the friction trade. If Mike values fixture
+   simplicity over discipline-loud, Reading C is defensible. The
+   trade is real.
+
+3. **Q3 Reading A vs Reading C plumbing-path choice.** Reading C
+   (static `effort_per_role` mapping passed to BridgeDispatcher
+   constructor) avoids per-dispatch registry lookup. Reading A
+   (kwarg per dispatch) matches existing model_tier_default
+   resolution path but adds per-dispatch lookup work — small
+   per-call cost, but in PM's high-cadence loop world, every
+   per-dispatch call sums up. If Q9's hot-reload requirement is
+   important, Reading A wins. If hot-reload doesn't matter (Reading
+   B on Q9), Reading C is faster. Q3 disposition depends on Q9
+   disposition; surface the dependency explicitly.
+
+4. **Commit 5 / commit 6 split.** F2.1's chain plan separates
+   plumbing (commit 5) from spec amendment (commit 6). At commit 5,
+   the yamls ship with `effort` lines but no spec doc explains
+   why the values were chosen. Future-Claude reading commit 5 in
+   isolation (e.g., during a partial git blame exploration) sees
+   "effort: xhigh" without rationale; that rationale lands at
+   commit 6 (the addendum doc + merged 02/07/11 docs). Acceptable
+   shape per F2.1 chain plan. Surface as deliberate scope choice;
+   if Mike disposition prefers folding commit 6 into commit 5, the
+   chain plan revises at this point.
+
+---
+
+## F6.6 — what lands at the diff checkpoint
+
+After Mike disposition Q1-Q9 + the four anticipated-pushback items:
+
+- Effort Literal added to `agents/config.py` per Q1
+- `effort` field added to AgentConfig per Q2
+- Per-yaml `effort:` lines added per Q4 (PM/Engineer/Implementer
+  xhigh; Tester high)
+- `DispatchLaunchContext` / `SupervisorLaunchContext` extended with
+  effort field
+- `_default_launcher` invocations pass `--effort <level>` per Q5
+  (verified at draft time)
+- Dispatcher `dispatch()` kwarg + supervisor constructor kwarg per
+  Q3
+- Wrapper layer in `server.py` resolves effort from registry per Q3
+- Tests for yaml loading, Literal validation, dispatcher args,
+  supervisor args (~9-15 collected)
+- F2.1 divergence assessment surfaced explicitly at diff checkpoint
+  per F2.5 trigger-condition pin
+- 11-engineer-bridge.md NOT touched (commit 6 scope per F2.1
+  chain plan; will land alongside addendum doc)
+
+Diff checkpoint surfaces commit-by-commit; commit 5 lands; commit
+6 prep opens (hybrid spec amendment doc + merges into 02 / 07 / 11).
+
+**End of Followup-10.**
+
+---
+
+# Followup-11 — F6.2 disposition feedback + Q1/Q2 re-engagement
+
+**Date:** 2026-05-05. **Trigger:** Reviewing-Claude's dispositions on
+F6.2 Q1-Q9 + F6.5 pushbacks. Q1 sent back for framing-precedent
+reset; Q2 sent back for friction quantification before disposition;
+Q3-Q9 + commit-message refinement accepted clean.
+
+Section numbered F6.6.
+
+---
+
+## F6.6.A — accepts noted (Q3 / Q4 / Q5 / Q6 / Q7 / Q8 / Q9 + commit-message refinement)
+
+| Q | Disposition | Notes |
+|---|---|---|
+| Q3 | Reading A (kwarg per dispatch from registry) | Symmetric with model_tier_default resolution; no new dispatcher dependency. |
+| Q4 | Reading A (per-yaml hard-coded) | Mirrors model_tier_default precedent; no centralization. |
+| Q5 | Verification at draft time | Per F1.3 Source 3 verification + on-draft Claude Code CLI doc check. Document verification source in launcher code comment. |
+| Q6 | Non-question | Mike's interactive PM session governed by client convention; daemon-launched PM-continuous governed by yaml. Documentation lands at commit 6. |
+| Q7 | Informational | Test-target estimate assessed at diff checkpoint. F2.1 re-baseline trigger active. |
+| Q8 | Reading A (mock subprocess) | Existing pattern; verify args list contains `--effort <level>`. |
+| Q9 | Reading A (hot-reload at next dispatch/launch) | Composes with Q3-A; aligns with model_tier_default hot-reload behavior. |
+| commit-5/6 split | Accept with cross-reference | Commit 5 message body explicitly references commit 6 for rationale-doc forward pointer. Cheap insurance against orphaned-context. |
+
+---
+
+## F6.6.B — Q1 reconsidered: drop F5.6.B symmetry framing; defend on operator-agency
+
+**Reviewing-Claude's pushback exposed framing-precedent-application
+sleight of hand:** F5.6.B was a SQL CHECK on a cohort key column
+where expansion costs a migration; effort Literal expansion is type
+annotation + sentinel test. Migration-cost asymmetry is real but I
+tried to dress it up as symmetric reasoning to import F5.6.B's
+precedent authority. Drop entirely.
+
+**Reading A defended on operator-agency (Argument 2):**
+
+Effort is operator-tunable per Anthropic's own guidance — xhigh for
+agentic loops, minimum high for intelligence-sensitive work,
+medium/low admissible for cost-sensitive contexts, max for
+hard-problem dispatches. The yaml field IS the operator's tuning
+surface. Restricting to Phase-1-actual `{high, xhigh}` (Reading B)
+freezes operator agency without architectural reason. Full 5-value
+Literal admits exploration without migration overhead.
+
+Argument 1 (validate at yaml-load time) supports closed-enum-of-some-shape
+but isn't load-bearing for the 5-value choice. Argument 2 is the
+defense.
+
+**[DISPOSITIONED 2026-05-05: Reading A accepted on operator-agency
+grounds.]** Code comment on the `Effort` Literal documents Phase 1
+actual usage per orchestrator-utilization-addendum:
+
+> Phase 1 actual usage per addendum: PM/Engineer/Implementer at
+> xhigh, Tester at high. Full 5-value surface admits operator
+> tuning beyond defaults — medium/low for cost-conscious
+> exploration, max for high-stakes overrides — without schema
+> migration overhead.
+
+---
+
+## F6.6.C — Q2 reconsidered: friction quantified; Reading A accepted
+
+**Friction inventory (verified 2026-05-05):**
+
+- Direct `AgentConfig(...)` construction sites in tests: **2 sites in 2 files.**
+  - `tests/unit/agents/test_config.py:136-140` — `test_agent_config_frozen` (mechanical kwarg add)
+  - `tests/unit/agents/test_permissions.py:12-20` — `_agent()` helper builder (mechanical kwarg + helper signature update)
+- Yaml-loading test fixtures: **zero friction** (all use `_seed_repo_yamls` or `REPO_CONFIG_DIR` reads from updated canonical yamls).
+- Source-code AgentConfig construction sites: **zero** (only via `load_agent_config` from yaml).
+
+**Total: 2 sites, both mechanical kwarg adds, no fixture rework.**
+
+Well below the 5-10 threshold for clean-Reading-A.
+
+**[DISPOSITIONED 2026-05-05: Reading A accepted.]** Hard-fail
+required field gives discipline shape without compounding test
+cost. When updating the 2 test sites, inline context comment
+documents the kwarg's required-by-disposition origin:
+
+> effort: required per F6.2 Q2 disposition (hard-fail surfacing
+> config drift). Future-Claude removing this as "unused" without
+> context would silently violate the discipline.
+
+---
+
+## F6.6.D — what lands at the diff checkpoint
+
+After F6.6.B + F6.6.C dispositions land:
+
+- Effort Literal added to `agents/config.py` (full 5-value per
+  Q1-A; code-comment documents Phase 1 actual usage)
+- `effort: Effort` field added to AgentConfig (required, no
+  default, per Q2-A)
+- Per-yaml `effort:` lines added to all 4 agents per Q4-A
+- `DispatchLaunchContext` / `SupervisorLaunchContext` extended
+- `_default_launcher` invocations pass `--effort <level>`
+  (verified flag literal per Q5)
+- Dispatcher `dispatch()` kwarg + supervisor effort threading per
+  Q3-A
+- Wrapper layer in `server.py` resolves effort from registry per
+  Q3-A
+- 2 existing test sites updated with `effort=` kwarg + inline
+  context comment
+- New tests for yaml loading, Literal validation, dispatcher /
+  supervisor args
+- F2.1 divergence assessment surfaced at diff checkpoint
+- Commit message body references commit 6 explicitly for rationale
+  forward pointer
+
+Spec amendment: NONE at commit 5 (deferred to commit 6 per F6.5.4).
+
+**End of Followup-11.**
 
 ---
 

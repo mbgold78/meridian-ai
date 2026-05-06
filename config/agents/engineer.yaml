@@ -18,6 +18,13 @@ manages:
   - implementer
   - tester
 model_tier_default: sonnet
+# Effort level for daemon-launched Engineer-supervisor subprocess
+# per orchestrator-utilization-addendum. xhigh for agentic loops
+# (Engineer's continuous spec composition + dispatch coordination
+# is intelligence-sensitive). Operator may tune via the full
+# Anthropic-supported set (low/medium/high/xhigh/max) — see pm.yaml
+# § effort for full guidance.
+effort: xhigh
 
 mcp_tools_allowed:
   # Task management

@@ -36,6 +36,30 @@ class AgentConfigError(ValueError):
 AgentRole = Literal["pm", "engineer", "implementer", "tester"]
 ModelTier = Literal["haiku", "sonnet", "opus"]
 
+# Effort level for the agent's daemon-launched Claude Code subprocess.
+# Verified via `claude --help` (2026-05-05): the CLI flag is
+# `--effort <level>` accepting low/medium/high/xhigh/max.
+#
+# Phase 1 actual usage per orchestrator-utilization-addendum:
+# PM/Engineer/Implementer at xhigh, Tester at high. Full 5-value
+# surface admits operator tuning beyond defaults — medium/low for
+# cost-conscious exploration, max for high-stakes overrides — without
+# schema migration overhead.
+#
+# Mike's interactive PM Claude Code session is governed by client-side
+# defaults (Claude Code v2.1.117+ defaults to xhigh on Opus 4.7), not
+# this field. This field configures daemon-launched subprocesses only:
+# PMSupervisor's PM-continuous, EngineerSupervisor's Engineer,
+# BridgeDispatcher's Implementer/Tester per-dispatch subprocesses.
+#
+# Closed-enum sentinel pattern continues per F2.5 graduation note;
+# operator-agency reasoning per F6.6.B (full surface admits operator
+# exploration without freezing tunable space). The yaml-loader
+# Pydantic validation rejects typo/unsupported values at load time,
+# rather than letting them flow to subprocess args and surface as
+# runtime errors.
+Effort = Literal["low", "medium", "high", "xhigh", "max"]
+
 
 class AgentConfig(BaseModel):
     """Validated agent configuration loaded from a single YAML file.
@@ -54,6 +78,13 @@ class AgentConfig(BaseModel):
     reports_to: AgentRole | None = Field(default=None)
     manages: list[AgentRole] = Field(default_factory=list)
     model_tier_default: ModelTier = Field(default="sonnet")
+    # Required field per F6.2 Q2 disposition (hard-fail surfacing
+    # config drift). No default — yamls must declare effort
+    # explicitly. Editing a yaml to remove the effort line surfaces
+    # the omission at daemon startup as a Pydantic validation error,
+    # not as a silent default; soft-default would mask operator
+    # config bugs. See module docstring above for the value semantics.
+    effort: Effort
     system_prompt: str
     mcp_tools_allowed: list[str] = Field(default_factory=list)
     knowledge_paths_readable: list[str] = Field(default_factory=list)

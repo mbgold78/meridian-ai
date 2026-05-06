@@ -110,6 +110,12 @@ class PMSupervisor(LongRunningSupervisor):
             respawn_cap=respawn_cap,
             respawn_window_seconds=respawn_window_seconds,
             grace_seconds=grace_seconds,
+            # Effort level resolved from registry's PM config per F6.2
+            # Q3 Reading A. Mirrors EngineerSupervisor's threading
+            # pattern. Mike's interactive PM session not affected —
+            # this configures the daemon-launched PM-continuous
+            # subprocess only.
+            effort=pm.config.effort,
         )
 
     # ---- LongRunningSupervisor hooks -------------------------------------

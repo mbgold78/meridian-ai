@@ -17,6 +17,11 @@ def _agent(role: str, manages: list[str] | None = None, tools: list[str] | None 
         manages=manages or [],  # type: ignore[arg-type]
         system_prompt="x",
         mcp_tools_allowed=tools or [],
+        # Required per F6.2 Q2 disposition (hard-fail surfacing config
+        # drift). Permission tests don't depend on effort value; "high"
+        # is a stable test default. Removing this kwarg without context
+        # would silently violate the discipline.
+        effort="high",
     )
 
 

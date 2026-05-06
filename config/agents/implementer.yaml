@@ -16,6 +16,12 @@ display_name: Implementer
 reports_to: engineer
 manages: []
 model_tier_default: sonnet
+# Effort level for daemon-launched Implementer dispatch subprocess
+# per orchestrator-utilization-addendum. xhigh for code-change work
+# (intelligence-sensitive per Anthropic guidance: "minimum high for
+# intelligence-sensitive"). Operator may tune via the full
+# Anthropic-supported set — see pm.yaml § effort for full guidance.
+effort: xhigh
 
 mcp_tools_allowed:
   # Task management (own only — sub-agents see only their claimed tasks)

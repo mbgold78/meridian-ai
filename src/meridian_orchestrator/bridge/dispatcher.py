@@ -100,6 +100,15 @@ class DispatchLaunchContext:
     prompt: str
     working_directory: Path
     token: str
+    # Effort level for the claude subprocess invocation per
+    # M5-continuous-pm-driver commit 5 effort plumbing. Resolved at
+    # dispatch time from the registry's AgentConfig.effort for the
+    # role (per F6.2 Q3 Reading A: kwarg-from-registry resolution
+    # mirrors model_tier_default's pattern). Passed to the launcher
+    # which threads it into the `claude --effort <level>` subprocess
+    # flag. Phase 1 values per orchestrator-utilization-addendum:
+    # Implementer xhigh, Tester high.
+    effort: str = "high"
     env_extras: dict[str, str] = field(default_factory=dict)
 
 
@@ -171,8 +180,15 @@ async def _default_launcher(ctx: DispatchLaunchContext) -> SubprocessHandle:
     """
     env = build_subprocess_env(token=ctx.token, dispatch_id=ctx.dispatch_id)
     env.update(ctx.env_extras)
+    # CLI flag literal verified via `claude --help` (2026-05-05):
+    # `--effort <level>` accepts low/medium/high/xhigh/max. Flag
+    # appears before `-p` so the prompt is the final positional
+    # argument; this matches the existing argv ordering pattern
+    # for claude subprocess invocations across the codebase.
     proc = await asyncio.create_subprocess_exec(
         "claude",
+        "--effort",
+        ctx.effort,
         "-p",
         ctx.prompt,
         cwd=str(ctx.working_directory),
@@ -240,6 +256,7 @@ class BridgeDispatcher:
         timeout_seconds: int = 300,
         timeout_override_seconds: int | None = None,
         model: ModelString | None = None,
+        effort: str = "high",
         keep_worktree_on_failure: bool = False,
         engineer_decisions: list[dict[str, Any]] | None = None,
         actor: str,
@@ -400,6 +417,7 @@ class BridgeDispatcher:
                 prompt=prompt,
                 working_directory=worktree.path,
                 token=issued_token.token,
+                effort=effort,
             )
             proc = await self._launcher(ctx)
             await self._storage.execute(

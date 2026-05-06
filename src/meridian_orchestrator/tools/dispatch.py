@@ -217,6 +217,7 @@ async def dispatch_implementer(
         ) from exc
 
     model = _resolve_model_for_role(registry, "implementer")
+    effort = _resolve_effort_for_role(registry, "implementer")
 
     outcome = await dispatcher.dispatch(
         task_id=request.task_id,
@@ -226,6 +227,7 @@ async def dispatch_implementer(
         spec_path_descriptor=spec_path,
         timeout_override_seconds=request.timeout_override_seconds,
         model=model,
+        effort=effort,
         keep_worktree_on_failure=request.keep_worktree_on_failure,
         engineer_decisions=[d.model_dump() for d in request.engineer_decisions],
         actor=caller_agent_id,
@@ -252,6 +254,34 @@ def _resolve_model_for_role(
     if agent is None:
         return None
     return model_for_tier(agent.config.model_tier_default)
+
+
+def _resolve_effort_for_role(
+    registry: AgentRegistry | None, role: str
+) -> str:
+    """Resolve the effort level for a dispatched role via the registry's
+    ``AgentConfig.effort`` field per F6.2 Q3 Reading A (M5-continuous-pm-
+    driver commit 5).
+
+    Returns ``"high"`` (Claude Code's CLI default per ``claude --help``
+    verification 2026-05-05) when ``registry`` is ``None`` or when the
+    role has no registered config — same fallback pattern as
+    :func:`_resolve_model_for_role`. Production paths always pass a
+    populated registry; lightweight tests that pass ``None`` get the
+    safe default.
+
+    Per F6.2 Q9 Reading A: yaml hot-reload picks up new effort at the
+    NEXT dispatch (this resolution runs per dispatch from
+    ``dispatch_implementer`` / ``dispatch_tester`` handlers); supervisors'
+    effort updates at next supervisor restart per the supervisor-
+    granularity acknowledgment in the same disposition.
+    """
+    if registry is None:
+        return "high"
+    agent = registry.get(role)  # type: ignore[arg-type]
+    if agent is None:
+        return "high"
+    return agent.config.effort
 
 
 def _outcome_to_implementer_output(
@@ -301,6 +331,7 @@ async def dispatch_tester(
         )
 
     model = _resolve_model_for_role(registry, "tester")
+    effort = _resolve_effort_for_role(registry, "tester")
 
     outcome = await dispatcher.dispatch(
         task_id=request.task_id,
@@ -310,6 +341,7 @@ async def dispatch_tester(
         spec_path_descriptor=None,
         timeout_override_seconds=request.timeout_override_seconds,
         model=model,
+        effort=effort,
         keep_worktree_on_failure=request.keep_worktree_on_failure,
         engineer_decisions=[d.model_dump() for d in request.engineer_decisions],
         actor=caller_agent_id,

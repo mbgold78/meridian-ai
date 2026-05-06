@@ -93,6 +93,12 @@ class EngineerSupervisor(LongRunningSupervisor):
             respawn_cap=respawn_cap,
             respawn_window_seconds=respawn_window_seconds,
             grace_seconds=grace_seconds,
+            # Effort level resolved from registry's Engineer config per
+            # F6.2 Q3 Reading A. Held on the base across respawns
+            # (heartbeat-driven respawns reuse the same effort);
+            # yaml hot-reload picks up new effort at the NEXT
+            # supervisor restart per F6.2 Q9 disposition.
+            effort=engineer.config.effort,
         )
 
     # ---- LongRunningSupervisor hooks -------------------------------------
