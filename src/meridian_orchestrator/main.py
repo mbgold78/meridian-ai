@@ -18,6 +18,7 @@ from contextlib import asynccontextmanager
 import structlog
 
 from meridian_orchestrator.agents.registry import AgentRegistry
+from meridian_orchestrator.audit.sampler import Sampler
 from meridian_orchestrator.auth import TokenStore
 from meridian_orchestrator.bridge.canonical import (
     CanonicalClone,
@@ -259,6 +260,15 @@ async def _run_lifespan_body(
             # and the daemon fails to start — load-bearing for record_api_call.
             await registry.seed_into_storage(storage, company_id)
 
+            # M5-continuous-pm-driver commit 4: random-audit-sampling
+            # Sampler. Constructed-once-and-immutable from
+            # settings.audit_sample_percentage; passed directly to
+            # build_server (not via closure pattern — Sampler doesn't
+            # have late-binding state like OAuthUsagePoller's snapshot).
+            # Default 0.0 = sampling disabled per F5.2 Q9 Reading A
+            # opt-in shape; operator sets non-zero via env var to enable.
+            sampler = Sampler(settings.audit_sample_percentage)
+
             mcp_task = asyncio.create_task(
                 serve_mcp(
                     settings,
@@ -268,6 +278,7 @@ async def _run_lifespan_body(
                     get_engineer_supervisor=get_engineer_supervisor,
                     get_dispatcher=get_dispatcher,
                     get_oauth_usage_snapshot=get_oauth_usage_snapshot,
+                    sampler=sampler,
                 ),
                 name="mcp-server",
             )

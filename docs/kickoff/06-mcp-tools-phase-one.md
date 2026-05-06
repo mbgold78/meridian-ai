@@ -387,6 +387,43 @@ Ships at M5-continuous-pm-driver commit 3 alongside `pm_spin_rationale_log` tabl
 
 **Not audited** (per F4.2 Q6 Reading A with F4.5.3 reasoning). `pm_spin_rationale_log` IS itself the durable record; cross-recording into `audit_log` would create two-write-paths-for-same-event with divergence risk and operator confusion about canonical source. The audit_log scope is cross-cutting events needing cross-domain query; pm_spin events query target IS the table directly. Volume (~2880 rows/day at 30s cadence) is a second-order observation, not the load-bearing reason.
 
+#### `record_sampleable_event`
+
+```python
+class RecordSampleableEventInput(BaseModel):
+    source_event_kind: Literal[
+        'pm.current_focus.completed',
+        'pm.current_focus.contract_violation',
+        'pm.current_focus.superseded',
+        'pm.spin_rationale.recorded',
+        'dispatch.complete_called',
+    ]
+    source_event_id: str
+
+class RecordSampleableEventOutput(BaseModel):
+    sample_id: str | None    # None when not sampled (most common case at default-disabled config)
+```
+
+Ships at M5-continuous-pm-driver commit 4 alongside `audit_sample_log` table + `audit/sampler.py:Sampler`. PM's continuous loop driver subprocess (commits 7-8) is the production caller: after observing a sampleable event, the loop calls this hook tool; `Sampler.maybe_sample` coin-flips per `Settings.audit_sample_percentage` and writes an `audit_sample_log` row with `re_eval_state='pending'` if selected. The async re-evaluator processing pending → complete is **deferred to the post-M5-flag-flips focused-observability sub-milestone** per `BACKLOG.md` § Carry-forward to future sub-milestones.
+
+**Sampling cadence + algorithm**: coin flip per call with probability `audit_sample_percentage` (Settings field; default 0.0 = disabled, opt-in shape per F5.2 Q9 Reading A). Operator sets non-zero via `MERIDIAN_ORCH_AUDIT_SAMPLE_PERCENTAGE` env var to enable.
+
+**source_event_kind closed enum** (F5.6.B Q1 reading reversal, 2026-05-05): five values match the events PM's loop will observe. PM-emittable scope:
+
+- `pm.current_focus.completed`: completion-validation outcomes — load-bearing case for re-evaluation.
+- `pm.current_focus.contract_violation`: explicit validation failures — re-evaluation can confirm or revise.
+- `pm.current_focus.superseded`: implicit pivots from Mike-interrupt pressure.
+- `pm.spin_rationale.recorded`: per-tick keep-alive-vs-shutdown decisions — random spot-check audits per silent-compliance defense framing.
+- `dispatch.complete_called`: Engineer's `complete_dispatch` outcomes (PM observes via `complete_dispatch` outcome reads).
+
+Future expansion via migration when Engineer's continuous loop spec lands or operator workload demands.
+
+**source_event_id semantic** (per-kind): see `05-data-model.md` § `audit_sample_log` for the canonical id-source-table per kind. Four kinds reference `audit_log.id`; `pm.spin_rationale.recorded` references `pm_spin_rationale_log.id` (since spin_rationale events have no audit_log integration per commit 3 Q6 Reading A).
+
+**Allowed for PM only.** Permission scope is independent of the source_event_kind taxonomy — PM may emit `record_sampleable_event` for events PM didn't itself emit (e.g., `dispatch.complete_called` from Engineer's complete_dispatch outcome reads).
+
+**Not audited** (per F5.2 Q6 Reading A with F4.5.3 reasoning continued from commit 3). `audit_sample_log` IS itself the durable record of what was sampled; cross-recording would create two-write-paths-for-same-event with divergence risk and operator confusion about canonical source.
+
 #### `get_utilization_report`
 
 ```python
@@ -748,6 +785,7 @@ class GetAuditLogOutput(BaseModel):
 | complete_current_focus | no | yes | no | no | no |
 | get_current_focus | no | yes | no | no | no |
 | record_spin_rationale | no | yes | no | no | no |
+| record_sampleable_event | no | yes | no | no | no |
 | get_utilization_report | yes | yes | no | no | no |
 | notify_human | no | yes | no | no | no |
 | get_unread_replies | no | yes | no | no | no |

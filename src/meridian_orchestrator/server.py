@@ -42,6 +42,13 @@ from pydantic import AnyHttpUrl, BaseModel
 
 from meridian_orchestrator.agents.permissions import PermissionResolver
 from meridian_orchestrator.agents.registry import AgentRegistry
+from meridian_orchestrator.audit.sampler import (
+    RecordSampleableEventInput,
+    RecordSampleableEventOutput,
+    Sampler,
+    SourceEventKind,
+    record_sampleable_event,
+)
 from meridian_orchestrator.auth import TokenStore, _parse_token
 from meridian_orchestrator.bridge.activity import (
     record_mcp_call,
@@ -254,6 +261,7 @@ def build_server(
     get_engineer_supervisor: Callable[[], LongRunningSupervisor | None] | None = None,
     get_dispatcher: Callable[[], BridgeDispatcher | None] | None = None,
     get_oauth_usage_snapshot: SnapshotProvider | None = None,
+    sampler: Sampler | None = None,
 ) -> FastMCP:
     """Construct the FastMCP server with auth + the current tool set.
 
@@ -332,6 +340,8 @@ def build_server(
         _register_pm_mode_tools(mcp, storage, token_store)
         _register_pm_focus_tools(mcp, storage, token_store)
         _register_pm_spin_tools(mcp, storage, token_store)
+        if sampler is not None:
+            _register_audit_sample_tools(mcp, storage, token_store, sampler)
 
     if storage is not None and get_oauth_usage_snapshot is not None:
         _register_window_state_tools(
@@ -883,6 +893,68 @@ def _register_pm_spin_tools(
         )
 
 
+def _register_audit_sample_tools(
+    mcp: FastMCP,
+    storage: Storage,
+    token_store: TokenStore,
+    sampler: Sampler,
+) -> None:
+    """Register record_sampleable_event (M5-continuous-pm-driver commit 4).
+
+    Single MCP tool ships at this commit per F5.2 Q3 Reading A
+    disposition: explicit hook tool. PM's loop driver subprocess at
+    commits 7-8 calls this tool after observing sampleable events;
+    sampler picks per audit_sample_percentage config and writes the
+    audit_sample_log row if selected.
+
+    The sampler instance is constructed at lifespan startup from
+    Settings.audit_sample_percentage and passed directly here (not via
+    closure) — the Sampler is constructed-once-and-immutable, so the
+    closure-callable pattern (used for OAuthUsagePoller's late-binding
+    snapshot) doesn't apply.
+
+    Permission: PM-only at the handler layer per
+    ``06-mcp-tools-phase-one.md`` § ``record_sampleable_event``.
+    """
+
+    @mcp.tool(
+        name="record_sampleable_event",
+        description=(
+            "PM only. Hook tool: declare that a sampleable event "
+            "occurred. Sampler coin-flips per audit_sample_percentage "
+            "config; if selected, writes an audit_sample_log row with "
+            "re_eval_state='pending' and returns sample_id; if not "
+            "selected, returns sample_id=None (most common case at "
+            "default-disabled config). source_event_kind must be one "
+            "of: pm.current_focus.completed, "
+            "pm.current_focus.contract_violation, "
+            "pm.current_focus.superseded, pm.spin_rationale.recorded, "
+            "dispatch.complete_called. source_event_id is the row id "
+            "from the canonical source table (audit_log.id for the "
+            "first four kinds; pm_spin_rationale_log.id for the fifth, "
+            "since spin_rationale events have no audit_log integration "
+            "per commit 3 Q6 Reading A). Not audited — "
+            "audit_sample_log IS itself the durable record."
+        ),
+    )
+    async def _record_sampleable_event(
+        source_event_kind: SourceEventKind,
+        source_event_id: str,
+    ) -> RecordSampleableEventOutput:
+        _resolve_agent_id()
+        await _observe_caller(storage, token_store, "record_sampleable_event")
+        caller_role = _resolve_caller_role_via_token()
+        return await record_sampleable_event(
+            storage=storage,
+            sampler=sampler,
+            request=RecordSampleableEventInput(
+                source_event_kind=source_event_kind,
+                source_event_id=source_event_id,
+            ),
+            caller_role=caller_role,
+        )
+
+
 def _register_window_state_tools(
     mcp: FastMCP,
     storage: Storage,
@@ -1262,6 +1334,7 @@ async def serve(
     get_engineer_supervisor: Callable[[], LongRunningSupervisor | None] | None = None,
     get_dispatcher: Callable[[], BridgeDispatcher | None] | None = None,
     get_oauth_usage_snapshot: SnapshotProvider | None = None,
+    sampler: Sampler | None = None,
 ) -> None:
     """Run the MCP HTTP server until cancelled.
 
@@ -1283,6 +1356,7 @@ async def serve(
         get_engineer_supervisor=get_engineer_supervisor,
         get_dispatcher=get_dispatcher,
         get_oauth_usage_snapshot=get_oauth_usage_snapshot,
+        sampler=sampler,
     )
     app = mcp.streamable_http_app()
     config = uvicorn.Config(

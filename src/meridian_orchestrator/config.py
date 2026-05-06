@@ -99,6 +99,24 @@ class Settings(BaseSettings):
     # supervisor flag is on (validator below).
     substrate_working_directory: Path | None = Field(default=None)
 
+    # M5-continuous-pm-driver commit 4: random-audit-sampling fraction
+    # consumed by audit/sampler.py:Sampler. Coin-flip per record_sampleable_event
+    # call with this probability; selected events land in audit_sample_log
+    # with re_eval_state='pending' for the future async re-evaluator
+    # (deferred to post-M5-flag-flips focused-observability sub-milestone
+    # per F5.6.C disposition).
+    #
+    # Default 0.0 (sampling disabled) per F5.2 Q9 Reading A — opt-in
+    # shape mirroring enable_engineer_supervisor / enable_pm_supervisor
+    # flag conventions. Operator sets a non-zero value to enable
+    # sampling.
+    #
+    # Phase 1 ships single global percentage; per-event-kind override
+    # (e.g., higher percentage on contract_violation than on
+    # spin_rationale) deferred to a future commit per F5.2 Q4 Reading C
+    # when real-session data shows per-kind tuning is warranted.
+    audit_sample_percentage: float = Field(default=0.0, ge=0.0, le=1.0)
+
     @model_validator(mode="after")
     def _require_substrate_working_directory_when_supervisor_enabled(
         self,

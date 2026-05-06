@@ -316,6 +316,63 @@ One write path: PM-initiated `record_spin_rationale` MCP tool (PM-only). Per-tic
 
 **No audit_log integration** (Q6 Reading A per F4.5.3 reasoning): `pm_spin_rationale_log` IS itself the durable record. Cross-recording into `audit_log` would create two-write-paths-for-same-event with divergence risk between table and audit, plus operator confusion about canonical source. `audit_log` scope is cross-cutting events needing cross-domain query; pm_spin events query target IS this table directly. Volume is a second-order observation (~2880 rows/day at 30s tick cadence; commit 7 finalizes cadence) but not the load-bearing reason for skipping audit integration.
 
+### `audit_sample_log`
+
+Random-audit-sampling persistence per `BACKLOG.md` § Observability roadmap (silent-compliance defenses, M5-continuous-pm-driver scope). Each row captures one sampler decision: the source event that was sampled, the kind of source event, and the async re-evaluation lifecycle state. PM's continuous loop driver subprocess (commits 7-8) calls `record_sampleable_event` after observing sampleable events; `audit/sampler.py:Sampler` coin-flips per `Settings.audit_sample_percentage` and writes an `audit_sample_log` row with `re_eval_state='pending'` if selected.
+
+```sql
+CREATE TABLE audit_sample_log (
+    id TEXT PRIMARY KEY,
+    sampled_at TEXT NOT NULL DEFAULT (datetime('now')),
+    source_event_kind TEXT NOT NULL CHECK (source_event_kind IN (
+        'pm.current_focus.completed',
+        'pm.current_focus.contract_violation',
+        'pm.current_focus.superseded',
+        'pm.spin_rationale.recorded',
+        'dispatch.complete_called'
+    )),
+    source_event_id TEXT NOT NULL,
+    re_eval_state TEXT NOT NULL DEFAULT 'pending' CHECK (re_eval_state IN (
+        'pending', 'in_progress', 'complete'
+    )),
+    re_eval_finding TEXT,
+    re_eval_completed_at TEXT
+);
+
+CREATE INDEX idx_audit_sample_state_sampled_at
+    ON audit_sample_log(re_eval_state, sampled_at);
+```
+
+The async re-evaluator (the handler that processes `pending → in_progress → complete` with `re_eval_finding` text; possibly LLM-driven) is **out of scope** at commit 4 per F5.2 Q10 Reading A disposition. Deferred to the post-M5-flag-flips focused-observability sub-milestone per F5.6.C disposition; `BACKLOG.md` § Carry-forward to future sub-milestones carries the deferral entry.
+
+**Constraint shape** (per F5.2 + F5.6 dispositions, 2026-05-05):
+
+- `source_event_kind` CHECK enforces the closed 5-value enum (Q1 reading reversal per F5.6.B). Defense-in-depth alongside the `audit/sampler.py:SourceEventKind` Literal. Future expansion (Engineer's continuous-loop dispatch.* sampling, operator-driven additional kinds) lands via migration mirroring `0008_dispatches_status_check.sql` precedent.
+- `source_event_id` polymorphic free TEXT, NOT NULL, no FK (Q2 Reading A). Per-kind id semantic table:
+
+| event_kind | source_event_id semantic |
+|---|---|
+| `pm.current_focus.completed` | `audit_log.id` of the corresponding audit row |
+| `pm.current_focus.contract_violation` | `audit_log.id` of the corresponding audit row |
+| `pm.current_focus.superseded` | `audit_log.id` of the corresponding audit row |
+| `pm.spin_rationale.recorded` | `pm_spin_rationale_log.id` of the row (no audit per commit 3 Q6 Reading A) |
+| `dispatch.complete_called` | `audit_log.id` of the corresponding audit row |
+
+Multi-table referential integrity not enforced at write time; dangling references possible if source row is deleted. Acceptable trade-off for the heterogeneous-event classifier-plus-id pattern.
+
+- `re_eval_state` CHECK enforces the closed 3-value state-machine enum (Q5 Reading A): `pending` / `in_progress` / `complete`. Default `pending` on INSERT — sampler writes don't specify state. Transitions to `in_progress` / `complete` via the future async re-evaluator.
+- `re_eval_finding` and `re_eval_completed_at` nullable: populated only by the future re-evaluator on completion.
+- Single composite index on `(re_eval_state, sampled_at)`: supports the future re-evaluator's "all pending in time order" scan AND operator-side time-window queries somewhat efficiently. Mirrors commit 2/3 single-index discipline.
+
+**Excluded `source_event_kind` values + rationale:**
+
+- `pm.current_focus.declared` — declares are unmodifiable assertions (no validation outcome to re-evaluate).
+- `pm_mode.transition` — low-volume; sampling barely makes sense.
+- `api_usage.recorded` — high-volume; cost cohort sampled differently (per-call cost-interrogation tier 1 already shipped at M5-subscription-routing).
+- `dispatch.subprocess_terminated` and other dispatch lifecycle events — `dispatch.complete_called` is the load-bearing terminal event (where validation outcome is captured); subprocess_terminated is the wrapper event. Add via migration if subprocess_terminated sampling becomes useful.
+
+**No audit_log integration** (Q6 Reading A per F4.5.3 reasoning, continued from commit 3): `audit_sample_log` IS itself the durable record of what was sampled. Cross-recording into `audit_log` would create two-write-paths-for-same-event with divergence risk and operator confusion about canonical source.
+
 ## Filesystem layout
 
 Root: `${MERIDIAN_ORCH_DATA_DIR}` (default `~/.meridian-orchestrator/`).
@@ -369,6 +426,7 @@ Phase 1 migration plan:
 | `0009_observability_cost_tier1.sql` | M5 | `api_usage` cohort columns (`notes`, `workflow_id`, `agent_role`, `task_type`) + indexes (`idx_api_usage_workflow`, `idx_api_usage_role_type`) per `BACKLOG.md` § Observability roadmap |
 | `0010_pm_current_focus.sql` | M5-continuous-pm-driver | `pm_current_focus` table + `idx_pm_focus_declared_at` per `BACKLOG.md` § Observability roadmap (narration tier 1, M5-continuous-pm-driver scope) |
 | `0011_pm_spin_rationale_log.sql` | M5-continuous-pm-driver | `pm_spin_rationale_log` table + `idx_pm_spin_iteration_timestamp` per `BACKLOG.md` § Observability roadmap (fitness tier 1, M5-continuous-pm-driver scope) |
+| `0012_audit_sample_log.sql` | M5-continuous-pm-driver | `audit_sample_log` table + `idx_audit_sample_state_sampled_at` per `BACKLOG.md` § Observability roadmap (silent-compliance defenses, M5-continuous-pm-driver scope) |
 
 No `bucket` column ships in `api_usage`. The premium-first cost model superseded by the subscription-first architecture (Experiment 4, 2026-05-01) drops per-call bucket attribution from the schema in favor of query-time derivation from `model` plus the daemon's polled `/api/oauth/usage` snapshot. See `project_subscription_first_architecture` memory.
 

@@ -22,11 +22,12 @@ from meridian_orchestrator.storage.sqlite import SqliteStorage
 #   0009_observability_cost_tier1.sql         (M5-subscription-routing)
 #   0010_pm_current_focus.sql                 (M5-continuous-pm-driver commit 2)
 #   0011_pm_spin_rationale_log.sql             (M5-continuous-pm-driver commit 3)
+#   0012_audit_sample_log.sql                  (M5-continuous-pm-driver commit 4)
 # Reservation gap remaining: 0004 reserved for inbound_messages +
 # outbound_messages (Telegram notifications); milestone-attribution
 # pending resolution between data-model.md (M6) and the M5 sub-milestone
 # breakdown memory (M5-telegram-foundation).
-EXPECTED_VERSIONS = [1, 2, 3, 5, 6, 7, 8, 9, 10, 11]
+EXPECTED_VERSIONS = [1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12]
 
 
 @pytest_asyncio.fixture
@@ -56,6 +57,7 @@ async def test_run_migrations_creates_tables(storage: SqliteStorage) -> None:
         "pm_mode_log",
         "pm_current_focus",
         "pm_spin_rationale_log",
+        "audit_sample_log",
         "_schema_version",
     }
     missing = expected - table_names
@@ -111,6 +113,10 @@ async def test_indexes_created(storage: SqliteStorage) -> None:
         # (mirrors commit 2's Q5 Reading B disposition; rationale_tag and
         # decision cohort indexes deferred to BACKLOG-when-needed)
         "idx_pm_spin_iteration_timestamp",
+        # 0012 — audit_sample_log composite index on (re_eval_state,
+        # sampled_at) supporting future async re-evaluator's pending-row
+        # scan + operator-side time-window queries
+        "idx_audit_sample_state_sampled_at",
     }
     missing = expected - index_names
     assert not missing, f"Missing indexes: {missing}"
@@ -655,3 +661,206 @@ async def test_pm_spin_iteration_timestamp_default_populates(
     assert row is not None
     assert row["iteration_timestamp"] is not None
     assert len(row["iteration_timestamp"]) >= 19
+
+
+async def test_audit_sample_log_columns_match_spec(
+    storage: SqliteStorage,
+) -> None:
+    """0012_audit_sample_log.sql columns match 05-data-model.md §
+    audit_sample_log: id (PK), sampled_at (NOT NULL, default now),
+    source_event_kind (NOT NULL with closed enum CHECK),
+    source_event_id (NOT NULL TEXT, polymorphic free TEXT no FK),
+    re_eval_state (NOT NULL with closed enum CHECK, default 'pending'),
+    re_eval_finding (nullable), re_eval_completed_at (nullable).
+    """
+    await run_migrations(storage)
+    cols = await storage.fetch_all(
+        "PRAGMA table_info(audit_sample_log)"
+    )
+    by_name = {c["name"]: c for c in cols}
+
+    expected_names = {
+        "id",
+        "sampled_at",
+        "source_event_kind",
+        "source_event_id",
+        "re_eval_state",
+        "re_eval_finding",
+        "re_eval_completed_at",
+    }
+    assert set(by_name.keys()) == expected_names, (
+        f"audit_sample_log columns drift: got {set(by_name.keys())!r}, "
+        f"expected {expected_names!r}. Schema must match "
+        "05-data-model.md § audit_sample_log."
+    )
+
+    assert by_name["id"]["pk"] == 1
+    assert by_name["sampled_at"]["notnull"] == 1
+    assert by_name["source_event_kind"]["notnull"] == 1
+    assert by_name["source_event_id"]["notnull"] == 1
+    assert by_name["re_eval_state"]["notnull"] == 1
+    assert by_name["re_eval_finding"]["notnull"] == 0
+    assert by_name["re_eval_completed_at"]["notnull"] == 0
+
+
+async def test_audit_sample_source_event_kind_check_constraint(
+    storage: SqliteStorage,
+) -> None:
+    """The source_event_kind column's CHECK enforces the spec'd
+    5-value closed enum (F5.6.B Q1 reading reversal): all five PM-
+    emittable sampleable event kinds pass; bogus values reject.
+
+    Sentinel test pins the enum; failure here means the migration's
+    CHECK list drifted from the SourceEventKind Literal in
+    audit/sampler.py. The 5-value scope is deliberate Phase 1 narrowing
+    (PM observes pm.current_focus.* events directly and dispatch.complete_called
+    via complete_dispatch outcome reads; Engineer-emittable additions
+    land via migration when Engineer's continuous loop spec lands at
+    M5-flag-flips per 0008_dispatches_status_check.sql precedent).
+
+    Defensive sentinel: pins the closed-enum list against future
+    "helpful" expansion or contraction without explicit migration +
+    F5.6.B re-disposition.
+    """
+    await run_migrations(storage)
+    for i, kind in enumerate(
+        [
+            "pm.current_focus.completed",
+            "pm.current_focus.contract_violation",
+            "pm.current_focus.superseded",
+            "pm.spin_rationale.recorded",
+            "dispatch.complete_called",
+        ]
+    ):
+        await storage.execute(
+            "INSERT INTO audit_sample_log "
+            "(id, source_event_kind, source_event_id) "
+            "VALUES (?, ?, ?)",
+            (f"sample-kind-{i}", kind, f"event-{i}"),
+        )
+
+    rows = await storage.fetch_all(
+        "SELECT source_event_kind FROM audit_sample_log "
+        "WHERE id LIKE 'sample-kind-%' ORDER BY id"
+    )
+    assert {r["source_event_kind"] for r in rows} == {
+        "pm.current_focus.completed",
+        "pm.current_focus.contract_violation",
+        "pm.current_focus.superseded",
+        "pm.spin_rationale.recorded",
+        "dispatch.complete_called",
+    }
+
+    with pytest.raises(Exception, match=r"(?i)check"):
+        await storage.execute(
+            "INSERT INTO audit_sample_log "
+            "(id, source_event_kind, source_event_id) "
+            "VALUES (?, ?, ?)",
+            ("sample-bogus-kind", "not.a.real.kind", "event-bogus"),
+        )
+
+
+async def test_audit_sample_re_eval_state_check_constraint(
+    storage: SqliteStorage,
+) -> None:
+    """The re_eval_state column's CHECK enforces the spec'd 3-value
+    closed state-machine enum (F5.2 Q5 Reading A): pending,
+    in_progress, complete.
+
+    Sentinel test pins the enum; failure here means the migration's
+    CHECK list drifted from the ReEvalState Literal in
+    audit/sampler.py. Future state additions (e.g., 'failed',
+    'abandoned') land via migration when the re-evaluator surfaces
+    real terminal variants.
+    """
+    await run_migrations(storage)
+    for i, state in enumerate(["pending", "in_progress", "complete"]):
+        await storage.execute(
+            "INSERT INTO audit_sample_log "
+            "(id, source_event_kind, source_event_id, re_eval_state) "
+            "VALUES (?, ?, ?, ?)",
+            (
+                f"sample-state-{i}",
+                "pm.current_focus.completed",
+                f"event-{i}",
+                state,
+            ),
+        )
+
+    rows = await storage.fetch_all(
+        "SELECT re_eval_state FROM audit_sample_log "
+        "WHERE id LIKE 'sample-state-%' ORDER BY id"
+    )
+    assert {r["re_eval_state"] for r in rows} == {
+        "pending",
+        "in_progress",
+        "complete",
+    }
+
+    with pytest.raises(Exception, match=r"(?i)check"):
+        await storage.execute(
+            "INSERT INTO audit_sample_log "
+            "(id, source_event_kind, source_event_id, re_eval_state) "
+            "VALUES (?, ?, ?, ?)",
+            (
+                "sample-bogus-state",
+                "pm.current_focus.completed",
+                "event-bogus",
+                "not-a-real-state",
+            ),
+        )
+
+
+async def test_audit_sample_re_eval_state_default_pending(
+    storage: SqliteStorage,
+) -> None:
+    """re_eval_state has DEFAULT 'pending' per the migration; INSERTs
+    without an explicit re_eval_state must populate it rather than
+    fail the NOT NULL constraint. The default matches the writer
+    contract — :meth:`audit.sampler.Sampler.maybe_sample` writes rows
+    with re_eval_state='pending' for the future async re-evaluator
+    to advance."""
+    await run_migrations(storage)
+    await storage.execute(
+        "INSERT INTO audit_sample_log "
+        "(id, source_event_kind, source_event_id) "
+        "VALUES (?, ?, ?)",
+        (
+            "sample-default-state",
+            "pm.current_focus.completed",
+            "event-default",
+        ),
+    )
+    row = await storage.fetch_one(
+        "SELECT re_eval_state FROM audit_sample_log "
+        "WHERE id = 'sample-default-state'"
+    )
+    assert row is not None
+    assert row["re_eval_state"] == "pending"
+
+
+async def test_audit_sample_sampled_at_default_populates(
+    storage: SqliteStorage,
+) -> None:
+    """sampled_at has DEFAULT (datetime('now')) per the migration;
+    INSERTs without an explicit sampled_at must populate it rather
+    than fail the NOT NULL constraint. Mirrors
+    test_pm_spin_iteration_timestamp_default_populates."""
+    await run_migrations(storage)
+    await storage.execute(
+        "INSERT INTO audit_sample_log "
+        "(id, source_event_kind, source_event_id) "
+        "VALUES (?, ?, ?)",
+        (
+            "sample-default-ts",
+            "pm.current_focus.completed",
+            "event-default-ts",
+        ),
+    )
+    row = await storage.fetch_one(
+        "SELECT sampled_at FROM audit_sample_log "
+        "WHERE id = 'sample-default-ts'"
+    )
+    assert row is not None
+    assert row["sampled_at"] is not None
+    assert len(row["sampled_at"]) >= 19

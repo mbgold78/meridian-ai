@@ -1573,6 +1573,83 @@ Per D1.1, capture in the closeout doc:
   grounding doc surface that's already opened at every commit prep).
   Convention-reference lives in grounding doc § Carry-forward notes
   header note for future-Claude findability.
+- **Decision 5 convention's first cross-sub-milestone materialization
+  at commit 4 (2026-05-05).** F5.6.C disposition (b)-refined:
+  audit_sample_log re-evaluator deferred to post-M5-flag-flips
+  focused-observability sub-milestone. BACKLOG.md §
+  Carry-forward to future sub-milestones lazy-created at commit 4
+  with this entry; cross-references existing BACKLOG observability
+  roadmap entry for canonical destination context. Convention
+  operates as designed: first cross-boundary entry triggers
+  section creation; future entries append.
+- **Bidirectional-contradiction-discipline second invocation at
+  commit 4 prep (2026-05-05).** F5.6.B Q1 reading reversal:
+  Reading C (open TEXT + spec-doc taxonomy) abandoned in favor of
+  Reading A (closed enum) after reviewing-Claude's three-counter-
+  argument pushback exposed two specific framing errors: (1)
+  PM-only permission scope conflated with pm.*-prefix-only
+  taxonomy scope; (2) `pm.spin_rationale.recorded` exclusion
+  based on aggregation-shape consumer framing missed
+  sampling-as-random-selection consumer shape (which is the
+  silent-compliance defense the table exists for). First
+  invocation was F1.1 task_type γ scope-punt revisit during
+  M5-continuous-pm-driver chain prep. Pattern is durable: surfacing
+  questions produces real corrections to my own framing, not just
+  dispositions between alternatives.
+- **Naming-convention precedent (small) — refinements vs
+  primed-notation (2026-05-05).** F5.6.C "(b)'" labeling
+  suggested structural difference from (b); honest framing was
+  "(b) with refinements 1, 2." For future iterations, refinements
+  within a reading should be surfaced as "Reading X with
+  refinements N1, N2" rather than primed-notation that suggests
+  structural divergence. Captured as small precedent.
+- **Bidirectional discipline on own framing — surface new options
+  at the same level (2026-05-05).** F5.6.C (d) was introduced
+  buried inside (b)'-vs-(b) framing rather than surfaced at the
+  same level as (a)/(b). Belated honest acknowledgment landed when
+  Mike asked "What's (d)?" Better practice: when introducing a
+  new option beyond the surfaced set, present it at the same level
+  with explicit "introducing (X) — wasn't in original disposition
+  set" framing. Captured as bidirectional-discipline-on-own-framing
+  observation.
+- **Closed-enum sentinel pattern graduation (2026-05-05).** Pattern
+  matured from threshold-of-three watch (active during commits 1-3)
+  to established convention (commits 4+). At commit 4 the pattern
+  is at 9 instances (mode, triggered_by, dispatches.status,
+  output_type, decision, rationale_tag, source_event_kind,
+  re_eval_state, plus pre-M5 dispatches enums). No longer requires
+  watch-for-pattern tracking — closed-enum CHECK + Pydantic Literal
+  + sentinel test is the standard shape for finite-taxonomy
+  schema columns. Future closed-enum additions don't need
+  threshold-of-three evaluation; they ship with the same shape
+  unless a specific reason to deviate surfaces (cf. F5.6.B Q1
+  reading reversal: my Reading C departure was specifically
+  rejected by reviewing-Claude on cohort-coherence grounds).
+- **Decision 4 colocation rule established at commit 4
+  (2026-05-05).** Settings field tests colocate with their
+  consumer, not with config.py. Reasoning: test boundary follows
+  contract boundary, not source-file boundary; config.py
+  aggregates fields without owning their semantics. Captured in
+  BACKLOG.md § Conventions for cross-sub-milestone durability.
+  First instance: `Settings.audit_sample_percentage` tests in
+  `tests/unit/audit/test_sampler.py` alongside Sampler writer
+  tests, not in a dedicated `test_config.py`.
+- **F2.1 surface-as-finding rule fourth invocation at commit 4
+  draft (2026-05-05).** 29 collected / ~21 unique vs F5.4's 13/15
+  estimate; 29 / 10 baseline (F2.1's commit-4 estimate) = 190%
+  over. Largest divergence yet. **Trajectory observation across
+  commits 2-4:** 64% → 93% → 190% over F2.1 estimates. Each
+  commit's drivers honest per the three-reason framing
+  (precedent-mirror tests, pushback-driven additions,
+  disposition-driven invariant pins); the trajectory-shape
+  observation is independent of any single commit's drivers.
+  **Trigger condition pinned for commit 5:** if commit 5's F2.1
+  divergence exceeds 200% with the same three-reason framing,
+  re-prep commits 5-9 estimates with current empirical data —
+  the issue at that point isn't the specific commit but that
+  F2.1 estimates have become miscalibrated for the chain's
+  actual disposition density. Don't re-baseline now; trigger
+  condition activates at commit 5 if hit.
 
 ---
 
@@ -2576,6 +2653,682 @@ sub-milestone; sampling-percentage config + async sampler scaffold).
 
 ---
 
+# Followup-8 — commit 4 prep checkpoint (audit_sample_log + sampling-percentage config + async sampler scaffold)
+
+**Date:** 2026-05-04. **Sub-milestone:** M5-continuous-pm-driver.
+**Commit scope:** F2.1 row 4.
+**Prerequisites landed:** commits 1-3 (workflow_id α, ff47573;
+pm_current_focus, b1ad27a; pm_spin_rationale_log, 433cef5);
+.gitignore chore (414728f).
+
+**F2.2 B1 disposition pinned:** loop-driven trigger for sampling
+("loop fires sampleable event N happened hook at iteration boundary;
+sampler picks per sampling-percentage config asynchronously"). Pure
+write-only seam from loop side. Not re-surfaced as a new question;
+spec uses that disposition.
+
+---
+
+## F5.1 — touch points
+
+Per F2.1 row 4: `storage/sql/0012_*.sql`, `audit/sampler.py` (new),
+`config.py`. Resolved file-by-file:
+
+| File | Status | Touch shape |
+|---|---|---|
+| `src/meridian_orchestrator/storage/sql/0012_audit_sample_log.sql` | NEW | Table DDL with `id / sampled_at / source_event_kind / source_event_id / re_eval_state (CHECK) / re_eval_finding / re_eval_completed_at` + index on `(re_eval_state, sampled_at)` for the future async re-evaluator's pending-row scan. Q1/Q2/Q5/Q6 dispositions shape the column constraints. |
+| `src/meridian_orchestrator/audit/sampler.py` | NEW | `Sampler` class (constructor takes `sampling_percentage`); `maybe_sample(storage, event_kind, event_id) -> str \| None` writer; module-level `_sample_decision(percentage)` pure function. Q9 disposition shapes the algorithm; Q11 disposition shapes the scaffold scope. |
+| `src/meridian_orchestrator/config.py` | EDIT | Add `audit_sample_percentage: float` field. Default per Q10 disposition. |
+| `src/meridian_orchestrator/main.py` | EDIT | Lifespan wiring: construct `Sampler` instance from `Settings.audit_sample_percentage` at daemon startup; provide closure-pattern accessor for the wrapper layer (mirrors `get_oauth_usage_snapshot` pattern from `OAuthUsagePoller`). |
+| `src/meridian_orchestrator/server.py` | EDIT | `_register_audit_sample_tools` helper conditional on Q3 (explicit hook MCP tool vs embedded). |
+| `docs/kickoff/05-data-model.md` | EDIT | New `audit_sample_log` table entry + migration table row for 0012. |
+| `docs/kickoff/06-mcp-tools-phase-one.md` | EDIT | Tool entry + permission table row, conditional on Q3 Reading A. |
+| `docs/kickoff/11-engineer-bridge.md` | UNCHANGED IF Q7 Reading A | If Q7 Reading B (audit_log integration on sample writes), audit-log entries table extends. |
+| `BACKLOG.md` | EDIT | Cohort/secondary indexes deferral (mirror commit 2's Q5 BACKLOG entry pattern); tier-2 read-side surfaces still post-M5-flag-flips per existing BACKLOG observability roadmap. |
+| `tests/unit/storage/test_migrations.py` | EDIT | EXPECTED_VERSIONS update; columns/indexes/CHECK assertions for 0012 (mirror commits 2-3 patterns). |
+| `tests/integration/test_daemon_lifecycle.py` | EDIT | Lifecycle version-set update for 0012. |
+| `tests/unit/audit/test_sampler.py` | NEW | Direct-handler tests for `Sampler` + closed-enum sentinel for re_eval_state. |
+| `tests/integration/test_audit_sample_mcp_wrapper.py` | NEW IF Q3 Reading A | MCP wrapper tests parallel to commit 3's pattern. |
+
+---
+
+## F5.2 — open questions (Q1-Q9)
+
+### Q1 — `source_event_kind` taxonomy: closed enum vs open TEXT
+
+`source_event_kind` classifies what kind of event the sampler is
+referencing. F2 Section 2 sketch: "current_focus_completion /
+dispatch_completion / etc." — the "/etc." signals open-ended.
+Phase 1 candidate kinds (events that exist in the system today):
+`pm.current_focus.completed`, `pm.current_focus.contract_violation`,
+`pm.current_focus.superseded`, `pm.current_focus.declared`,
+`pm_spin_rationale.recorded`, `dispatch.complete_called`,
+`dispatch.subprocess_terminated`, etc.
+
+- **Reading A — closed enum CHECK + sentinel test.** Lock the kinds
+  list at commit 4 with the events that exist today (~6-8 values).
+  Future event types require migration. Forced-fit risk: future
+  event types from M5-flag-flips / M6 dashboard work need migration
+  plumbing; some kinds (`dispatch.timeout`, `pm.current_focus.superseded`)
+  may or may not warrant sampling and locking the list now decides
+  pre-emptively.
+- **Reading B — open TEXT, no CHECK.** Free-form string. Loop driver
+  passes whatever string identifies the event type. Lower discipline;
+  admits typo'd values silently into the table.
+- **Reading C — open TEXT, but document the canonical kinds list in
+  spec (`05-data-model.md`).** Convention-enforced rather than
+  schema-enforced. Audit-side sanity-check tooling could later flag
+  unknown kinds without blocking writes.
+
+**Recommendation: Reading C.** Reading A locks the kinds taxonomy
+prematurely — Phase 1 hasn't yet observed which events PM and
+operators actually find sampling-worthy. The closed-enum-sentinel
+pattern's value comes from cohort-coherence (each value is
+operator-meaningful and dispatch-affecting); audit_sample_log's
+event_kind is descriptive metadata, not dispatch-affecting routing.
+Reading B's typo risk is real but small at low write volume
+(sampling fraction × event volume → per-day samples in the dozens
+or hundreds); a typo is recoverable by data-fix, not load-bearing
+breakage. Reading C splits the difference: discipline via spec doc,
+flexibility via schema. Promote to closed-enum at M5-flag-flips
+or post-tier-2-data when the taxonomy is empirically grounded.
+
+This is a deliberate departure from the closed-enum-sentinel pattern
+established at 6 instances. Surface as anticipated pushback in F5.5
+since reviewing-Claude may push back on rule-of-six erosion.
+
+### Q2 — `source_event_id` storage: FK vs polymorphic free TEXT
+
+The event might live in `audit_log` (most events), `pm_current_focus`
+(focus rows), `pm_spin_rationale_log` (per-tick decisions),
+`dispatches` (lifecycle). `source_event_id` references one row but
+the target table varies by event_kind.
+
+- **Reading A — single polymorphic TEXT column, no FK.** Loose
+  coupling; caller-supplied id; consumer interprets per
+  source_event_kind. Multi-table referential integrity not enforced
+  at write time. Schema cost: minimal. Operational cost: dangling
+  references possible if the source row is deleted.
+- **Reading B — separate per-kind FK columns
+  (`audit_log_id NULLABLE`, `pm_current_focus_id NULLABLE`, etc.).**
+  Strict FK on each. Cumbersome schema; future event-kind additions
+  require migration to add columns. Six nullable FKs is a wide
+  table.
+- **Reading C — single FK to `audit_log(id)`.** Force all sampleable
+  events to flow through `audit_log` first; sample's
+  source_event_id always points at an audit_log row. Constrains
+  the universe of sampleable events to those already audit-logged.
+  pm_spin_rationale_log rows are NOT audit-logged per Q6/F4.5.3;
+  Reading C would either block them from sampling or require their
+  audit-logging to be re-litigated (breaking commit 3's discipline).
+
+**Recommendation: Reading A.** Polymorphic TEXT is the standard
+shape for event-classifier-plus-event-identifier patterns when the
+event universe is heterogeneous. Reading B's per-kind columns scale
+poorly. Reading C's funnel-through-audit-log breaks commit 3's
+no-audit-integration disposition for pm_spin events (and would force
+re-litigating that disposition just to satisfy schema strictness on
+a column where strictness isn't load-bearing). Document the
+conventional id types per kind in `05-data-model.md` (e.g.,
+"event_kind=pm.current_focus.completed → event_id is the
+audit_log.id row whose action='pm.current_focus.completed';
+event_kind=pm_spin_rationale.recorded → event_id is the
+pm_spin_rationale_log.id row").
+
+### Q3 — Sampler trigger interface: explicit hook MCP tool vs embedded in existing wrappers
+
+F2.2 B1 says "loop fires hook at iteration boundary." Implementation
+question: how does the loop fire the hook, and where does the hook
+land?
+
+- **Reading A — explicit MCP tool `record_sampleable_event(event_kind, event_id)`.** Loop driver subprocess calls this tool after declare/complete/etc. Sampler picks per config; writes audit_sample_log row if selected. Decoupled: sampling logic in `audit/sampler.py`, not in event-emission handlers. Loop has full control over what's sampleable (excludes some kinds, e.g., per-tick spin_rationale).
+- **Reading B — embedded in existing event-emission handlers.** `complete_current_focus` calls `sampler.maybe_sample(...)` at the end of its own handler; same for declare, dispatch.complete_called paths, etc. Loop doesn't make extra MCP calls. Subprocess sees no new tool; sampling is automatic from server side. Couples sampling logic into every state-changing handler.
+- **Reading C — hybrid: embed in some wrappers (pm.current_focus.* writes); explicit tool for others (pm_spin_rationale.recorded, dispatch lifecycle).** Pick per event-kind. Highest control; most code paths.
+
+**Recommendation: Reading A (explicit hook).** Three reasons:
+1. **F2.2 B1 framing is "loop fires hook"** — keeps sampling
+   decoupled from event-emission. Reading B couples sampling into
+   every state-changing handler, increasing per-handler cognitive
+   load and creating implicit cross-cuts that future-Claude
+   reading any handler might miss.
+2. **Loop has selective control** — pm_spin_rationale at
+   high-cadence (~2880/day) probably shouldn't be sampled at all
+   (or at much lower percentage); pm.current_focus.completed at
+   low-cadence is probably worth high-percentage sampling. Loop
+   knows which events are sampling-relevant; embedded handler
+   doesn't.
+3. **Symmetric with the audit-log non-integration pattern from
+   commit 3** — pm_spin_rationale_log is its own durable record,
+   not cross-cutting; audit_sample_log is its own selection
+   record, not embedded into event emission. Same architectural
+   shape: dedicated tables for dedicated concerns; cross-cutting
+   logic in dedicated modules (sampler.py).
+
+Reading B's "subprocess saves an MCP call" is small (the loop is
+already making 5-15 MCP calls per iteration). Reading C's
+cherry-picked hybrid is the worst of both worlds — neither
+decoupled nor uniform.
+
+### Q4 — `audit_sample_percentage` config shape
+
+Single global percentage or per-event-kind?
+
+- **Reading A — single global float `audit_sample_percentage`.** Settings field; one number controls all sampling. Simple. Per-kind needs multi-key config.
+- **Reading B — dict-shaped per-event-kind config.** Settings.audit_sample_percentages: dict[str, float] = {} — operator overrides specific kinds; default for unconfigured kinds.
+- **Reading C — single global default + future per-kind override.** Ship Reading A at commit 4; layer per-kind override in a future commit if real workload shows the need.
+
+**Recommendation: Reading C.** Reading A is the right Phase 1
+shape; pre-emptive per-kind config is YAGNI-territory. Operator
+needs operational data on what percentage works before deciding
+whether per-kind tuning matters. Reading B ships flexibility
+without empirical demand. Document the future expansion path in
+the Settings field's docstring so future-Claude reading the field
+sees the deferred-by-design shape.
+
+### Q5 — `re_eval_state` closed-enum CHECK
+
+Three states per F2 Section 2: `pending` / `in_progress` /
+`complete`.
+
+- **Reading A — closed enum CHECK + sentinel test.** Mirrors
+  decision / rationale_tag / output_type / mode patterns. 8th
+  closed-enum sentinel in the codebase.
+- **Reading B — open TEXT, no CHECK.** State machine values land
+  via Python types only.
+
+**Recommendation: Reading A.** State-machine columns benefit from
+schema-enforced enum constraint — defense-in-depth catches
+manual-SQL or future-external-integration writes. Pattern is durable
+through 8+ instances; no concerns about over-extraction (each
+sentinel is per-table-per-column, not a shared utility).
+
+Anticipated pushback: 8 closed-enum sentinels means 8 distinct
+migrations should the enums need expansion. Pattern discipline cost
+is real but the alternative (no schema enforcement) is worse.
+
+### Q6 — Audit-log integration on sample writes
+
+Each `Sampler.maybe_sample` write to `audit_sample_log` also writes
+audit_log?
+
+- **Reading A — No audit_log integration.** Mirrors commit 3 Q6
+  Reading A + F4.5.3 reasoning: audit_sample_log IS itself the
+  durable record of what was sampled; cross-recording into
+  audit_log creates two-write-paths-for-same-event with divergence
+  risk and operator confusion. audit_log scope: cross-cutting
+  events needing cross-domain query.
+- **Reading B — Audit each sample write.** One audit row per
+  sampled event with action='audit_sample.selected'. Operator
+  trail: "what samples were picked, in what order."
+
+**Recommendation: Reading A.** F4.5.3 reasoning applies directly
+— audit_sample_log IS the durable record. Cross-recording is
+redundant. Sentinel test pins the contract (mirrors commit 3's
+`test_record_spin_rationale_does_not_write_audit_log`). Reading B's
+"operator trail" argument is satisfied by querying
+audit_sample_log directly; ordering is preserved by `sampled_at`.
+
+### Q7 — Atomicity envelope on `Sampler.maybe_sample`
+
+- **Reading A — single INSERT, no transaction wrap.** SQLite
+  single-statement INSERT is atomic. With no companion writes (Q6-A
+  no audit), no multi-statement sequence to wrap. Mirrors commit 3
+  Q7 disposition.
+- **Reading B — explicit transaction wrap.** Defensive consistency
+  with project pattern.
+
+**Recommendation: Reading A.** Conditional on Q6-A; both held.
+
+### Q8 — Sampling algorithm: coin flip vs deterministic-stratified
+
+Per-event sampling at percentage P%.
+
+- **Reading A — coin flip (`random.random() < P`).** Simple;
+  unbiased over many events; standard sampling shape. Phase 1
+  default.
+- **Reading B — deterministic-stratified (every Nth event,
+  N = 1/P).** Predictable; minimum-rate guarantees ("at least 1
+  sample per N events"); better small-sample-size stats. Requires
+  per-kind counter state (in-memory or column on
+  audit_sample_log).
+- **Reading C — reservoir sampling** (uniformly select K samples
+  from a stream of unknown length). Better statistical guarantees
+  for fixed-K-target sampling but doesn't match "percentage of
+  events" framing.
+
+**Recommendation: Reading A.** Phase 1 sampling target is
+operator-friendly framing ("sample 5% of events"); coin flip
+satisfies that with minimal code. Reading B's predictability
+benefit is small at Phase 1 volumes; Reading C's reservoir shape
+is for fixed-target sampling, not the "percentage of events" shape.
+Promote to deterministic-stratified at M5-flag-flips if operator
+ad-hoc analysis shows variance is hiding important signals.
+
+### Q9 — Default `audit_sample_percentage` value
+
+What's the default when the operator hasn't configured the field?
+
+- **Reading A — `0.0` (sampling disabled by default).** Sampler
+  scaffold ships but writes nothing until operator opts in.
+  Conservative; no surprise audit_sample_log row growth.
+- **Reading B — `0.05` (5%) or some non-zero default.** Sampling
+  active immediately; operator sees sampled rows from day 1
+  without explicit config. May surprise operator with
+  audit_sample_log growth they didn't ask for.
+- **Reading C — `None` / unset → sampler scaffolding doesn't
+  construct the Sampler instance at all; record_sampleable_event
+  hook becomes a no-op.** Most conservative; explicit-opt-in
+  shape; aligns with Q9 commit-2 "ship-as-disabled-by-default"
+  flag conventions (`enable_engineer_supervisor=False`,
+  `enable_pm_supervisor=False`).
+
+**Recommendation: Reading A.** Default of `0.0` is opt-in
+(operator must set non-zero to enable) with the same shape as
+existing flags. Reading C's None-shape adds branching at every
+hook call site (`if sampler is None: skip`); Reading A's `0.0`
+makes the coin flip always return False, no branching needed.
+Reading B's auto-enable ships behavior the operator didn't ask
+for.
+
+### Q10 — Scope of "async sampler scaffold" at commit 4
+
+F2.1 row 4 framing: "table + sampling-percentage config + async
+sampler scaffold." What's "scaffold" exactly?
+
+- **Reading A — full sampler shape.** Table + config + Sampler
+  class + maybe_sample writer + MCP wrapper. The async
+  re-evaluator (the actual handler that processes
+  pending → in_progress → complete) is OUT of scope (deferred to
+  later commit, likely commits 7-8 alongside loop driver).
+- **Reading B — full sampler + minimal re-evaluator stub.**
+  Reading A + a stub re-evaluator that runs once per lifespan and
+  marks pending rows as complete with re_eval_finding="stub
+  scaffold; replace with real re-evaluation". Scaffold-as-runnable
+  end-to-end.
+- **Reading C — table + config only.** Sampler class + writer
+  deferred to a future commit. "Scaffold" means just the
+  persistence layer.
+
+**Recommendation: Reading A.** Reading B's stub re-evaluator is
+operationally weird — it would mark every sample as
+"re-evaluation complete" without doing anything useful, polluting
+the column's semantics. Reading C is too narrow — without the
+writer, the scaffold has no integration test surface (the F2.2
+verification-surface argument applies). Reading A ships the path
+end-to-end through the write side; the re-evaluator is the next
+piece to land but is genuinely separate work (cross-event
+re-evaluation logic, possibly LLM-based, definitely async).
+
+---
+
+## F5.3 — watch-for-pattern check
+
+| Pattern | Status pre-commit | Commit 4 instance | Disposition |
+|---|---|---|---|
+| Closed-enum CHECK + sentinel test | 7 (mode, triggered_by, dispatches.status, output_type, decision, rationale_tag, plus pre-M5 dispatches enums) | +1 (re_eval_state) if Q5-A. NOT +1 for source_event_kind per Q1 Reading C departure (open TEXT + spec-doc taxonomy). | Departure from closed-enum-sentinel pattern at Q1. Surface as anticipated pushback (F5.5). |
+| `read_current_X` rowid-DESC helper | 2 (still); commit 3 added zero | 0 at commit 4 (sampler is write-only at this commit; pending-row scan is the future re-evaluator's read shape, not a "most-recent" lookup). | No change. |
+| Audit-action `pm.<surface>.<verb>` namespace | 5 (`pm_mode.transition` + four `pm.current_focus.*`) | 0 at commit 4 if Q6-A; +1 (`audit_sample.selected`) if Q6-B. | No new actions per Q6-A. |
+| `bridge/` → `tools/` cross-layer imports | 2 | 0 at commit 4 (sampler is `audit/`-only; main.py wires lifespan but main.py is the orchestration layer, not bridge). | No change. |
+| Production-code-surface-for-testability | 2 pre-chain | possibly +1 — Sampler may need a clock/randomness injection seam for deterministic tests of the coin-flip behavior. Watch at draft time. | Watch. |
+| Migration count | 3 added at this sub-milestone (0010/0011/0012) | 0012 closes the F2.4 revised count. | F2.4 revised "(0010, 0011, 0012)" matches. |
+| F2.1 surface-as-finding rule | 3 invocations (commits 2 prep, 2 draft, 3 draft) | Likely +1 at commit 4 draft. Per closeout pattern observation, expected systematic underestimate. | No re-prep. |
+| **Q1 Reading C** (Open TEXT + spec-doc taxonomy departure from closed-enum precedent) | NEW pattern instance | First instance of "schema-discipline relaxation when cohort-coherence value is low" — surface as a watch-for-pattern entry if a second instance emerges (e.g., `audit_sample_log.re_eval_finding` is already free-text-ish). Capture in F5.4. |
+
+---
+
+## F5.4 — test-target estimate
+
+F2.1 estimate: +10. Working breakdown under recommended dispositions
+(Q1-C, Q2-A, Q3-A, Q4-C, Q5-A, Q6-A, Q7-A, Q8-A, Q9-A, Q10-A):
+
+| Layer | Count |
+|---|---|
+| Migration smoke tests (columns + indexes) | 1 |
+| `re_eval_state` CHECK constraint sentinel | 1 |
+| `sampled_at` default-populates | 1 |
+| `Sampler._sample_decision` pure-function (0%, 100%, 50% statistical) | 3 |
+| `Sampler.maybe_sample` writer happy path (sampled / skipped) | 2 |
+| Settings `audit_sample_percentage` default + range validation | 2 |
+| MCP wrapper `record_sampleable_event` PM-allowed | 1 |
+| MCP wrapper `record_sampleable_event` non-PM-rejected (parametrize × 3) | 1 unique / 3 collected |
+| Audit-log non-integration sentinel (Q6 invariant pin) | 1 |
+| **Total under recommendations** | **13 unique / 15 collected** |
+
+**vs F2.1 estimate of +10: 50% over baseline.** Per the closeout
+pattern observation (three F2.1 invocations now, three durable
+reasons), this falls squarely in the "scope-correct +
+absorbed-pattern" disposition envelope. Q1 Reading C departure
+from closed-enum may also produce a "spec-doc taxonomy compliance"
+test verifying the canonical kinds list documented in
+`05-data-model.md` matches what the sampler actually accepts —
+that's a possible +1 if I draft it.
+
+**Range under disposition variance:**
+
+- Q5 Reading B (no CHECK): -1.
+- Q6 Reading B (audit integration): +1.
+- Q10 Reading B (stub re-evaluator): +2-3.
+- Q11 Reading C (table-only): -4-5 (no writer tests, no MCP
+  wrapper tests).
+
+Range: ~9-17 unique. Default disposition produces ~13.
+
+---
+
+## F5.5 — anticipated pushbacks
+
+Three weak points likely to surface at review:
+
+1. **Q1 Reading C departs from the closed-enum-sentinel pattern at
+   6+ instances.** I'm rejecting the established pattern for
+   `source_event_kind` based on the cohort-coherence-value-is-low
+   argument. Reviewing-Claude / Mike may push back: "rule-of-six
+   means closed-enum is established discipline; rejecting it
+   requires stronger justification than 'descriptive metadata, not
+   dispatch-affecting routing.'" Counter-argument I'd raise: F4.5.2
+   captured "threshold-of-three watch is trigger-to-evaluate, not
+   trigger-to-extract" — same reasoning applies inverted here.
+   Closed-enum-sentinel pattern is a pattern at surface; the
+   abstraction unit (cohort-coherence + dispatch-affecting + finite
+   taxonomy) is what makes a closed-enum the right shape. When
+   those conditions don't hold, the pattern shouldn't apply
+   reflexively. But this is genuinely contestable. Mike may
+   disposition Reading A (closed-enum) to preserve discipline and
+   accept the migration cost on future kinds. If so, surface
+   the candidate kinds list at draft time for closure.
+
+2. **Q3 Reading A's "explicit hook MCP tool" requires loop driver
+   to make extra MCP calls per iteration.** At ~30s tick cadence,
+   this is ~2880 record_sampleable_event calls/day if every event
+   is sampleable. Reading B (embedded) saves those calls. The
+   counter-argument I gave (loop has selective control over what's
+   sampleable) is real but Reading B can also support selectivity
+   via per-handler skip logic. If MCP-call-volume becomes a real
+   concern at commits 7-8 (the loop driver may have its own MCP
+   call budget), Reading A revisits. Surface at commit 7 prep as
+   a cadence-volume interaction note (mirroring the commit 3
+   carry-forward to commit 7).
+
+3. **Q10 Reading A defers the actual async re-evaluator without
+   naming when it lands.** "Future commit, likely commits 7-8" is
+   loose. The re-evaluator is genuinely separate work (cross-event
+   logic, possibly LLM-driven, definitely async). It might not
+   land at all in M5-continuous-pm-driver — it could be deferred
+   to a focused observability sub-milestone post-M5-flag-flips.
+   If so, audit_sample_log fills with `re_eval_state='pending'`
+   rows that never advance, which is operationally ugly. Surface
+   the explicit deferral target — name a sub-milestone or BACKLOG
+   entry that takes the re-evaluator. This avoids the
+   "scaffolding-without-consumer" smell.
+
+---
+
+## F5.6 — what lands at the diff checkpoint
+
+After Mike disposition Q1-Q10 + the three anticipated-pushback items:
+
+- 0012 migration drafted with Q1+Q2+Q5 dispositions
+- `audit/sampler.py` drafted with Q3+Q4+Q8+Q10 dispositions
+- `config.py` extended with `audit_sample_percentage` per Q4+Q9
+- `main.py` lifespan wires Sampler instance via closure pattern
+- `server.py` `_register_audit_sample_tools` if Q3 Reading A
+- Spec amendments drafted for 06 + 05 (and 11 if Q6-B)
+- BACKLOG.md gets cohort-index deferral entry (mirror commit 2's
+  pattern) + re-evaluator routing entry per F5.5 pushback 3
+  resolution
+- Test fixtures + assertions drafted (~13-15 tests)
+- Carry-forward notes section in grounding doc gets new entries
+  if commit 7 / future-commit dependencies surface
+
+Diff checkpoint surfaces commit-by-commit; commit 4 lands; commit
+5 prep opens (effort plumbing — agent yaml field +
+PMSupervisor/BridgeDispatcher pass `--effort` to claude
+subprocess).
+
+**End of Followup-8.**
+
+---
+
+# Followup-9 — F5.2 disposition feedback + Q1/Q10 re-engagement
+
+**Date:** 2026-05-05. **Trigger:** Reviewing-Claude's dispositions on
+F5.2 Q1-Q10 + F5.5 pushbacks (yesterday). Q1 and Q10 sent back for
+re-engagement; Q3 accepted with carry-forward extension; Q2 / Q4 /
+Q5 / Q6 / Q7 / Q8 / Q9 accepted clean.
+
+Section numbered F5.6.
+
+---
+
+## F5.6.A — accepts noted (Q2 / Q3 / Q4 / Q5 / Q6 / Q7 / Q8 / Q9)
+
+| Q | Disposition | Notes |
+|---|---|---|
+| Q2 | Reading A (polymorphic free TEXT, no FK) | Document conventional id types per kind in 05-data-model.md. |
+| Q3 | Reading A (explicit hook MCP tool) | Accepted with carry-forward extension: cadence-volume → commit 7 entry now covers both pm_spin row volume (commit 3) AND sampler-trigger MCP volume (commit 4). Doc-only update to Carry-forward notes section below. |
+| Q4 | Reading C (single global at commit 4; defer per-kind override) | Future per-kind expansion via dict layer. |
+| Q5 | Reading A (closed-enum CHECK + sentinel) | 8th sentinel; pattern durable. |
+| Q6 | Reading A (no audit_log integration) | F4.5.3 reasoning applies directly; sentinel test pins invariant. |
+| Q7 | Reading A (single INSERT no transaction) | Conditional on Q6-A; held. |
+| Q8 | Reading A (coin flip) | Phase 1 default; promote to deterministic-stratified at M5-flag-flips if variance hides signals. |
+| Q9 | Reading A (`0.0` opt-in disabled-by-default) | Explicit-opt-in shape; mirrors enable_engineer_supervisor / enable_pm_supervisor flag conventions. |
+
+---
+
+## F5.6.B — Q1 reconsidered: switching to Reading A (closed enum)
+
+**Reviewing-Claude's three counter-arguments hold; Reading C falls
+apart.** Capturing the reasoning durably for F2.5 closeout
+observations (corrects my Q1 Reading C framing):
+
+1. **Finite taxonomy IS satisfied.** Phase 1 reality: M5-flag-flips
+   enables existing surfaces (no new event kinds); M6 is operator-facing
+   reads (no new event kinds). New event kinds emerge only from
+   genuinely new Phase 2+ infrastructure, at which point migration is
+   the right tool. The kinds list at commit 4 is effectively stable
+   through the chain. My "/etc." hedge in F5.2 Q1 was unsupported
+   by the actual phase shape.
+2. **Cohort-coherence IS satisfied.** I confused
+   "routing-decision-affecting" with "cohort-load-bearing."
+   `source_event_kind` exists FOR cohort queries — "fraction of
+   pm.current_focus.completed events sampled," "all samples for
+   dispatch.subprocess_terminated events." Typo'd values would
+   collapse the cohort dimension. That's exactly the
+   closed-enum-sentinel pattern's load-bearing case.
+3. **"Dispatch-affecting" was a fake criterion** I introduced to
+   justify Reading C. The actual closed-enum precedent (mode,
+   triggered_by, dispatches.status, output_type, decision,
+   rationale_tag) is **finite + operator-meaningful +
+   cohort-load-bearing** — none are "dispatch-affecting" per se.
+   Mode/output_type/decision are narrative state classifiers,
+   exactly like source_event_kind would be.
+
+**[DISPOSITIONED 2026-05-05: Reading A accepted.]**
+
+### Q1 disposition impact on commit 4 scope
+
+Closed-enum CHECK on `source_event_kind` with the candidate kinds
+list constrained by Q3 Reading A's PM-only scope (PM's loop is the
+only caller of `record_sampleable_event` at commit 4):
+
+**Closed enum at commit 4:**
+
+```sql
+CHECK (source_event_kind IN (
+    'pm.current_focus.completed',
+    'pm.current_focus.contract_violation',
+    'pm.current_focus.superseded'
+))
+```
+
+Three values. Tight Phase 1 scope matching what's operationally
+sample-worthy from PM's perspective. Excluded values + rationale:
+
+- `pm.current_focus.declared` — declares are unmodifiable assertions
+  (no validation outcome to re-evaluate); sampling provides no
+  diagnostic value.
+- `pm_spin_rationale.recorded` — high-volume aggregation-shape
+  consumer per F4.1 reframe; sampling individual rows isn't
+  operationally useful (cohort question is "what fraction of ticks
+  resulted in shutdown_recommended" — answered by aggregation, not
+  sampling).
+- `dispatch.*` events — Engineer's subtree territory; PM's MCP token
+  doesn't emit these. Future Engineer continuous loop spec
+  (post-M5-flag-flips) may extend the kinds list via migration.
+- `pm_mode.transition` — low-volume; sampling barely makes sense.
+- `api_usage.recorded` — high-volume; cost cohort sampled differently
+  (per-call cost-interrogation tier 1 already shipped at
+  M5-subscription-routing).
+
+**Future expansion via migration:**
+- Engineer continuous loop spec lands → add `dispatch.*` kinds.
+- Operator workload shows value in additional kinds (e.g.,
+  high-volume retrospective sampling of pm_spin_rationale during a
+  drift investigation) → add via migration.
+
+Mirrors `0008_dispatches_status_check.sql` precedent for closed-enum
+expansion via migration.
+
+### Q1 disposition impact on F5.3 watch-for-pattern check
+
+The F5.3 entry "Q1 Reading C (Open TEXT + spec-doc taxonomy
+departure from closed-enum precedent)" no longer applies. The
+closed-enum sentinel pattern continues uniformly (`re_eval_state`
++ `source_event_kind` = +2 sentinels at commit 4). Pattern is at
+9+ instances; durable as before.
+
+### Q1 disposition impact on F5.5 anticipated-pushbacks
+
+F5.5 pushback #1 ("Q1 Reading C departs from closed-enum precedent")
+resolves: pushback was correct, Reading C withdrawn, Reading A
+accepted. Capture in F2.5 closeout-staging notes as second instance
+of bidirectional-contradiction-discipline pattern (first was F1.1
+task_type γ rollback during M5-continuous-pm-driver chain prep).
+
+---
+
+## F5.6.C — Q10 reconsidered: third option (b)' surfaced and recommended
+
+**Two surfaced options + my third option:**
+
+- **(a) Name re-evaluator in specific commit slot.** Chain expansion
+  (4b/7.5/8.5) — re-litigates F2.1's 9-commit shape. Re-evaluator is
+  genuinely separate work (cross-event re-eval logic, async
+  machinery, possibly LLM-driven); shoehorning into existing slots
+  distorts their scope.
+- **(b) Defer cross-sub-milestone via BACKLOG.md § Carry-forward to
+  future sub-milestones (lazy-create per Decision 5 convention).**
+  Generic carry-forward; destination unnamed.
+- **(b)' Lazy-create BACKLOG.md § Carry-forward to future
+  sub-milestones at commit 4 with the audit_sample_log re-evaluator
+  entry naming the destination explicitly: post-M5-flag-flips
+  focused-observability sub-milestone, per existing BACKLOG
+  observability roadmap entry.** Entry cross-references the
+  canonical roadmap.
+- **(d) Pure-amendment of existing BACKLOG observability roadmap
+  entry without using the Carry-forward section.** Avoids
+  lazy-creation churn but splits routing between observability
+  roadmap and Carry-forward immediately at commit 4, weakening the
+  brand-new Decision 5 convention.
+
+**Recommendation: (b)'.**
+
+**Defending (b)' over (a):** chain expansion is the wrong shape.
+Re-evaluator is observability tier-2 infrastructure (cross-event
+re-eval logic, async machinery, possibly LLM-driven).
+M5-continuous-pm-driver's chain is "narration + fitness tier-1 +
+loop driver"; tier-2 work explicitly defers per BACKLOG observability
+roadmap. Forcing the re-evaluator into 4b/7.5/8.5 distorts the
+chain's scope.
+
+**Defending (b)' over (b):** vague "TBD" makes the carry-forward
+note operationally weak. Future-Claude opening the
+focused-observability sub-milestone shouldn't have to re-litigate
+where the re-evaluator goes — the destination is already implied by
+BACKLOG observability roadmap. Naming it at commit 4 closes the
+loop.
+
+**Defending (b)' over (d):** Decision 5 convention is brand new
+(commit 3). Splitting routing between observability roadmap and
+Carry-forward section immediately at commit 4 — when there's no
+compelling architectural reason — weakens the convention before
+it's established. (b)' uses Decision 5's surface as designed AND
+cross-references to the canonical roadmap, getting both: convention
+adherence + explicit destination.
+
+### Q10 disposition impact on commit 4 scope
+
+- BACKLOG.md gets new section `## Carry-forward to future
+  sub-milestones` (lazy-created at commit 4 — first cross-boundary
+  entry).
+- First entry: `### → focused-observability sub-milestone
+  (post-M5-flag-flips): audit_sample_log re-evaluator`. Body names
+  the work scope (process pending samples → in_progress → complete
+  with re_eval_finding text; possibly LLM-driven; async machinery)
+  + cross-references the existing BACKLOG observability roadmap
+  entry that already implicitly defers the re-evaluation.
+- F2.5 closeout-staging notes get an entry capturing the convention's
+  first cross-boundary materialization.
+
+---
+
+## F5.6.D — Q3 carry-forward extension (doc-only)
+
+Q3 disposition accepted with extension: the existing
+"→ commit 7" carry-forward entry in the grounding doc § Carry-forward
+notes section (added at commit 3 for pm_spin row volume) is amended
+to also cover sampler-trigger MCP call volume scaling with loop
+tick cadence. Both topics share the same "scaling with cadence"
+shape; consolidating under one entry header keeps the carry-forward
+surface tight.
+
+Updated entry header: `### → commit 7: pm_spin row volume +
+sampler-trigger MCP call volume scale with loop tick cadence`.
+Body extends the existing prose to mention the additional MCP call
+budget consideration at commit 7.
+
+---
+
+## F5.6.E — what lands at the diff checkpoint
+
+After these dispositions land:
+
+- 0012 migration drafted with Q1 Reading A closed-enum CHECK on
+  source_event_kind (3 values) + Q5 Reading A closed-enum CHECK on
+  re_eval_state (3 values) + Q2 Reading A polymorphic free TEXT
+  source_event_id
+- `audit/sampler.py` drafted with Q3 Reading A explicit hook + Q8
+  coin flip + Q10 scope (writer + MCP wrapper; re-evaluator
+  deferred per Q10 disposition)
+- `config.py` extended with `audit_sample_percentage: float`
+  (default 0.0, ge=0.0, le=1.0)
+- `main.py` lifespan wires Sampler instance via closure pattern
+- `server.py` `_register_audit_sample_tools` ships
+  `record_sampleable_event` MCP tool (PM-only)
+- Spec amendments: 06-mcp-tools (record_sampleable_event tool +
+  permission row); 05-data-model (audit_sample_log table section +
+  source_event_kind kinds list); migration table row for 0012; 11
+  unchanged per Q6-A
+- BACKLOG.md gets:
+  - Cohort/secondary indexes deferral (mirror commit 2's pattern)
+  - NEW `## Carry-forward to future sub-milestones` section
+    (lazy-created per Decision 5; first entry: re-evaluator →
+    post-M5-flag-flips focused-observability sub-milestone)
+- Grounding doc § Carry-forward notes: existing → commit 7 entry
+  amended to cover sampler-trigger MCP volume in addition to pm_spin
+  row volume
+- F2.5 closeout-staging notes: capture (a) Q1 reading-reversal as
+  second bidirectional-contradiction-discipline-pattern instance;
+  (b) Decision 5 convention's first cross-boundary materialization
+  at commit 4
+
+Diff checkpoint surfaces commit-by-commit; commit 4 lands; commit
+5 prep opens (effort plumbing).
+
+**End of Followup-9.**
+
+---
+
 # Carry-forward notes
 
 **Convention established 2026-05-04 (Decision 5 disposition, commit 3 prep):**
@@ -2610,8 +3363,13 @@ grounding doc.">
 
 ---
 
-### → commit 7: pm_spin row volume scales with loop tick cadence
+### → commit 7: pm_spin row volume + sampler-trigger MCP call volume scale with loop tick cadence (from commits 3 + 4)
 
+Two volume topics for commit 7's tick-cadence decision; bundled
+under one carry-forward header since both scale linearly with the
+same parameter.
+
+**Topic 1 — pm_spin_rationale_log row volume (from commit 3).**
 pm_spin_rationale_log emits one row per planning iteration per F4.2
 Q1 Reading A disposition (per-tick, no dedup). Row volume scales
 linearly with the loop's tick cadence, which **commit 7 actually
@@ -2626,17 +3384,34 @@ volume framing:
 - 5min cadence → ~288 rows/day. Volume is trivial. The Q6 audit-log
   volume tiebreaker observation softens.
 
+**Topic 2 — sampler-trigger MCP call volume (from commit 4, F5.2 Q3
+Reading A + F5.6.D extension).** record_sampleable_event MCP tool
+fires once per sampleable event PM observes during a tick (each
+pm.current_focus.completed / contract_violation / superseded /
+spin_rationale.recorded / dispatch.complete_called PM emits or
+observes from Engineer's complete_dispatch outcomes). At nominal
+loop cadence with typical event mix, this adds ~2-5 MCP calls per
+iteration — volume budget concern at high tick rates. Reading B
+(embedded in handlers) was rejected at F5.2 Q3 on selectivity
+grounds; if MCP-call-volume budget pressure surfaces at commit 7,
+the embedded alternative revisits.
+
 **Carry-forward to commit 7 prep:** when tick cadence is decided,
 explicitly name the cadence-volume interaction in the prep checkpoint.
 Surface whether the chosen cadence triggers reopening of:
 
-- F4.2 Q1 (per-tick no dedup) — if volume is operationally significant
-- F4.2 Q6 (no audit_log integration) — volume is second-order
-  observation per F4.5.3, but high-volume scenarios may make it
-  load-bearing
+- F4.2 Q1 (per-tick no dedup for pm_spin_rationale_log) — if volume
+  is operationally significant
+- F4.2 Q6 (no audit_log integration on pm_spin_rationale_log) —
+  volume is second-order observation per F4.5.3, but high-volume
+  scenarios may make it load-bearing
 - BACKLOG entry for `pm_spin_rationale_log` retention / coalescing
   policy — independent of dispositions; pure storage-volume question
+- F5.2 Q3 (explicit-hook MCP tool for sampler) — if MCP-call-volume
+  budget is constrained at chosen cadence, embedded-handler
+  alternative (Reading B) revisits
 
 **Detail prose**: F4.2 Q1 disposition pin in this grounding doc
-(grep "DISPOSITIONED 2026-05-04: Reading A accepted" within F4.2 Q1).
+(grep "DISPOSITIONED 2026-05-04: Reading A accepted" within F4.2
+Q1); F5.2 Q3 disposition prose for the sampler-trigger interface.
 
