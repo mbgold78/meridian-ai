@@ -1677,6 +1677,36 @@ Per D1.1, capture in the closeout doc:
   produces real corrections that substance-only review wouldn't
   catch. Capture as distinct discipline pattern from
   substance-disposition review.
+- **Bidirectional-contradiction-discipline fourth invocation at
+  commit 6 prep — pattern operating in third direction (2026-05-06).**
+  F7.5.1 / Q1: Mike's commit-6-prep instruction said
+  "New doc: docs/kickoff/orchestrator-utilization-addendum.md" —
+  wrong on both counts (not new; wrong file vs F1.3 disposition's
+  separate `opus-4-7-effort-and-thinking-addendum.md`). Code's
+  prep surfaced the discrepancy as Q1 with three Readings; Mike's
+  disposition acknowledged the prep-instruction error and
+  accepted Reading C (separate file with cross-reference). First
+  three bidirectional instances (F1.1 / F5.6.B / F6.5.1) involved
+  Code's recommendations being corrected by reviewing-Claude
+  pushback. This fourth instance is reviewing-Claude's prep
+  instruction being corrected by Code's prep surfacing.
+  **Pattern operating in third direction:** discipline applies to
+  reviewing-Claude's prep instructions, not just to Code's
+  surfacings or to recommendation framing. The bidirectional
+  discipline is genuinely bidirectional — both reviewer and
+  drafter check each other's framing.
+  Three direction-shapes now identified:
+    1. Substance reversal (commits 1-3): Code's recommendation
+       wrong-on-merits; reviewing-Claude exposes via pushback.
+    2. Framing-precedent-application (commits 4-5): Code's
+       recommendation substantively right but defended via
+       precedent that doesn't carry; reviewing-Claude tests the
+       precedent's conditions.
+    3. Prep-instruction error (commit 6): reviewing-Claude's
+       prep instruction itself wrong; Code's prep surfaces the
+       discrepancy against canonical disposition (F1.3 here).
+  Pattern is durable across both roles; capture as
+  three-direction discipline.
 - **F2.1 surface-as-finding rule fifth invocation at commit 5
   draft (2026-05-05) — trigger condition NOT FIRED per metric
   clarification.** 19 collected / 7 unique vs F2.1's +9 estimate.
@@ -3812,6 +3842,306 @@ After F6.6.B + F6.6.C dispositions land:
 Spec amendment: NONE at commit 5 (deferred to commit 6 per F6.5.4).
 
 **End of Followup-11.**
+
+---
+
+# Followup-12 — commit 6 prep checkpoint (hybrid spec amendment — addendum doc + 02/07/11 merges)
+
+**Date:** 2026-05-06. **Sub-milestone:** M5-continuous-pm-driver.
+**Commit scope:** F2.1 row 6.
+**Prerequisites landed:** commits 1-5 (workflow_id α, ff47573;
+pm_current_focus, b1ad27a; pm_spin_rationale_log, 433cef5;
+audit_sample_log, 1e323ca; effort plumbing, 71d1e86).
+
+**Structural shift:** docs-only commit. F2.1 estimate: +0 tests.
+Gates re-verify trivially. No new code, no new schema, no new test
+cases beyond consistency-of-existing tests.
+
+**Spec-consistency baseline (verified 2026-05-06):** Zero existing
+kickoff docs mention "effort" / "thinking" / "adaptive" / "xhigh."
+The yaml comments added at commit 5 reference
+`orchestrator-utilization-addendum` for guidance — but that doc
+does NOT currently contain the per-role effort assignment or any
+Opus 4.7 thinking-mode content. Commit 6 closes that
+forward-reference gap (the references-to-content lands at this
+commit). No consistency-gap-elsewhere to fix; the only spec surface
+is this commit's deliverable.
+
+---
+
+## F7.1 — touch points
+
+Per F1.3 framing + Mike's commit-6-prep instruction:
+
+| File | Status | Touch shape (conditional on Q1) |
+|---|---|---|
+| `docs/kickoff/opus-4-7-effort-and-thinking-addendum.md` (NEW per Q1 Reading A) **OR** new section in existing `docs/kickoff/orchestrator-utilization-addendum.md` (per Q1 Reading B) | NEW or EDIT | Q1 disposition shapes the choice. |
+| `docs/kickoff/02-architecture.md` | EDIT | Brief reference per Q3 disposition. |
+| `docs/kickoff/07-agent-configs-phase-one.md` | EDIT | Effort field schema + per-role assignment table per Q4 disposition. |
+| `docs/kickoff/11-engineer-bridge.md` | EDIT | Effort flow through dispatcher launcher per Q5 disposition. |
+| `config/agents/{pm,engineer,implementer,tester}.yaml` | UNCHANGED IF Q1-B; EDIT IF Q1-A | If Q1-A (separate file), yaml comments update from `orchestrator-utilization-addendum` to `opus-4-7-effort-and-thinking-addendum`. |
+| `src/meridian_orchestrator/agents/config.py` | UNCHANGED IF Q1-B; EDIT IF Q1-A | Effort Literal docstring cross-reference update if Q1-A. |
+| `src/meridian_orchestrator/bridge/dispatcher.py` | UNCHANGED IF Q1-B; possibly EDIT IF Q1-A | Launcher comments may cross-reference. |
+| `src/meridian_orchestrator/bridge/supervisor_base.py` | Same as above |
+
+---
+
+## F7.2 — open questions (Q1-Q5)
+
+### Q1 — Addendum file location: new file vs new section in existing utilization addendum
+
+F1.3 disposition (Followup-1) recommended **a new file**:
+`docs/kickoff/opus-4-7-effort-and-thinking-addendum.md` (~150-300
+lines, shorter than the utilization addendum). Mike's commit-6-prep
+instruction names **the existing file**:
+`docs/kickoff/orchestrator-utilization-addendum.md`. The
+discrepancy may be a slip (Mike intended F1.3's separate file) or a
+deliberate convention shift (fold related addendum content
+together).
+
+- **Reading A — separate file** (`opus-4-7-effort-and-thinking-addendum.md`).
+  Per F1.3. Topic-scoped: Opus 4.7 effort + thinking is its own
+  concern (model-version-specific, time-bounded by Opus 4.7's
+  lifecycle); orchestrator-utilization-addendum is about
+  subscription pacing (operationally durable). Different scope
+  shapes argue for separate files. Future addendums similarly
+  topic-scoped.
+- **Reading B — new section in existing utilization addendum.** Per
+  Mike's literal instruction. The yaml comments added at commit 5
+  already reference `orchestrator-utilization-addendum` (forward
+  reference to content that doesn't yet exist there); landing the
+  effort+thinking content in the same file resolves the reference
+  in-place without yaml-comment updates. Less doc proliferation.
+  Risk: addendum becomes catch-all for Opus-version-specific
+  guidance, blurring the original utilization scope.
+- **Reading C — separate file BUT cross-reference from utilization
+  addendum + update yaml comments to point at new file.** Combines
+  topic-scoping (A) with explicit cross-reference for discoverability.
+  Cost: yaml + code comment updates.
+
+**Recommendation: Reading C (separate file with cross-reference).**
+
+Reading A's topic-scoping argument is sound — orchestrator-utilization-addendum
+is about subscription pacing (operator's "spend what you bought"
+discipline), Opus 4.7 effort is about model-version-specific
+configuration. Folding them risks the utilization addendum becoming
+"all things addendum" over time as Phase 2+ adds new
+model-version-specific guidance. Reading B's "in-place reference
+resolution" is real but solves the wrong problem — yaml comments
+should point at the topic-scoped doc, not at the doc that happens
+to be referenced today.
+
+Reading C's cost is small: 4 yaml comment updates + 3 code-comment
+updates. Mechanical changes; low risk. The cross-reference from
+utilization addendum to the new opus-4-7 addendum keeps
+discoverability cheap for future-Claude reading utilization-context
+first.
+
+**Surface as anticipated pushback** (F7.5.1) — Mike's literal
+instruction names the existing file; if the slip-vs-deliberate
+question lands as "deliberate," I'll switch to Reading B.
+
+### Q2 — F1.3 Q7 disposition placement (Mike's interactive PM session non-effect)
+
+F1.3 Q7 disposition: Mike's interactive PM session governed by
+local Claude Code defaults (xhigh on Opus 4.7 by client convention),
+not by yaml effort field. The yaml field configures daemon-launched
+PM-continuous subprocess only.
+
+Where does this content live in the spec?
+
+- **Reading A — addendum only.** The addendum doc carries the
+  Mike-interactive-PM non-effect framing. 07-agent-configs reflects
+  the yaml schema without re-explaining the daemon-vs-client
+  distinction.
+- **Reading B — 07-agent-configs only.** The yaml-schema doc
+  explains the field's scope (daemon-launched only); addendum
+  doesn't repeat the operational framing.
+- **Reading C — both, with single canonical statement in addendum
+  + brief reference from 07.** The addendum is the rationale doc;
+  07 is the field-schema reference. Cross-reference keeps both
+  audiences served.
+
+**Recommendation: Reading C.** 07-agent-configs is what
+future-Claude opens to understand "what does the effort field
+do?"; the daemon-vs-client distinction is part of that answer.
+Addendum carries the full framing (rationale + Anthropic guidance
+verification + adaptive-thinking F1.4 finding); 07 cross-references
+it. Both audiences served.
+
+### Q3 — 02-architecture.md merge content scope
+
+What lands in 02-architecture for effort plumbing?
+
+- **Reading A — brief reference under agent-launch architecture.**
+  ~5-10 line note: "Daemon-launched agent subprocesses receive
+  `--effort <level>` per the per-role yaml `effort` field. See
+  opus-4-7-effort-and-thinking-addendum.md for guidance." Anchors
+  the cross-reference at the architectural surface.
+- **Reading B — skip 02 entirely.** Effort plumbing is a launcher
+  detail; 02 is high-level architecture. No natural fit. Land
+  content in 07 + 11 + addendum only.
+- **Reading C — full content in 02 with copy in 07/11.** Makes 02
+  the canonical location (architectural primacy) with reference
+  copies elsewhere. Risk: drift between copies.
+
+**Recommendation: Reading A (brief reference).** 02 is primarily
+high-level deployment / agent topology; effort plumbing is a thin
+slice of agent-launch behavior worth naming briefly with a
+cross-reference. Reading B's "skip entirely" risks future-Claude
+reading 02 cold and missing the configuration surface; Reading C's
+full-copy invites drift.
+
+### Q4 — 07-agent-configs-phase-one.md merge content scope
+
+The yaml-schema doc gets the most substantive merge:
+
+- Effort field added to the schema reference (`effort: <Literal>` line)
+- Per-role assignment table (PM/Engineer/Implementer xhigh, Tester high)
+- Cross-reference to addendum for rationale
+- Mike's interactive PM session non-effect framing per Q2-C
+
+This is straightforward. No multi-Reading question; surface as
+content-scope confirmation.
+
+### Q5 — 11-engineer-bridge.md merge content scope
+
+11 covers the bridge architecture — dispatcher + supervisors. The
+merge content:
+
+- Reference to `--effort` flag flow through `_default_launcher`
+  (both dispatcher and supervisor variants)
+- Note that effort is resolved per-dispatch from registry
+  (kwarg-from-registry per F6.2 Q3-A); supervisor effort frozen
+  across respawns per F6.2 Q9-A
+- Cross-reference to addendum
+
+No multi-Reading; content-scope confirmation. Brief — the launcher
+detail is the load-bearing technical content; 11 is the
+architectural framing that doesn't need duplicate prose.
+
+---
+
+## F7.3 — addendum content scope (per F1.3 + F1.4 + F6.6 dispositions)
+
+If Q1 lands as Reading A or C (separate file
+`opus-4-7-effort-and-thinking-addendum.md`), the addendum content:
+
+1. **Header + status:** new addendum, established at
+   M5-continuous-pm-driver commit 6.
+2. **Per-role effort assignment table:** PM/Engineer/Implementer
+   xhigh, Tester high. Rationale per role:
+   - PM: agentic loop, intelligence-sensitive (continuous-mode
+     planning + dispatch coordination).
+   - Engineer: agentic loop, intelligence-sensitive (spec
+     composition + dispatch lifecycle).
+   - Implementer: code-change work, "minimum high for
+     intelligence-sensitive" per Anthropic guidance; xhigh chosen
+     for agentic-tool work.
+   - Tester: narrower work shape (verifying assertion specs
+     against artifacts); high reflects lower
+     intelligence-sensitivity vs Implementer's xhigh.
+3. **Operator-agency framing per F6.6.B:** full 5-value Literal
+   admits operator tuning beyond defaults; medium/low for
+   cost-conscious exploration; max for high-stakes overrides.
+   Closed-Literal at config-load defends against typos; full
+   surface admits exploration without schema migration.
+4. **Adaptive thinking F1.4 distinction:** at the raw API,
+   adaptive thinking is NOT implicit (must set
+   `thinking: {type: "adaptive"}` explicitly); at the Claude Code
+   subprocess boundary, CC v2.1.117+ defaults to adaptive on Opus
+   4.7. Daemon launches CC subprocesses; daemon-side has no
+   thinking-mode plumbing per F1.4 verification.
+5. **Wrapper-doesn't-exist-in-Phase-1 finding (F1.4):** "If/when
+   an Orchestrator-side API client emerges (currently none in
+   Phase 1), legacy `thinking: {type: 'enabled'}` handling on
+   4.7-bound requests must be silently stripped." For Phase 1,
+   moot — no daemon-side API client exists.
+6. **Mike's interactive PM session non-effect (F1.3 Q7):**
+   yaml effort governs daemon-launched PM-continuous; Mike's
+   interactive PM Claude Code session governed by client-side
+   defaults (CC v2.1.117+ defaults to xhigh on Opus 4.7).
+7. **CLI flag verification source:** verified via `claude --help`
+   2026-05-05 during commit 5 draft; `--effort <level>` accepts
+   low/medium/high/xhigh/max. Documented as ongoing-verifiable
+   fact (re-verify when Anthropic doc + CLI surface evolves).
+8. **Anthropic guidance citation:**
+   - `platform.claude.com/docs/en/build-with-claude/effort`
+   - `platform.claude.com/docs/en/build-with-claude/adaptive-thinking`
+   - `code.claude.com/docs/en/model-config`
+9. **Closing note:** Phase 2 may reopen if daemon-side API client
+   emerges (F1.4 task-budgets context).
+
+Length target per F1.3: ~150-300 lines.
+
+---
+
+## F7.4 — F2.1 estimate
+
+F2.1 commit-6 estimate: +0 tests (docs-only).
+
+No surface-as-finding evaluation needed — no test surface to
+diverge from estimate. F2.1 trigger condition (per F6.6 metric
+clarification: unique-function count primary) doesn't apply to
+zero-test commits. Confirm at diff checkpoint that test count
+remains 532 unchanged.
+
+---
+
+## F7.5 — anticipated pushbacks
+
+Three weak points likely to surface at review:
+
+1. **Q1 file-vs-section: F1.3 vs Mike's literal instruction
+   discrepancy.** F1.3 (Followup-1) recommended separate file;
+   Mike's commit-6-prep instruction names the existing utilization
+   addendum file. My Reading C recommendation honors F1.3 but
+   adds the cross-reference layer to address Mike's
+   in-place-reference framing. If Mike's instruction was
+   deliberate (fold related Opus-version-specific addendum
+   content together), Reading B is the right call. If it was a
+   slip, Reading A or C land. Surface explicitly so disposition
+   is conscious, not absorbed.
+
+2. **Addendum bloat under Reading B.** If Q1 lands as Reading B
+   (fold into existing utilization addendum), the addendum doc
+   adds ~150-300 lines to a 354-line file — doubles the file
+   size. Existing utilization addendum scope is "subscription
+   pacing"; folding Opus 4.7 effort + thinking expands scope to
+   "utilization + model-version-specific config." Worth surfacing
+   the scope-blur risk if Reading B lands.
+
+3. **F1.3 Q7 placement (Q2-C) duplication risk.** Reading C
+   surfaces the Mike-interactive-PM non-effect content in BOTH
+   addendum + 07. Drift risk: future amendment to one doesn't
+   propagate. Mitigation: 07's reference is a brief
+   "see addendum § Mike's interactive PM session" pointer rather
+   than a content copy; addendum is the canonical statement.
+   Surface to confirm the cross-reference shape (pointer vs
+   summary).
+
+---
+
+## F7.6 — what lands at the diff checkpoint
+
+After Mike disposition Q1-Q5 + the three anticipated-pushback items:
+
+- New addendum doc (Q1-A or C) OR new section in existing
+  utilization addendum (Q1-B), with content per F7.3
+- 02-architecture.md brief reference per Q3
+- 07-agent-configs-phase-one.md schema + per-role table + Q2
+  cross-reference
+- 11-engineer-bridge.md launcher reference per Q5
+- (If Q1-A or C) yaml + code comment updates to cross-reference
+  the new addendum file
+- Test count stays 532; gates re-verify trivially
+
+Diff checkpoint surfaces the docs in toto for review; commit 6
+lands; commit 7 prep opens (continuous loop driver core +
+get_window_state polling + check_budget_for_task routing +
+iteration loop — the load-bearing implementation work).
+
+**End of Followup-12.**
 
 ---
 

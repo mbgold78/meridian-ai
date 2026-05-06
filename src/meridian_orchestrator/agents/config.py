@@ -40,7 +40,8 @@ ModelTier = Literal["haiku", "sonnet", "opus"]
 # Verified via `claude --help` (2026-05-05): the CLI flag is
 # `--effort <level>` accepting low/medium/high/xhigh/max.
 #
-# Phase 1 actual usage per orchestrator-utilization-addendum:
+# Phase 1 actual usage per
+# `docs/kickoff/opus-4-7-effort-and-thinking-addendum.md`:
 # PM/Engineer/Implementer at xhigh, Tester at high. Full 5-value
 # surface admits operator tuning beyond defaults — medium/low for
 # cost-conscious exploration, max for high-stakes overrides — without

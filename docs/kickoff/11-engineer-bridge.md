@@ -435,7 +435,8 @@ Two long-running supervisor subprocesses share infrastructure and lifecycle sema
 | Aspect | Sub-agent dispatch (Engineer-driven) | Long-running supervisor (PMSupervisor or EngineerSupervisor) |
 |---|---|---|
 | Lifecycle owner | `bridge.dispatcher.BridgeDispatcher` | `bridge.engineer_supervisor.EngineerSupervisor` (Engineer; ships M4c) or `bridge.pm_supervisor.PMSupervisor` (continuous PM; ships M5). Both subclass `bridge.supervisor_base.LongRunningSupervisor` shipped at M4c. |
-| Subprocess command | `claude -p <spec>` | `claude -p <continuous_pm_prompt>` (continuous PM) or `claude -p <engineer_prompt>` (Engineer) |
+| Subprocess command | `claude --effort <level> -p <spec>` | `claude --effort <level> -p <continuous_pm_prompt>` (continuous PM) or `claude --effort <level> -p <engineer_prompt>` (Engineer) |
+| Effort flag source | `--effort <level>` resolved per-dispatch from `AgentConfig.effort` via `tools/dispatch.py:_resolve_effort_for_role` (registry-keyed lookup; mirrors `_resolve_model_for_role` pattern). Yaml hot-reload picks up new effort at next dispatch. | `--effort <level>` set at supervisor `__init__` from `<role>.config.effort` and frozen across respawns; yaml hot-reload picks up new effort at next supervisor restart, not mid-flight respawns (per F6.2 Q9 supervisor-granularity acknowledgment). See `opus-4-7-effort-and-thinking-addendum.md` §§ Per-role effort assignments and Operator-agency framing for guidance. |
 | Working directory | Per-dispatch git worktree under data dir | `<MERIDIAN_ORCH_DATA_DIR>/pm-continuous/` or `<MERIDIAN_ORCH_DATA_DIR>/engineer/` (no git, no worktree) |
 | Token role | `implementer` or `tester` | `pm` with `label='pm-continuous'`, or `engineer` with `label='engineer-supervisor'` |
 | Hard timeout | `max(estimated_tokens / tps, 300s)` per dispatch | None — long-lived; heartbeat watchdog instead |

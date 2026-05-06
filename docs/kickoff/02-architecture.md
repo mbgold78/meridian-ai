@@ -200,6 +200,7 @@ Manual setup steps for Mike are documented in `14-telegram-setup.md`.
 | Service manager | launchd (Mac), systemd (Linux), Windows Service (Mike's machine) |
 | Backup | SQLite dump on startup + daily; retain last 7 |
 | Bridge to sub-agents | M3-decided per `11-engineer-bridge.md`: Option A (subprocess Claude Code) with `complete_dispatch` MCP-tool completion; per-dispatch git worktrees off a daemon-owned canonical clone; parallel concurrent dispatch supported |
+| Daemon-launched subprocess effort | Per-role `effort` field on agent yamls (PM/Engineer/Implementer xhigh, Tester high) flows through `_default_launcher` as `claude --effort <level>`. See `opus-4-7-effort-and-thinking-addendum.md` §§ Per-role effort assignments and Operator-agency framing. Mike's interactive PM session governed by client-side defaults, not the yaml field — see same addendum § Mike's interactive PM session. |
 | PM operating modes | Interactive (Mike's Claude Code session, OAuth-authenticated) and continuous (daemon-launched Claude Code subprocess, static-token-authenticated); coordinated via `pm_mode_log` |
 | Subscription utilization | Aggressive — target 70–90% during work hours; window-aware burn with `upgrade` / `conserve` pace transitions |
 | Notifications | Telegram bot, PM-only, bidirectional, M6 deliverable |

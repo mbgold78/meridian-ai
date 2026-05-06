@@ -22,11 +22,11 @@ manages:
   - engineer
 model_tier_default: opus
 # Effort level for daemon-launched PM-continuous subprocess per
-# orchestrator-utilization-addendum (Opus 4.7 effort + thinking
-# guidance). xhigh for agentic loops; full Anthropic-supported
-# values are low/medium/high/xhigh/max — operator may tune for
-# cost/quality exploration. Mike's interactive PM session governed
-# by client-side defaults (Claude Code v2.1.117+ defaults to xhigh
+# docs/kickoff/opus-4-7-effort-and-thinking-addendum.md. xhigh for
+# agentic loops; full Anthropic-supported values are
+# low/medium/high/xhigh/max — operator may tune for cost/quality
+# exploration. Mike's interactive PM session governed by
+# client-side defaults (Claude Code v2.1.117+ defaults to xhigh
 # on Opus 4.7), not this field; this field configures the
 # daemon-launched continuous-mode subprocess only.
 effort: xhigh

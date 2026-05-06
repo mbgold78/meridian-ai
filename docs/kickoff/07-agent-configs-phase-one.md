@@ -13,6 +13,7 @@ class AgentConfig(BaseModel):
     role: str                                # canonical role name, lowercase
     display_name: str
     model_tier_default: Literal['haiku','sonnet','opus']
+    effort: Literal['low','medium','high','xhigh','max']  # required; daemon-launched subprocess only
     mcp_tools_allowed: list[str]
     knowledge_paths_readable: list[str]      # glob patterns
     knowledge_paths_writable: list[str]      # glob patterns
@@ -20,6 +21,14 @@ class AgentConfig(BaseModel):
     manages: list[str]                       # role names
     system_prompt: str                       # full system prompt
 ```
+
+## Note on `effort`
+
+Required field per M5-continuous-pm-driver commit 5 (added at this milestone). Configures the `--effort <level>` flag passed to daemon-launched Claude Code subprocesses (PMSupervisor's PM-continuous, EngineerSupervisor's Engineer, BridgeDispatcher's Implementer/Tester). Pydantic Literal validates against the closed 5-value set (`low/medium/high/xhigh/max`) at yaml-load time; missing field surfaces as a Pydantic validation error at daemon startup (hard-fail by design — soft default would mask config drift).
+
+**Phase 1 per-role assignments:** PM/Engineer/Implementer at `xhigh`, Tester at `high`. Per-role rationale + Anthropic guidance citation + operator-agency framing for the field's full Anthropic-supported value surface live in `opus-4-7-effort-and-thinking-addendum.md`.
+
+**Mike's interactive PM session non-effect.** The `effort` field configures **daemon-launched** subprocesses only. Mike's interactive PM Claude Code session is governed by client-side defaults (Claude Code v2.1.117+ defaults to xhigh on Opus 4.7), not by the yaml field — the daemon has no plumbing path into Mike's local CC session. See `opus-4-7-effort-and-thinking-addendum.md` § Mike's interactive PM session for treatment of the yaml effort field's non-effect on daemon-external Claude Code instances.
 
 ## Note on `model_tier_default`
 
@@ -39,6 +48,7 @@ Calling this out explicitly because the YAML can mislead a reader who assumes `o
 role: pm
 display_name: Product Manager
 model_tier_default: opus
+effort: xhigh                    # daemon-launched PM-continuous; see opus-4-7-effort-and-thinking-addendum.md
 mcp_tools_allowed:
   - submit_task
   - get_queue
@@ -226,6 +236,7 @@ system_prompt: |
 role: engineer
 display_name: Engineer
 model_tier_default: sonnet      # opus for complex coordination decisions, sonnet for routine dispatch
+effort: xhigh                    # daemon-launched Engineer-supervisor; see opus-4-7-effort-and-thinking-addendum.md
 mcp_tools_allowed:
   - submit_task                 # for sub-tasks under PM-submitted tasks
   - get_queue
@@ -309,6 +320,7 @@ system_prompt: |
 role: implementer
 display_name: Implementer
 model_tier_default: sonnet
+effort: xhigh                    # daemon-launched Implementer dispatch; see opus-4-7-effort-and-thinking-addendum.md
 mcp_tools_allowed:
   - record_api_call
   - read_knowledge
@@ -346,6 +358,7 @@ system_prompt: |
 role: tester
 display_name: Tester
 model_tier_default: sonnet
+effort: high                     # daemon-launched Tester dispatch; see opus-4-7-effort-and-thinking-addendum.md
 mcp_tools_allowed:
   - record_api_call
   - read_knowledge

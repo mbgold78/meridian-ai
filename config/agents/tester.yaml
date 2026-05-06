@@ -17,13 +17,13 @@ reports_to: engineer
 manages: []
 model_tier_default: sonnet
 # Effort level for daemon-launched Tester dispatch subprocess per
-# orchestrator-utilization-addendum. high (one tier below
-# Implementer's xhigh) reflects Tester's narrower work shape —
-# verifying assertion specs against artifacts is less
+# docs/kickoff/opus-4-7-effort-and-thinking-addendum.md. high (one
+# tier below Implementer's xhigh) reflects Tester's narrower work
+# shape — verifying assertion specs against artifacts is less
 # intelligence-sensitive than producing code changes. Operator may
 # tune via the full Anthropic-supported set (low/medium/high/xhigh/max);
 # medium for cost-conscious quality-vs-cost exploration is a
-# defensible tuning. See pm.yaml § effort for full guidance.
+# defensible tuning. See the addendum for full guidance.
 effort: high
 
 mcp_tools_allowed:
