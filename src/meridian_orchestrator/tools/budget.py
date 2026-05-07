@@ -75,7 +75,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal
+from typing import Any, Literal, NamedTuple
 
 import structlog
 from pydantic import BaseModel, Field
@@ -219,14 +219,40 @@ _TERMINAL_STATES_SQL_LIST = ",".join(f"'{s}'" for s in sorted(_TERMINAL_STATES))
 _WORKFLOW_CHAIN_MAX_DEPTH: int = 100
 
 
-async def _resolve_workflow_id_from_dispatch(
-    storage: Storage, dispatch_id: str | None
-) -> str | None:
-    """Resolve the chain-root task_id (workflow_id alpha-denormalization)
-    by walking ``tasks.parent_task_id`` from the dispatch's bound task.
+class ChainRootCohortKeys(NamedTuple):
+    """Cohort keys resolved from the dispatch chain root.
 
-    Returns the chain root's task_id when the caller has a bound
-    dispatch with a resolvable task chain. Returns ``None`` when:
+    Both fields are None when the dispatch has no bound chain (None
+    dispatch_id; NULL task_id; chain overflow). When the chain is
+    walkable, ``workflow_id`` is the root task's id and ``task_type``
+    is the root task's task_type column value (which may itself be
+    NULL if the root task was submitted without an explicit
+    task_type).
+
+    Symmetric extension at M4d-task-management-surface commit 7
+    (2026-05-07): per Q2 disposition at M4d commit 3 prep, the same
+    recursive CTE that resolves workflow_id from chain root also
+    resolves task_type. Server-derived wins on conflict; caller-
+    supplied falls through when server-derived is None. Per CQ3
+    commit 7: same conflict-logging shape (structlog WARNING; no
+    audit row) for both fields.
+    """
+
+    workflow_id: str | None
+    task_type: str | None
+
+
+async def _resolve_chain_root_cohort_keys_from_dispatch(
+    storage: Storage, dispatch_id: str | None
+) -> ChainRootCohortKeys:
+    """Resolve the chain-root cohort keys (workflow_id + task_type
+    alpha-denormalization) by walking ``tasks.parent_task_id`` from
+    the dispatch's bound task.
+
+    Returns the chain root's ``(task_id, task_type)`` as a
+    :class:`ChainRootCohortKeys` named tuple when the caller has a
+    bound dispatch with a resolvable task chain. Returns
+    ``ChainRootCohortKeys(None, None)`` when:
 
     - ``dispatch_id`` is None (caller has no bound dispatch — Mike's
       interactive OAuth PM is the canonical case)
@@ -238,61 +264,65 @@ async def _resolve_workflow_id_from_dispatch(
       WARNING). Real production chains are 1-3 hops; the limit is
       defensive-only.
 
-    Uses a recursive CTE for atomic single-query resolution within the
-    enclosing ``storage.transaction()`` scope. The CTE's base case
-    joins through ``dispatches`` to fetch the dispatch's task; the
-    recursive case walks ``parent_task_id`` to the chain root
-    (``parent_task_id IS NULL``).
+    Uses a recursive CTE for atomic single-query resolution within
+    the enclosing ``storage.transaction()`` scope. The CTE projects
+    both the chain id and the task_type column; both come from the
+    same chain-root row, so a single walk yields both cohort keys.
 
-    **Recursive CTE — first instance in this codebase.** The pattern
-    is durable for tree/chain traversal (workflow chains, agent
-    management hierarchies, knowledge subtrees, ``get_subtasks`` reads
-    at M4d). Per the watch-for-pattern entry in the M5-continuous-pm-
-    driver grounding doc, threshold-of-three triggers same-commit
-    extraction of a shared helper.
+    **Symmetric extension at M4d-task-management-surface commit 7**
+    per Q2 disposition (commit 3 prep, 2026-05-07): same CTE walks
+    same chain; one extra column projected. Reading A (minimal
+    extension) per CQ2 commit 7 disposition. Original function
+    ``_resolve_workflow_id_from_dispatch`` (M5-continuous-pm-driver
+    commit 1) renamed to reflect expanded scope — only one private
+    caller (``record_api_call``); refactor mechanical.
 
     Caller is responsible for the resolution-precedence semantics
-    against any caller-supplied workflow_id — see ``record_api_call``
-    handler for the Reading B disposition (server-derived wins when
-    present; caller-supplied falls through when server-derived returns
-    None).
+    against any caller-supplied workflow_id / task_type — see
+    ``record_api_call`` handler for the Reading B disposition
+    (server-derived wins when present; caller-supplied falls through
+    when server-derived returns None).
     """
     if dispatch_id is None:
-        return None
+        return ChainRootCohortKeys(workflow_id=None, task_type=None)
     sql = """
-    WITH RECURSIVE chain(id, parent_task_id, depth) AS (
-        SELECT t.id, t.parent_task_id, 0
+    WITH RECURSIVE chain(id, parent_task_id, task_type, depth) AS (
+        SELECT t.id, t.parent_task_id, t.task_type, 0
         FROM dispatches d
         INNER JOIN tasks t ON t.id = d.task_id
         WHERE d.id = ?
         UNION ALL
-        SELECT t.id, t.parent_task_id, c.depth + 1
+        SELECT t.id, t.parent_task_id, t.task_type, c.depth + 1
         FROM tasks t
         INNER JOIN chain c ON t.id = c.parent_task_id
         WHERE c.depth < ?
     )
-    SELECT id, parent_task_id, depth FROM chain
+    SELECT id, parent_task_id, task_type, depth FROM chain
     ORDER BY depth DESC LIMIT 1
     """
     row = await storage.fetch_one(
         sql, (dispatch_id, _WORKFLOW_CHAIN_MAX_DEPTH)
     )
     if row is None:
-        return None
+        return ChainRootCohortKeys(workflow_id=None, task_type=None)
     if row["parent_task_id"] is None:
-        return str(row["id"])
+        return ChainRootCohortKeys(
+            workflow_id=str(row["id"]),
+            task_type=row["task_type"],
+        )
     # Deepest reachable row has a non-NULL parent — chain hit the
     # defensive depth limit. Almost certainly a cycle in the
     # parent_task_id DAG (real chains are 1-3 hops). Log and return
-    # None; cohort-key write proceeds with NULL workflow_id rather
-    # than failing the api_usage write on a pathological chain.
+    # both fields None; cohort-key write proceeds with NULL
+    # workflow_id and NULL task_type rather than failing the
+    # api_usage write on a pathological chain.
     logger.warning(
         "record_api_call.workflow_id_chain_overflow",
         dispatch_id=dispatch_id,
         max_depth=_WORKFLOW_CHAIN_MAX_DEPTH,
         deepest_task_id=row["id"],
     )
-    return None
+    return ChainRootCohortKeys(workflow_id=None, task_type=None)
 
 
 async def record_api_call(
@@ -438,37 +468,59 @@ async def record_api_call(
             dispatch_row["id"] if dispatch_row is not None else None
         )
 
-        # Resolve workflow_id alpha-denormalization: server-derived from
-        # the bound dispatch's task chain root wins when present;
-        # caller-supplied falls through when server-derived returns
-        # None (PM-direct OAuth case + dispatches with NULL task_id).
-        # Per F1.1 / D1.1 + Q1 Reading B disposition.
-        server_derived_workflow_id = (
-            await _resolve_workflow_id_from_dispatch(storage, dispatch_id)
+        # Resolve cohort keys (workflow_id + task_type) alpha-
+        # denormalization: server-derived from the bound dispatch's
+        # task chain root wins when present; caller-supplied falls
+        # through when server-derived returns None (PM-direct OAuth
+        # case + dispatches with NULL task_id). Per F1.1 / D1.1 + Q1
+        # Reading B disposition (M5-continuous-pm-driver commit 1) and
+        # Q2/CQ3 commit 7 symmetric extension for task_type.
+        server_derived = (
+            await _resolve_chain_root_cohort_keys_from_dispatch(
+                storage, dispatch_id
+            )
         )
         if (
             request.workflow_id is not None
-            and server_derived_workflow_id is not None
-            and request.workflow_id != server_derived_workflow_id
+            and server_derived.workflow_id is not None
+            and request.workflow_id != server_derived.workflow_id
         ):
             # Soft conflict: caller annotated a workflow_id that
             # disagrees with the chain-root derivation. Server-derived
-            # wins (Reading B precedence), but the conflict surfaces
-            # via structlog WARNING for tier-2 observability
-            # investigation. Per Q3 Reading A: WARNING level, no audit
-            # row (high-frequency soft conflict; audit log not the
-            # right surface).
+            # wins (Reading B precedence); WARNING-level structlog for
+            # tier-2 observability investigation. Per Q3 Reading A
+            # (commit 1) + CQ3 commit 7: no audit row (high-frequency
+            # soft conflict; audit log not the right surface).
             logger.warning(
                 "record_api_call.workflow_id_conflict",
                 caller_supplied_workflow_id=request.workflow_id,
-                server_derived_workflow_id=server_derived_workflow_id,
+                server_derived_workflow_id=server_derived.workflow_id,
+                caller_agent_id=caller_agent_id,
+                dispatch_id=dispatch_id,
+            )
+        if (
+            request.task_type is not None
+            and server_derived.task_type is not None
+            and request.task_type != server_derived.task_type
+        ):
+            # Symmetric task_type conflict logging per CQ3 commit 7
+            # disposition. Same shape as workflow_id_conflict above.
+            logger.warning(
+                "record_api_call.task_type_conflict",
+                caller_supplied_task_type=request.task_type,
+                server_derived_task_type=server_derived.task_type,
                 caller_agent_id=caller_agent_id,
                 dispatch_id=dispatch_id,
             )
         resolved_workflow_id = (
-            server_derived_workflow_id
-            if server_derived_workflow_id is not None
+            server_derived.workflow_id
+            if server_derived.workflow_id is not None
             else request.workflow_id
+        )
+        resolved_task_type = (
+            server_derived.task_type
+            if server_derived.task_type is not None
+            else request.task_type
         )
 
         await storage.execute(
@@ -489,7 +541,7 @@ async def record_api_call(
                 request.notes,
                 resolved_workflow_id,
                 caller_agent_role,
-                request.task_type,
+                resolved_task_type,
             ),
         )
 

@@ -166,6 +166,8 @@ from meridian_orchestrator.tools.tasks import (
     GetQueueOutput,
     GetSubtasksInput,
     GetSubtasksOutput,
+    SetTaskPriorityInput,
+    SetTaskPriorityOutput,
     SubmitTaskInput,
     SubmitTaskOutput,
     UpdateTaskStatusInput,
@@ -173,6 +175,7 @@ from meridian_orchestrator.tools.tasks import (
     claim_task,
     get_queue,
     get_subtasks,
+    set_task_priority,
     submit_task,
     update_task_status,
 )
@@ -1804,6 +1807,37 @@ def _register_task_tools(
             storage=storage,
             permissions=resolver,
             request=GetSubtasksInput(parent_task_id=parent_task_id),
+            caller_agent_id=agent_id,
+            caller_role=caller_role,
+        )
+
+    @mcp.tool(
+        name="set_task_priority",
+        description=(
+            "Update a task's priority value (1=highest, 5=lowest). "
+            "Hierarchy gate (3-clause OR): caller must be the "
+            "submitter (agent-id) OR the claimed-by (agent-id) OR "
+            "an ancestor in the role hierarchy. Audited as "
+            "task.priority_change with from/to values. Race-free "
+            "UPDATE (priority is operator-level idempotent change; "
+            "last-writer-wins semantically acceptable)."
+        ),
+    )
+    async def _set_task_priority(
+        task_id: str,
+        priority: int,
+    ) -> SetTaskPriorityOutput:
+        agent_id = _resolve_agent_id()
+        await _observe_caller(storage, token_store, "set_task_priority")
+        caller_role = _resolve_caller_role_via_token()
+        resolver = PermissionResolver(registry.configs_by_role())
+        resolver.require_tool(caller_role, "set_task_priority")  # type: ignore[arg-type]
+        return await set_task_priority(
+            storage=storage,
+            permissions=resolver,
+            request=SetTaskPriorityInput(
+                task_id=task_id, priority=priority
+            ),
             caller_agent_id=agent_id,
             caller_role=caller_role,
         )

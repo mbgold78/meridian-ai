@@ -832,20 +832,26 @@ async def test_record_api_call_audit_details_include_observability_fields(
 
 
 # ---------------------------------------------------------------------------
-# Workflow_id alpha-denormalization (M5-continuous-pm-driver commit 1)
+# Cohort-key alpha-denormalization (workflow_id at M5-continuous-pm-
+# driver commit 1; task_type symmetric extension at M4d-task-management-
+# surface commit 7)
 # ---------------------------------------------------------------------------
 #
 # Per F1.1 / D1.1 + Q1 Reading B disposition: the chain root of the
 # caller's bound dispatch's task is resolved server-side via
-# tools/budget.py:_resolve_workflow_id_from_dispatch and stamped on
-# api_usage.workflow_id at write time. Resolution precedence: server-
-# derived wins when present; caller-supplied falls through when
+# tools/budget.py:_resolve_chain_root_cohort_keys_from_dispatch
+# (renamed from _resolve_workflow_id_from_dispatch at commit 7 to
+# reflect expanded scope — same recursive CTE now resolves both
+# workflow_id and task_type from chain root). Resolution precedence:
+# server-derived wins when present; caller-supplied falls through when
 # server-derived returns None.
 #
 # These tests pin: chain-root resolution at varying chain depths,
 # Reading B precedence (server wins over caller-supplied), conflict
 # logging when both differ, fallback for PM-direct OAuth callers,
 # fallback for dispatches with NULL task_id, and cycle defense.
+# Commit 7 adds parallel task_type tests (chain-root resolution +
+# fallback when chain-root task_type is NULL + conflict logging).
 
 
 async def _seed_task_chain(
@@ -1286,3 +1292,172 @@ async def test_workflow_id_alpha_cycle_defense_returns_none(
     assert overflow_logs[0]["log_level"] == "warning"
     assert overflow_logs[0]["dispatch_id"] == "d-alpha-cyc"
     assert overflow_logs[0]["max_depth"] == 100
+
+
+# ---------------------------------------------------------------------------
+# task_type alpha-denormalization (M4d commit 7 symmetric extension)
+# ---------------------------------------------------------------------------
+#
+# Per Q2 disposition at M4d commit 3 prep + CQ2/CQ3 commit 7 disposition:
+# task_type is resolved from the same chain root as workflow_id by the
+# same recursive CTE. Tests pin: chain-root resolution when root has
+# task_type set; caller-supplied fallthrough when root has NULL
+# task_type; conflict logging when both present and differ.
+
+
+async def test_task_type_alpha_resolves_chain_root_when_root_has_task_type(
+    storage: SqliteStorage,
+) -> None:
+    """Chain root has task_type='planning'; server-derived task_type
+    populates api_usage.task_type per Reading B precedence (server-
+    derived wins; no caller-supplied conflict)."""
+    token_store = TokenStore(service="task-type-alpha-1hop")
+    issued = token_store.issue("agent-1", "implementer", "tt-1hop")
+    # Set task-1's task_type to 'planning' (single-hop chain; task-1
+    # IS chain root per fixture's parent_task_id NULL).
+    await storage.execute(
+        "UPDATE tasks SET task_type = 'planning' WHERE id = 'task-1'"
+    )
+    await _seed_dispatch(
+        storage,
+        dispatch_id="d-tt-1",
+        role="implementer",
+        status="running",
+        token_id=issued.record.token_id,
+    )
+
+    out = await record_api_call(
+        storage=storage,
+        request=RecordApiCallInput(
+            model="claude-sonnet-4-6", input_tokens=100, output_tokens=50
+        ),
+        caller_agent_id="agent-1",
+        caller_agent_role="implementer",
+        caller_token_id=issued.record.token_id,
+    )
+
+    row = await storage.fetch_one(
+        "SELECT task_type FROM api_usage WHERE id = ?", (out.usage_id,)
+    )
+    assert row is not None
+    assert row["task_type"] == "planning", (
+        f"task_type={row['task_type']!r}, expected 'planning'. "
+        "Symmetric extension should stamp chain-root task_type per "
+        "Q2 commit 3 + CQ2 commit 7 disposition."
+    )
+
+
+async def test_task_type_alpha_falls_through_when_chain_root_task_type_null(
+    storage: SqliteStorage,
+) -> None:
+    """Chain root has task_type=NULL (default for tasks submitted
+    without explicit type). Server-derived task_type returns None;
+    caller-supplied 'execution' falls through to api_usage.task_type
+    per Reading B precedence."""
+    token_store = TokenStore(service="task-type-alpha-fallthrough")
+    issued = token_store.issue("agent-2", "implementer", "tt-fallthrough")
+    # task-1 has task_type=NULL by default (fixture seeds without it).
+    await _seed_dispatch(
+        storage,
+        dispatch_id="d-tt-ft",
+        role="implementer",
+        status="running",
+        token_id=issued.record.token_id,
+    )
+
+    out = await record_api_call(
+        storage=storage,
+        request=RecordApiCallInput(
+            model="claude-sonnet-4-6",
+            input_tokens=100,
+            output_tokens=50,
+            task_type="execution",
+        ),
+        caller_agent_id="agent-2",
+        caller_agent_role="implementer",
+        caller_token_id=issued.record.token_id,
+    )
+
+    row = await storage.fetch_one(
+        "SELECT task_type FROM api_usage WHERE id = ?", (out.usage_id,)
+    )
+    assert row is not None
+    assert row["task_type"] == "execution", (
+        f"task_type={row['task_type']!r}, expected 'execution'. "
+        "When server-derived is None (chain root has NULL task_type), "
+        "caller-supplied falls through per Reading B precedence."
+    )
+
+
+async def test_task_type_alpha_conflict_emits_warning(
+    storage: SqliteStorage,
+) -> None:
+    """Caller-supplied task_type ('execution') disagrees with chain-
+    root task_type ('planning'). Server-derived wins (Reading B);
+    record_api_call.task_type_conflict structlog WARNING surfaces
+    with both values + caller_agent_id + dispatch_id. No audit row
+    (high-frequency soft conflict per CQ3 commit 7).
+
+    Mirrors workflow_id conflict test pattern (uses
+    ``structlog.testing.capture_logs``).
+    """
+    import structlog.testing
+
+    token_store = TokenStore(service="task-type-alpha-conflict")
+    issued = token_store.issue("agent-3", "implementer", "tt-conflict")
+    await storage.execute(
+        "UPDATE tasks SET task_type = 'planning' WHERE id = 'task-1'"
+    )
+    await _seed_dispatch(
+        storage,
+        dispatch_id="d-tt-conflict",
+        role="implementer",
+        status="running",
+        token_id=issued.record.token_id,
+    )
+
+    with structlog.testing.capture_logs() as captured:
+        out = await record_api_call(
+            storage=storage,
+            request=RecordApiCallInput(
+                model="claude-sonnet-4-6",
+                input_tokens=100,
+                output_tokens=50,
+                task_type="execution",  # disagrees with chain root
+            ),
+            caller_agent_id="agent-3",
+            caller_agent_role="implementer",
+            caller_token_id=issued.record.token_id,
+        )
+
+    # Server-derived wins (Reading B precedence).
+    row = await storage.fetch_one(
+        "SELECT task_type FROM api_usage WHERE id = ?", (out.usage_id,)
+    )
+    assert row is not None
+    assert row["task_type"] == "planning", (
+        f"task_type={row['task_type']!r}, expected 'planning'. "
+        "Server-derived must win on conflict per Reading B."
+    )
+
+    # WARNING log surfaces with both values.
+    conflict_logs = [
+        r for r in captured
+        if r.get("event") == "record_api_call.task_type_conflict"
+    ]
+    assert len(conflict_logs) == 1, (
+        f"Expected 1 task_type_conflict log; got {len(conflict_logs)}."
+    )
+    log = conflict_logs[0]
+    assert log["log_level"] == "warning"
+    assert log["caller_supplied_task_type"] == "execution"
+    assert log["server_derived_task_type"] == "planning"
+    assert log["caller_agent_id"] == "agent-3"
+    assert log["dispatch_id"] == "d-tt-conflict"
+
+    # No audit row for soft conflict (CQ3 commit 7).
+    audits = await storage.fetch_all(
+        "SELECT id FROM audit_log "
+        "WHERE action = 'api.record_call.task_type_conflict'"
+    )
+    assert audits == []

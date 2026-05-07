@@ -55,6 +55,7 @@ from meridian_orchestrator.tools.tasks import (
     UpdateTaskStatusInput,
     _check_can_claim,
     _check_can_read_subtasks,
+    _check_can_set_priority,
     _check_can_submit_task,
     _check_can_submit_task_parent_ownership,
     _check_can_update_task_status,
@@ -63,6 +64,7 @@ from meridian_orchestrator.tools.tasks import (
     claim_task,
     get_queue,
     get_subtasks,
+    set_task_priority,
     submit_task,
     update_task_status,
 )
@@ -1408,4 +1410,173 @@ async def test_get_subtasks_returns_visible_subtasks_under_parent(
         caller_role="pm",
     )
     assert {t.id for t in out.tasks} == {"sub-1", "sub-2"}
+
+
+# ---------------------------------------------------------------------------
+# Commit 7 tests: set_task_priority handler + helper
+# ---------------------------------------------------------------------------
+
+
+# ----- _check_can_set_priority (3-clause OR; agent-id submitter) ----------
+
+
+@pytest.mark.parametrize(
+    ("scenario", "submitted_by", "claimed_by", "task_role",
+     "caller_agent_id", "caller_role", "expected_pass"),
+    [
+        # Clause 1: submitter (agent-id match) passes.
+        (
+            "submitter_agent_id_match",
+            "agent-pm", None, "engineer",
+            "agent-pm", "pm", True,
+        ),
+        # Clause 2: claimed_by (agent-id match) passes.
+        (
+            "claimed_by_match",
+            "agent-pm", "agent-eng-a", "engineer",
+            "agent-eng-a", "engineer", True,
+        ),
+        # Clause 3: ancestor (PM transitively manages engineer) passes.
+        (
+            "ancestor_pm_to_engineer_task",
+            "agent-other", "agent-other", "engineer",
+            "agent-pm", "pm", True,
+        ),
+        # Submitter agent-id-only NOT role-level: PM-A submits; PM-B
+        # (different agent_id; same role) attempts to set priority.
+        # Clause 1 fails (different agent_id); Clause 3 passes ONLY if
+        # PM is ancestor of task's agent_role. For PM-targeted task,
+        # PM IS in own subtree (is_descendant inclusive); passes via
+        # clause 3. Verifies submitter clause is agent-id-only per
+        # spec line 105 wording.
+        (
+            "submitter_agent_id_only_not_role_level",
+            "agent-pm-a", None, "pm",
+            "agent-pm-b", "pm", True,
+        ),
+        # Sibling-role rejects (impl is not in chain of tester task).
+        (
+            "sibling_role_rejects",
+            "agent-pm", None, "tester",
+            "agent-impl", "implementer", False,
+        ),
+        # Inverse hierarchy rejects (engineer not ancestor of PM).
+        (
+            "inverse_hierarchy_rejects",
+            "agent-pm", None, "pm",
+            "agent-eng-a", "engineer", False,
+        ),
+    ],
+)
+async def test_check_can_set_priority_three_clause_or(
+    storage: SqliteStorage,
+    scenario: str,
+    submitted_by: str,
+    claimed_by: str | None,
+    task_role: str,
+    caller_agent_id: str,
+    caller_role: str,
+    expected_pass: bool,
+) -> None:
+    """`_check_can_set_priority` enforces 3-clause OR per spec line
+    105: submitter (agent-id-level per pre-prep flag 1 verification)
+    OR claimed-by (agent-id) OR ancestor (transitive role).
+
+    Mechanically identical to commit 6's _check_can_read_subtasks
+    shape; cross-tool duplication tracked at BACKLOG.md § in-chain
+    raise-gate logic duplication watch entry."""
+    task_id = f"t-prio-{scenario}"
+    await storage.execute(
+        "INSERT INTO tasks (id, company_id, project_id, agent_role, "
+        "description, status, submitted_by, claimed_by) VALUES "
+        "(?, 'co1', 'proj1', ?, 'priority-test', 'pending', ?, ?)",
+        (task_id, task_role, submitted_by, claimed_by),
+    )
+
+    if expected_pass:
+        result = await _check_can_set_priority(
+            storage=storage,
+            permissions=_submit_task_resolver(),
+            task_id=task_id,
+            caller_agent_id=caller_agent_id,
+            caller_role=caller_role,
+        )
+        assert result["id"] == task_id
+    else:
+        with pytest.raises(
+            OrchestratorPermissionError, match="cannot set priority"
+        ):
+            await _check_can_set_priority(
+                storage=storage,
+                permissions=_submit_task_resolver(),
+                task_id=task_id,
+                caller_agent_id=caller_agent_id,
+                caller_role=caller_role,
+            )
+
+
+async def test_check_can_set_priority_not_found_raises(
+    storage: SqliteStorage,
+) -> None:
+    """task_id that doesn't resolve raises NotFoundError."""
+    with pytest.raises(NotFoundError, match="not found"):
+        await _check_can_set_priority(
+            storage=storage,
+            permissions=_submit_task_resolver(),
+            task_id="bogus",
+            caller_agent_id="agent-pm",
+            caller_role="pm",
+        )
+
+
+# ----- set_task_priority handler (race-free UPDATE; minimal audit) --------
+
+
+async def test_set_task_priority_writes_audit_with_from_to(
+    storage: SqliteStorage,
+) -> None:
+    """Engineer (claimed_by) updates priority. Audit captures
+    from/to per CQ7 commit 7 minimal-input-capture shape."""
+    import json
+
+    await storage.execute(
+        "INSERT INTO tasks (id, company_id, project_id, agent_role, "
+        "description, status, claimed_by, priority) VALUES "
+        "('t-prio-update', 'co1', 'proj1', 'engineer', 'p3 to p1', "
+        "'claimed', 'agent-eng-a', 3)"
+    )
+
+    out = await set_task_priority(
+        storage=storage,
+        permissions=_submit_task_resolver(),
+        request=SetTaskPriorityInput(task_id="t-prio-update", priority=1),
+        caller_agent_id="agent-eng-a",
+        caller_role="engineer",
+    )
+
+    assert out.task.priority == 1
+
+    audits = await storage.fetch_all(
+        "SELECT actor, action, target, details_json FROM audit_log "
+        "WHERE action = 'task.priority_change'"
+    )
+    assert len(audits) == 1
+    details = json.loads(audits[0]["details_json"])
+    assert details["from_priority"] == 3
+    assert details["to_priority"] == 1
+
+
+async def test_set_task_priority_not_found_raises(
+    storage: SqliteStorage,
+) -> None:
+    """task_id that doesn't resolve raises NotFoundError; no UPDATE
+    attempted; no audit row."""
+    with pytest.raises(NotFoundError, match="not found"):
+        await set_task_priority(
+            storage=storage,
+            permissions=_submit_task_resolver(),
+            request=SetTaskPriorityInput(task_id="bogus", priority=2),
+            caller_agent_id="agent-pm",
+            caller_role="pm",
+        )
 

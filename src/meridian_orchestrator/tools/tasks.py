@@ -1032,6 +1032,146 @@ async def get_subtasks(
     return GetSubtasksOutput(tasks=tasks)
 
 
+# ----- set_task_priority --------------------------------------------------
+
+
+async def _check_can_set_priority(
+    *,
+    storage: Storage,
+    permissions: PermissionResolver,
+    task_id: str,
+    caller_agent_id: str,
+    caller_role: str,
+) -> dict[str, Any]:
+    """Three-clause OR raise-gate per ``06-mcp-tools-phase-one.md:105``:
+    "caller must be the submitter, the claimed-by, or an ancestor in
+    the hierarchy."
+
+    Per pre-prep verification at M4d commit 7 prep: spec wording
+    "the **submitter**" (line 105) is **agent-id-level** — distinct
+    from submit_task's "the role that submitted the parent" (line 46)
+    and update_task_status's "the role that submitted it" (line 91)
+    which are role-level. NO JOIN to agents; NO HUMAN_LITERAL_ROLE_MAP
+    fallback. Submitter-role-resolution-shared-logic watch entry at 2
+    instances does NOT increment at this commit (cross-tool extraction
+    threshold-of-three remains).
+
+    Mechanically identical 3-clause OR shape to commit 6's
+    :func:`_check_can_read_subtasks` (get_subtasks parent-access).
+    Cross-tool duplication at 2 instances; deferred-with-citation per
+    CQ1 commit 7 Reading B disposition (mirrors commit 5's CQ1 cross-
+    tool extraction-deferral precedent). New BACKLOG watch entry
+    "in-chain raise-gate logic duplication" tracks the pattern;
+    threshold-of-three for ``_check_can_access_task_chain`` extraction
+    in any future commit (post-M4d work).
+
+    Returns task row dict on success — handler reuses for audit
+    from-priority capture (per CQ7 commit 7 + permission-check-returns-
+    data per-tool-by-design rationale).
+    """
+    row = await storage.fetch_one(
+        "SELECT id, agent_role, priority, submitted_by, claimed_by "
+        "FROM tasks WHERE id = ?",
+        (task_id,),
+    )
+    if row is None:
+        raise NotFoundError(f"task_id={task_id!r} not found")
+
+    # Clause 1: submitter (agent-id-level per spec line 105 wording).
+    if row["submitted_by"] == caller_agent_id:
+        return dict(row)
+    # Clause 2: claimed-by (agent-id-level).
+    if row["claimed_by"] == caller_agent_id:
+        return dict(row)
+    # Clause 3: ancestor in hierarchy (caller transitively manages
+    # task's agent_role).
+    if permissions.is_descendant(caller_role, row["agent_role"]):  # type: ignore[arg-type]
+        return dict(row)
+
+    raise OrchestratorPermissionError(
+        f"caller {caller_agent_id!r} (role={caller_role!r}) cannot "
+        f"set priority on task {task_id!r} (clauses: "
+        f"submitter={row['submitted_by']!r}, "
+        f"claimed_by={row['claimed_by']!r}, "
+        f"task_role={row['agent_role']!r})"
+    )
+
+
+async def set_task_priority(
+    *,
+    storage: Storage,
+    permissions: PermissionResolver,
+    request: SetTaskPriorityInput,
+    caller_agent_id: str,
+    caller_role: str,
+) -> SetTaskPriorityOutput:
+    """Update a task's priority value.
+
+    **Hierarchy gate** (per spec line 105 + CQ7 commit 7): 3-clause
+    OR via :func:`_check_can_set_priority` — caller is submitter
+    (agent-id) OR claimed-by (agent-id) OR ancestor (transitive role
+    via ``permissions.is_descendant``).
+
+    **Atomicity** (per CQ4): full ``storage.transaction()`` wrap
+    covering UPDATE + audit. **No SELECT-verify clause** per CQ6
+    commit 7 Reading A — priority is an operator-level idempotent
+    change; concurrent set_task_priority calls land last-writer-wins
+    (semantically acceptable; operator's latest priority is desired).
+    Two-query atomic-update pattern watch stays at 3 instances; this
+    commit doesn't trip the threshold-of-four-with-non-cosmetic-
+    motivation trigger.
+
+    **Audit** (per CQ7 commit 7 minimal-input-capture): action
+    ``task.priority_change``, target=``task_id``, details capture
+    ``{task_id, from_priority, to_priority}``. Symmetric with
+    task.submit / task.claim / task.status_change minimal shape.
+
+    The ``_check_can_set_priority`` helper returns the task row dict
+    (per permission-check-returns-data per-tool-by-design rationale);
+    handler reuses ``priority`` for audit from-priority capture
+    without a redundant SELECT.
+
+    Raises :class:`NotFoundError` when ``task_id`` doesn't resolve;
+    :class:`OrchestratorPermissionError` on hierarchy mismatch.
+    """
+    task = await _check_can_set_priority(
+        storage=storage,
+        permissions=permissions,
+        task_id=request.task_id,
+        caller_agent_id=caller_agent_id,
+        caller_role=caller_role,
+    )
+    from_priority = task["priority"]
+
+    async with storage.transaction():
+        await storage.execute(
+            "UPDATE tasks SET priority = ? WHERE id = ?",
+            (request.priority, request.task_id),
+        )
+        # Read back full row for handler output. No race-protection
+        # clause needed — priority is an operator-level idempotent
+        # change per CQ6 commit 7.
+        updated = await storage.fetch_one(
+            "SELECT * FROM tasks WHERE id = ?",
+            (request.task_id,),
+        )
+        assert updated is not None  # row existed at gate-check time
+
+        await write_audit(
+            storage,
+            actor=caller_agent_id,
+            action="task.priority_change",
+            target=request.task_id,
+            details={
+                "task_id": request.task_id,
+                "from_priority": from_priority,
+                "to_priority": request.priority,
+            },
+        )
+
+    return SetTaskPriorityOutput(task=Task(**dict(updated)))
+
+
 __all__ = [
     "HUMAN_LITERAL_ROLE_MAP",
     "HUMAN_MIKE_LITERAL",
@@ -1050,6 +1190,7 @@ __all__ = [
     "claim_task",
     "get_queue",
     "get_subtasks",
+    "set_task_priority",
     "submit_task",
     "update_task_status",
 ]
