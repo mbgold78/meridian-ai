@@ -22,8 +22,11 @@ call. Per-dispatch flow:
 
 M4a scope: serial only; no merge protocol on completion (worktree branch is
 just removed); no timeout enforcement; no heartbeat. M4b adds parallel
-dispatch and the ``--ff-only`` merge into canonical/main; M4c adds timeout
-and heartbeat watchdog.
+dispatch and the ``--ff-only`` merge into canonical/main. M5-flag-flips F3
+adds dispatch timeout enforcement via :func:`asyncio.timeout` in
+``_await_terminal``; heartbeat watchdog deferred to a future sub-milestone
+(no current BACKLOG entry; surface as new entry with concrete trigger if
+operationally indicated post-flag-flip).
 
 Subprocess launching is injectable via the ``subprocess_launcher`` constructor
 parameter so tests can simulate a sub-agent that calls ``complete_dispatch``
@@ -437,7 +440,9 @@ class BridgeDispatcher:
                 },
             )
 
-            outcome = await self._await_terminal(dispatch_id, proc)
+            outcome = await self._await_terminal(
+                dispatch_id, proc, timeout_seconds=effective_timeout
+            )
             if outcome.status == "completed" and outcome.commit_hash:
                 outcome = await self._merge_and_record(
                     dispatch_id=dispatch_id,
@@ -671,64 +676,105 @@ class BridgeDispatcher:
         )
 
     async def _await_terminal(
-        self, dispatch_id: str, proc: SubprocessHandle
+        self, dispatch_id: str, proc: SubprocessHandle, *, timeout_seconds: int
     ) -> DispatchOutcome:
         """Loop until the dispatch row reaches a terminal state.
 
         If the subprocess exits before ``complete_dispatch`` lands a terminal
-        state on the row, mark the dispatch ``failed`` with a note. M4a does
-        not enforce a hard timeout — that ships at M4c.
+        state on the row, mark the dispatch ``failed`` with a note. The
+        polling loop is bounded by :func:`asyncio.timeout` so a subprocess
+        that hangs without writing terminal state and without exiting is
+        capped by ``timeout_seconds`` (the dispatcher's effective timeout
+        precedence: ``timeout_override_seconds`` > ``calculate_timeout(model,
+        estimated_tokens)`` > ``timeout_seconds`` default). On timeout, the
+        row is re-read to avoid overwriting a terminal state that landed at
+        the deadline boundary; only if still non-terminal is it marked
+        ``timed_out``. Subprocess termination is unconditional via the
+        surrounding ``dispatch()`` finally — no termination plumbing here.
         """
-        while True:
-            # Poll dispatches row before proc.returncode: subprocess may exit
-            # cleanly after writing terminal state, in which case row is
-            # authoritative and returncode is decoration. Reverse the order
-            # and a clean-exit-after-complete_dispatch race surfaces as a
-            # spurious "failed" with rc=0.
+        try:
+            async with asyncio.timeout(timeout_seconds):
+                while True:
+                    # Poll dispatches row before proc.returncode: subprocess may exit
+                    # cleanly after writing terminal state, in which case row is
+                    # authoritative and returncode is decoration. Reverse the order
+                    # and a clean-exit-after-complete_dispatch race surfaces as a
+                    # spurious "failed" with rc=0.
+                    row = await self._storage.fetch_one(
+                        "SELECT status FROM dispatches WHERE id = ?", (dispatch_id,)
+                    )
+                    if row is None:
+                        raise DispatcherError(
+                            f"dispatch row {dispatch_id} disappeared during await loop"
+                        )
+                    status = str(row["status"])
+                    if status in _TERMINAL_STATES:
+                        return await self._build_outcome(dispatch_id)
+
+                    if proc.returncode is not None:
+                        # Re-read status before declaring failed: the subprocess can
+                        # call complete_dispatch and signal-clean-exit between our
+                        # last SELECT and this check, leaving us with a stale
+                        # "running" read paired with a fresh non-None returncode.
+                        # Without the re-read we'd mark a successful dispatch as
+                        # failed because the SELECT happened to land just before
+                        # the UPDATE.
+                        row = await self._storage.fetch_one(
+                            "SELECT status FROM dispatches WHERE id = ?",
+                            (dispatch_id,),
+                        )
+                        if row is not None and str(row["status"]) in _TERMINAL_STATES:
+                            return await self._build_outcome(dispatch_id)
+
+                        rc = proc.returncode
+                        logger.warning(
+                            "dispatch.subprocess_exited_without_complete",
+                            dispatch_id=dispatch_id,
+                            rc=rc,
+                        )
+                        await self._storage.execute(
+                            "UPDATE dispatches SET status = 'failed', "
+                            "completed_at = ?, notes = ? WHERE id = ?",
+                            (
+                                _now_iso(),
+                                f"subprocess exited rc={rc} without complete_dispatch",
+                                dispatch_id,
+                            ),
+                        )
+                        return await self._build_outcome(dispatch_id)
+
+                    await asyncio.sleep(self._poll)
+        except TimeoutError:
+            # Race-protection re-read mirrors the SELECT-before-returncode
+            # pattern above (CQ-B Reading A): complete_dispatch may have
+            # landed a terminal state at the deadline boundary. Re-check
+            # before overwriting; only mark timed_out if still non-terminal.
+            # Subprocess termination is handled by dispatch()'s finally
+            # via _terminate_subprocess regardless of this return path.
             row = await self._storage.fetch_one(
                 "SELECT status FROM dispatches WHERE id = ?", (dispatch_id,)
             )
-            if row is None:
-                raise DispatcherError(
-                    f"dispatch row {dispatch_id} disappeared during await loop"
-                )
-            status = str(row["status"])
-            if status in _TERMINAL_STATES:
+            if row is not None and str(row["status"]) in _TERMINAL_STATES:
                 return await self._build_outcome(dispatch_id)
 
-            if proc.returncode is not None:
-                # Re-read status before declaring failed: the subprocess can
-                # call complete_dispatch and signal-clean-exit between our
-                # last SELECT and this check, leaving us with a stale
-                # "running" read paired with a fresh non-None returncode.
-                # Without the re-read we'd mark a successful dispatch as
-                # failed because the SELECT happened to land just before
-                # the UPDATE.
-                row = await self._storage.fetch_one(
-                    "SELECT status FROM dispatches WHERE id = ?",
-                    (dispatch_id,),
-                )
-                if row is not None and str(row["status"]) in _TERMINAL_STATES:
-                    return await self._build_outcome(dispatch_id)
-
-                rc = proc.returncode
-                logger.warning(
-                    "dispatch.subprocess_exited_without_complete",
-                    dispatch_id=dispatch_id,
-                    rc=rc,
-                )
-                await self._storage.execute(
-                    "UPDATE dispatches SET status = 'failed', "
-                    "completed_at = ?, notes = ? WHERE id = ?",
+            logger.warning(
+                "dispatch.timed_out",
+                dispatch_id=dispatch_id,
+                timeout_seconds=timeout_seconds,
+            )
+            await self._storage.execute(
+                "UPDATE dispatches SET status = 'timed_out', "
+                "completed_at = ?, notes = ? WHERE id = ?",
+                (
+                    _now_iso(),
                     (
-                        _now_iso(),
-                        f"subprocess exited rc={rc} without complete_dispatch",
-                        dispatch_id,
+                        f"dispatch timed out after {timeout_seconds}s "
+                        "without complete_dispatch"
                     ),
-                )
-                return await self._build_outcome(dispatch_id)
-
-            await asyncio.sleep(self._poll)
+                    dispatch_id,
+                ),
+            )
+            return await self._build_outcome(dispatch_id)
 
     async def _build_outcome(self, dispatch_id: str) -> DispatchOutcome:
         import json as _json
