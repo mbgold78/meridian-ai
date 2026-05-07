@@ -49,16 +49,20 @@ from meridian_orchestrator.tools.tasks import (
     HUMAN_MIKE_LITERAL,
     ClaimTaskInput,
     GetQueueInput,
+    GetSubtasksInput,
     SetTaskPriorityInput,
     SubmitTaskInput,
     UpdateTaskStatusInput,
     _check_can_claim,
+    _check_can_read_subtasks,
     _check_can_submit_task,
     _check_can_submit_task_parent_ownership,
     _check_can_update_task_status,
     _derive_company_project_for_caller,
     _require_role,
     claim_task,
+    get_queue,
+    get_subtasks,
     submit_task,
     update_task_status,
 )
@@ -1128,3 +1132,280 @@ async def test_update_task_status_not_found_raises_not_found(
             caller_agent_id="agent-eng-a",
             caller_role="engineer",
         )
+
+
+# ---------------------------------------------------------------------------
+# Commit 6 tests: get_queue + get_subtasks (read-side handlers)
+# ---------------------------------------------------------------------------
+
+
+# ----- get_queue: hierarchy filter parametrized by role --------------------
+
+
+@pytest.mark.parametrize(
+    ("caller_role", "caller_agent_id", "expected_visible_ids"),
+    [
+        # PM sees all 4 tasks (subtree-includes-self covers all roles).
+        ("pm", "agent-pm", {"t-pm", "t-eng", "t-impl-claimed", "t-tester"}),
+        # Engineer sees engineer + implementer + tester subtree
+        # (excludes PM-targeted).
+        ("engineer", "agent-eng-a", {"t-eng", "t-impl-claimed", "t-tester"}),
+        # Implementer sees ONLY their own claimed tasks.
+        ("implementer", "agent-impl", {"t-impl-claimed"}),
+        # Tester not seeded with claimed tasks → sees nothing.
+        ("tester", "agent-tester", set()),
+    ],
+)
+async def test_get_queue_hierarchy_visibility_filter_per_role(
+    storage: SqliteStorage,
+    caller_role: str,
+    caller_agent_id: str,
+    expected_visible_ids: set[str],
+) -> None:
+    """get_queue's visibility-filter (CQ3 commit 6 Reading B sub-
+    category) applies role-scoped SQL WHERE filter. PM/Engineer see
+    inclusive subtree; Implementer/Tester see only own claimed."""
+    # Seed the four-tier task scenario. Use real seeded agent ids.
+    await storage.execute(
+        "INSERT INTO agents (id, company_id, role, config_path) "
+        "VALUES ('agent-tester', 'co1', 'tester', '/dev/null')"
+    )
+    await storage.execute(
+        "INSERT INTO tasks (id, company_id, project_id, agent_role, "
+        "description, status) VALUES "
+        "('t-pm', 'co1', 'proj1', 'pm', 'pm-task', 'pending'), "
+        "('t-eng', 'co1', 'proj1', 'engineer', 'eng-task', 'pending'), "
+        "('t-tester', 'co1', 'proj1', 'tester', 'tester-task', 'pending')"
+    )
+    await storage.execute(
+        "INSERT INTO tasks (id, company_id, project_id, agent_role, "
+        "description, status, claimed_by) VALUES "
+        "('t-impl-claimed', 'co1', 'proj1', 'implementer', "
+        "'impl-claimed', 'claimed', 'agent-impl')"
+    )
+
+    out = await get_queue(
+        storage=storage,
+        permissions=_submit_task_resolver(),
+        request=GetQueueInput(),
+        caller_agent_id=caller_agent_id,
+        caller_role=caller_role,
+    )
+
+    visible_ids = {task.id for task in out.tasks}
+    assert visible_ids == expected_visible_ids
+    assert out.total == len(expected_visible_ids)
+
+
+async def test_get_queue_status_filter(
+    storage: SqliteStorage,
+) -> None:
+    """get_queue's status filter accepts list[TaskStatus] and combines
+    via SQL AND with the hierarchy-visibility filter."""
+    await storage.execute(
+        "INSERT INTO tasks (id, company_id, project_id, agent_role, "
+        "description, status) VALUES "
+        "('t-1', 'co1', 'proj1', 'engineer', 'pending one', 'pending'), "
+        "('t-2', 'co1', 'proj1', 'engineer', 'completed one', 'completed'), "
+        "('t-3', 'co1', 'proj1', 'engineer', 'failed one', 'failed')"
+    )
+
+    # Filter to pending + completed.
+    out = await get_queue(
+        storage=storage,
+        permissions=_submit_task_resolver(),
+        request=GetQueueInput(status=["pending", "completed"]),
+        caller_agent_id="agent-pm",
+        caller_role="pm",
+    )
+    assert {t.id for t in out.tasks} == {"t-1", "t-2"}
+
+
+async def test_get_queue_agent_role_filter_conflict_raises_per_cq5(
+    storage: SqliteStorage,
+) -> None:
+    """CQ5 commit 6: agent_role filter outside caller's hierarchy
+    scope raises PERMISSION_DENIED. Implementer querying
+    agent_role='engineer' is outside scope (impl's scope = {self}
+    only); raises rather than silently returning empty."""
+    with pytest.raises(
+        OrchestratorPermissionError, match="cannot filter queue"
+    ):
+        await get_queue(
+            storage=storage,
+            permissions=_submit_task_resolver(),
+            request=GetQueueInput(agent_role="engineer"),
+            caller_agent_id="agent-impl",
+            caller_role="implementer",
+        )
+
+
+@pytest.mark.parametrize(
+    ("limit", "offset", "expected_count", "expected_total"),
+    [
+        # In-bounds basic cases.
+        (50, 0, 5, 5),
+        (2, 0, 2, 5),
+        (2, 2, 2, 5),
+        (100, 0, 5, 5),
+        # Offset beyond total returns empty page; total still matches
+        # full match-set.
+        (50, 10, 0, 5),
+    ],
+)
+async def test_get_queue_pagination_bounds(
+    storage: SqliteStorage,
+    limit: int,
+    offset: int,
+    expected_count: int,
+    expected_total: int,
+) -> None:
+    """Pagination invariant: limit caps result count; offset advances;
+    total reports full match-set count regardless of limit/offset.
+    Pydantic Field(ge=1, le=500) for limit and Field(ge=0) for offset
+    enforce the API-level bounds (covered by commit 2 schema tests);
+    this test exercises runtime semantics."""
+    for i in range(5):
+        await storage.execute(
+            "INSERT INTO tasks (id, company_id, project_id, agent_role, "
+            "description, status) VALUES "
+            f"('t-page-{i}', 'co1', 'proj1', 'engineer', 'desc', 'pending')"
+        )
+
+    out = await get_queue(
+        storage=storage,
+        permissions=_submit_task_resolver(),
+        request=GetQueueInput(limit=limit, offset=offset),
+        caller_agent_id="agent-pm",
+        caller_role="pm",
+    )
+    assert len(out.tasks) == expected_count
+    assert out.total == expected_total
+
+
+# ----- _check_can_read_subtasks (raise-gate per CQ4 Reading A) ------------
+
+
+@pytest.mark.parametrize(
+    ("scenario", "claimed_by", "submitted_by", "parent_role",
+     "caller_agent_id", "caller_role", "expected_pass"),
+    [
+        # Submitter (agent-id match) passes.
+        (
+            "submitter_match",
+            None, "agent-pm", "engineer",
+            "agent-pm", "pm", True,
+        ),
+        # claimed_by (agent-id match) passes.
+        (
+            "claimed_by_match",
+            "agent-eng-a", "agent-pm", "engineer",
+            "agent-eng-a", "engineer", True,
+        ),
+        # Ancestor passes (PM is ancestor of engineer-targeted parent).
+        (
+            "ancestor_pm_to_engineer_parent",
+            "agent-eng-a", "agent-other", "engineer",
+            "agent-pm", "pm", True,
+        ),
+        # Sibling-role rejects (impl not in chain of tester-targeted
+        # parent).
+        (
+            "sibling_role_not_in_chain",
+            None, "agent-pm", "tester",
+            "agent-impl", "implementer", False,
+        ),
+    ],
+)
+async def test_check_can_read_subtasks_in_chain_matrix(
+    storage: SqliteStorage,
+    scenario: str,
+    claimed_by: str | None,
+    submitted_by: str,
+    parent_role: str,
+    caller_agent_id: str,
+    caller_role: str,
+    expected_pass: bool,
+) -> None:
+    """`_check_can_read_subtasks` raise-gate: caller in chain
+    (submitter / claimed_by / ancestor) passes; otherwise raises
+    PERMISSION_DENIED per CQ4 Reading A. Walks the chain matrix."""
+    parent_id = f"parent-{scenario}"
+    await storage.execute(
+        "INSERT INTO tasks (id, company_id, project_id, agent_role, "
+        "description, status, submitted_by, claimed_by) VALUES "
+        "(?, 'co1', 'proj1', ?, 'parent', 'pending', ?, ?)",
+        (parent_id, parent_role, submitted_by, claimed_by),
+    )
+
+    if expected_pass:
+        await _check_can_read_subtasks(
+            storage=storage,
+            permissions=_submit_task_resolver(),
+            parent_task_id=parent_id,
+            caller_agent_id=caller_agent_id,
+            caller_role=caller_role,
+        )
+    else:
+        with pytest.raises(
+            OrchestratorPermissionError, match="not in chain"
+        ):
+            await _check_can_read_subtasks(
+                storage=storage,
+                permissions=_submit_task_resolver(),
+                parent_task_id=parent_id,
+                caller_agent_id=caller_agent_id,
+                caller_role=caller_role,
+            )
+
+
+async def test_check_can_read_subtasks_parent_not_found_raises(
+    storage: SqliteStorage,
+) -> None:
+    """parent_task_id that doesn't resolve raises NotFoundError, not
+    PermissionError. Distinct from in-chain-rejection failure mode."""
+    with pytest.raises(NotFoundError, match="not found"):
+        await _check_can_read_subtasks(
+            storage=storage,
+            permissions=_submit_task_resolver(),
+            parent_task_id="bogus-parent",
+            caller_agent_id="agent-pm",
+            caller_role="pm",
+        )
+
+
+# ----- get_subtasks handler (raise-gate + visibility-filter hybrid) -------
+
+
+async def test_get_subtasks_returns_visible_subtasks_under_parent(
+    storage: SqliteStorage,
+) -> None:
+    """get_subtasks happy path: PM caller (in-chain via ancestor)
+    returns all subtasks under parent; visibility-filter is no-op for
+    PM (sees inclusive subtree)."""
+    # Parent task (engineer-targeted).
+    await storage.execute(
+        "INSERT INTO tasks (id, company_id, project_id, agent_role, "
+        "description, status, submitted_by, claimed_by) VALUES "
+        "('parent-1', 'co1', 'proj1', 'engineer', 'parent', "
+        "'in_progress', 'agent-pm', 'agent-eng-a')"
+    )
+    # Subtasks under parent.
+    await storage.execute(
+        "INSERT INTO tasks (id, company_id, project_id, "
+        "parent_task_id, agent_role, description, status) VALUES "
+        "('sub-1', 'co1', 'proj1', 'parent-1', 'implementer', "
+        "'sub a', 'pending'), "
+        "('sub-2', 'co1', 'proj1', 'parent-1', 'tester', "
+        "'sub b', 'pending')"
+    )
+
+    out = await get_subtasks(
+        storage=storage,
+        permissions=_submit_task_resolver(),
+        request=GetSubtasksInput(parent_task_id="parent-1"),
+        caller_agent_id="agent-pm",
+        caller_role="pm",
+    )
+    assert {t.id for t in out.tasks} == {"sub-1", "sub-2"}
+

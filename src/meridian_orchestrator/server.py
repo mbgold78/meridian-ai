@@ -162,11 +162,17 @@ from meridian_orchestrator.tools.supervisor import (
 from meridian_orchestrator.tools.tasks import (
     ClaimTaskInput,
     ClaimTaskOutput,
+    GetQueueInput,
+    GetQueueOutput,
+    GetSubtasksInput,
+    GetSubtasksOutput,
     SubmitTaskInput,
     SubmitTaskOutput,
     UpdateTaskStatusInput,
     UpdateTaskStatusOutput,
     claim_task,
+    get_queue,
+    get_subtasks,
     submit_task,
     update_task_status,
 )
@@ -1731,6 +1737,73 @@ def _register_task_tools(
                 status=status,  # type: ignore[arg-type]  # Pydantic Literal validates at construction
                 notes=notes,
             ),
+            caller_agent_id=agent_id,
+            caller_role=caller_role,
+        )
+
+    @mcp.tool(
+        name="get_queue",
+        description=(
+            "Read-side queue query with hierarchy-scoped visibility "
+            "filter. PM/Engineer see everything in their inclusive "
+            "subtree; Implementer/Tester see only their own claimed "
+            "tasks. Optional caller-supplied filters: status (list), "
+            "agent_role (str), project_id (str). agent_role filter "
+            "outside caller's hierarchy scope raises PERMISSION_DENIED. "
+            "Pagination via limit/offset; total field reports count "
+            "without limit/offset. NOT audited (read-only, high-"
+            "frequency)."
+        ),
+    )
+    async def _get_queue(
+        status: list[str] | None = None,
+        agent_role: str | None = None,
+        project_id: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> GetQueueOutput:
+        agent_id = _resolve_agent_id()
+        await _observe_caller(storage, token_store, "get_queue")
+        caller_role = _resolve_caller_role_via_token()
+        resolver = PermissionResolver(registry.configs_by_role())
+        resolver.require_tool(caller_role, "get_queue")  # type: ignore[arg-type]
+        return await get_queue(
+            storage=storage,
+            permissions=resolver,
+            request=GetQueueInput(
+                status=status,  # type: ignore[arg-type]  # Pydantic Literal validates at construction
+                agent_role=agent_role,
+                project_id=project_id,
+                limit=limit,
+                offset=offset,
+            ),
+            caller_agent_id=agent_id,
+            caller_role=caller_role,
+        )
+
+    @mcp.tool(
+        name="get_subtasks",
+        description=(
+            "Read-side subtask hierarchy query. Hybrid authorization "
+            "shape: raise-gate (caller must be in parent's chain — "
+            "submitter / claimed_by / ancestor) + visibility-filter "
+            "(subtask result set filtered by caller's hierarchy scope, "
+            "same shape as get_queue). NOT audited (read-only, high-"
+            "frequency)."
+        ),
+    )
+    async def _get_subtasks(
+        parent_task_id: str,
+    ) -> GetSubtasksOutput:
+        agent_id = _resolve_agent_id()
+        await _observe_caller(storage, token_store, "get_subtasks")
+        caller_role = _resolve_caller_role_via_token()
+        resolver = PermissionResolver(registry.configs_by_role())
+        resolver.require_tool(caller_role, "get_subtasks")  # type: ignore[arg-type]
+        return await get_subtasks(
+            storage=storage,
+            permissions=resolver,
+            request=GetSubtasksInput(parent_task_id=parent_task_id),
             caller_agent_id=agent_id,
             caller_role=caller_role,
         )

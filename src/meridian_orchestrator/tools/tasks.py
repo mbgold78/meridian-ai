@@ -801,6 +801,237 @@ async def update_task_status(
     return UpdateTaskStatusOutput(task=Task(**dict(updated)))
 
 
+# ----- get_queue ----------------------------------------------------------
+
+
+async def get_queue(
+    *,
+    storage: Storage,
+    permissions: PermissionResolver,
+    request: GetQueueInput,
+    caller_agent_id: str,
+    caller_role: str,
+) -> GetQueueOutput:
+    """Read-side queue query with hierarchy-scoped visibility filter.
+
+    **Visibility-filter** (per spec line 65 + CQ3 commit 6 Reading B
+    sub-category): the hierarchy gate applies as a SQL WHERE clause
+    filter, NOT a raise-gate. PM/Engineer see everything in their
+    inclusive subtree; Implementer/Tester see only their own claimed
+    tasks.
+
+    | Caller role | Hierarchy filter |
+    |---|---|
+    | pm | (no role filter; PM's subtree-inclusive covers all roles) |
+    | engineer | ``agent_role IN ('engineer', 'implementer', 'tester')`` |
+    | implementer | ``claimed_by = caller_agent_id`` |
+    | tester | ``claimed_by = caller_agent_id`` |
+
+    **Caller-supplied filters** (compose with hierarchy filter via AND):
+    ``status`` (list[TaskStatus]); ``agent_role`` (str); ``project_id``
+    (str). Per CQ5 commit 6: ``agent_role`` filter conflicting with
+    caller's hierarchy scope raises PERMISSION_DENIED — e.g., implementer
+    querying ``agent_role='engineer'``. Conflict check via
+    ``permissions.is_descendant(caller_role, request.agent_role)``.
+
+    **Pagination**: ``limit`` (Pydantic Field(ge=1, le=500), default
+    50); ``offset`` (Field(ge=0), default 0). ``total`` (count without
+    limit/offset; for pagination UX) is computed via separate
+    ``COUNT(*)`` query against the same WHERE clause.
+
+    **NOT audited** (read-only, high-frequency per spec line 67).
+    """
+    # Visibility-filter hierarchy clause per caller_role. Inline per
+    # CQ6 Reading A (two call sites at commit 6 below threshold-of-
+    # three for cross-handler extraction; threshold-of-three at
+    # commit 7 if set_task_priority adds third subtree-filter call
+    # site). Tracked at BACKLOG.md § task-row subtree SQL scoping
+    # pattern duplication.
+    if caller_role == "pm":
+        hierarchy_clause = "1=1"
+        hierarchy_params: list[Any] = []
+    elif caller_role == "engineer":
+        hierarchy_clause = (
+            "agent_role IN ('engineer', 'implementer', 'tester')"
+        )
+        hierarchy_params = []
+    elif caller_role in ("implementer", "tester"):
+        hierarchy_clause = "claimed_by = ?"
+        hierarchy_params = [caller_agent_id]
+    else:
+        raise OrchestratorPermissionError(
+            f"caller role {caller_role!r} cannot invoke get_queue"
+        )
+
+    # CQ5: agent_role filter compatible with caller's hierarchy scope?
+    # Use is_descendant: PM's scope = {pm, engineer, impl, tester};
+    # engineer = {engineer, impl, tester}; impl/tester = {self}.
+    if (
+        request.agent_role is not None
+        and not permissions.is_descendant(
+            caller_role,  # type: ignore[arg-type]
+            request.agent_role,  # type: ignore[arg-type]
+        )
+    ):
+        raise OrchestratorPermissionError(
+            f"caller role {caller_role!r} cannot filter queue by "
+            f"agent_role={request.agent_role!r} (outside caller's "
+            "hierarchy scope per 06-mcp-tools-phase-one.md:65)"
+        )
+
+    where_clauses: list[str] = [hierarchy_clause]
+    where_params: list[Any] = list(hierarchy_params)
+
+    if request.status is not None:
+        placeholders = ",".join(["?"] * len(request.status))
+        where_clauses.append(f"status IN ({placeholders})")
+        where_params.extend(request.status)
+
+    if request.agent_role is not None:
+        where_clauses.append("agent_role = ?")
+        where_params.append(request.agent_role)
+
+    if request.project_id is not None:
+        where_clauses.append("project_id = ?")
+        where_params.append(request.project_id)
+
+    where_sql = " AND ".join(where_clauses)
+
+    total_row = await storage.fetch_one(
+        f"SELECT COUNT(*) AS c FROM tasks WHERE {where_sql}",
+        tuple(where_params),
+    )
+    total = int(total_row["c"]) if total_row is not None else 0
+
+    rows = await storage.fetch_all(
+        f"SELECT * FROM tasks WHERE {where_sql} "
+        f"ORDER BY priority ASC, created_at ASC "
+        f"LIMIT ? OFFSET ?",
+        (*where_params, request.limit, request.offset),
+    )
+    tasks = [Task(**dict(row)) for row in rows]
+    return GetQueueOutput(tasks=tasks, total=total)
+
+
+# ----- get_subtasks -------------------------------------------------------
+
+
+async def _check_can_read_subtasks(
+    *,
+    storage: Storage,
+    permissions: PermissionResolver,
+    parent_task_id: str,
+    caller_agent_id: str,
+    caller_role: str,
+) -> None:
+    """Raise-gate part of ``get_subtasks`` per spec line 125: caller
+    must be in chain (submitter, claimed_by, OR ancestor of) the
+    parent task. Raises :class:`NotFoundError` if parent doesn't
+    exist; :class:`OrchestratorPermissionError` if caller not in
+    chain (per CQ4 Reading A — spec wording gate-shape; dispatch.py
+    precedent supports raise; operational-context confusion if
+    silent-empty).
+
+    The visibility-filter for the subtask result set is layered
+    separately in :func:`get_subtasks` (matches get_queue's role-
+    scoped SQL filter shape). This helper is the raise-gate part of
+    the hybrid hierarchy-authorization shape per CQ3 commit 6 Reading
+    B sub-category accounting.
+
+    Helper does its own SELECT for parent (no perf cost vs handler-
+    SELECT-then-pass shape; encapsulates parent-access check fully;
+    permission-check-returns-data watch stays at 1).
+    """
+    parent = await storage.fetch_one(
+        "SELECT id, agent_role, claimed_by, submitted_by FROM tasks "
+        "WHERE id = ?",
+        (parent_task_id,),
+    )
+    if parent is None:
+        raise NotFoundError(
+            f"parent_task_id={parent_task_id!r} not found"
+        )
+
+    # Submitter check (agent-id match).
+    if parent["submitted_by"] == caller_agent_id:
+        return
+    # claimed_by check (agent-id match).
+    if parent["claimed_by"] == caller_agent_id:
+        return
+    # Ancestor check: caller's role transitively manages parent's
+    # agent_role (caller is an ancestor of parent's target role).
+    if permissions.is_descendant(caller_role, parent["agent_role"]):  # type: ignore[arg-type]
+        return
+
+    raise OrchestratorPermissionError(
+        f"caller {caller_agent_id!r} (role={caller_role!r}) not in "
+        f"chain of parent_task_id={parent_task_id!r} (clauses: "
+        f"submitter={parent['submitted_by']!r}, "
+        f"claimed_by={parent['claimed_by']!r}, "
+        f"parent_role={parent['agent_role']!r})"
+    )
+
+
+async def get_subtasks(
+    *,
+    storage: Storage,
+    permissions: PermissionResolver,
+    request: GetSubtasksInput,
+    caller_agent_id: str,
+    caller_role: str,
+) -> GetSubtasksOutput:
+    """Read-side subtask hierarchy query.
+
+    **Hybrid authorization shape** per CQ3 commit 6 Reading B:
+
+    1. **Raise-gate** (parent access): caller must be in parent's
+       chain (submitter / claimed_by / ancestor) per spec line 125.
+       :func:`_check_can_read_subtasks` raises PERMISSION_DENIED on
+       no-match.
+    2. **Visibility-filter** (subtask result set): same role-scoped
+       SQL filter shape as get_queue. PM/Engineer see all subtasks
+       under parent; Implementer/Tester see only their own claimed
+       subtasks.
+
+    **NOT audited** (read-only, high-frequency per spec line 127).
+    """
+    await _check_can_read_subtasks(
+        storage=storage,
+        permissions=permissions,
+        parent_task_id=request.parent_task_id,
+        caller_agent_id=caller_agent_id,
+        caller_role=caller_role,
+    )
+
+    # Visibility-filter (mirrors get_queue's hierarchy clause inline
+    # per CQ6 Reading A; second of two call sites tracked at
+    # BACKLOG.md § task-row subtree SQL scoping pattern duplication).
+    if caller_role == "pm":
+        hierarchy_clause = "1=1"
+        hierarchy_params: list[Any] = []
+    elif caller_role == "engineer":
+        hierarchy_clause = (
+            "agent_role IN ('engineer', 'implementer', 'tester')"
+        )
+        hierarchy_params = []
+    elif caller_role in ("implementer", "tester"):
+        hierarchy_clause = "claimed_by = ?"
+        hierarchy_params = [caller_agent_id]
+    else:
+        raise OrchestratorPermissionError(
+            f"caller role {caller_role!r} cannot invoke get_subtasks"
+        )
+
+    rows = await storage.fetch_all(
+        f"SELECT * FROM tasks WHERE parent_task_id = ? "
+        f"AND {hierarchy_clause} "
+        f"ORDER BY priority ASC, created_at ASC",
+        (request.parent_task_id, *hierarchy_params),
+    )
+    tasks = [Task(**dict(row)) for row in rows]
+    return GetSubtasksOutput(tasks=tasks)
+
+
 __all__ = [
     "HUMAN_LITERAL_ROLE_MAP",
     "HUMAN_MIKE_LITERAL",
@@ -817,6 +1048,8 @@ __all__ = [
     "UpdateTaskStatusInput",
     "UpdateTaskStatusOutput",
     "claim_task",
+    "get_queue",
+    "get_subtasks",
     "submit_task",
     "update_task_status",
 ]
