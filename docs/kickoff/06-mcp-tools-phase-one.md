@@ -424,6 +424,45 @@ Future expansion via migration when Engineer's continuous loop spec lands or ope
 
 **Not audited** (per F5.2 Q6 Reading A with F4.5.3 reasoning continued from commit 3). `audit_sample_log` IS itself the durable record of what was sampled; cross-recording would create two-write-paths-for-same-event with divergence risk and operator confusion about canonical source.
 
+#### `wait_for_next_tick`
+
+```python
+class WaitForNextTickOutput(BaseModel):
+    slept_seconds: float
+```
+
+Ships at M5-continuous-pm-driver commit 7 alongside `get_loop_state` + the continuous-loop iteration prompt extension in pm.yaml. PM's continuous loop calls this tool at the end of each iteration to pace itself; the server-side handler sleeps for `Settings.pm_loop_tick_seconds` (default 60s per F8.2 Q2-B; operator-tunable via `MERIDIAN_ORCH_PM_LOOP_TICK_SECONDS` in [1.0, 3600.0]) then returns. Daemon-controlled cadence; PM-prompt-driven call pattern.
+
+**First server-side blocking MCP tool in Phase 1** (per `BACKLOG.md` § Architectural patterns to review). Pattern review triggers when a second instance lands.
+
+**Cancel-safety**: `asyncio.sleep` is cancellation-aware; daemon shutdown / supervisor watchdog forced termination aborts the sleep cleanly.
+
+**Allowed for PM only.** Mike's interactive PM session is governed by client-side defaults; doesn't run the continuous-loop iteration sequence.
+
+**Not audited** (called every iteration; no state-changing semantics — pacing only).
+
+#### `get_loop_state`
+
+```python
+class GetLoopStateOutput(BaseModel):
+    subscription_5h_state: GetWindowStateOutput
+    subscription_7d_opus_state: GetWindowStateOutput
+    burn_rate: GetBurnRateOutput
+    current_focus: PmCurrentFocus | None
+```
+
+Aggregator: bundles per-iteration state reads into one MCP response. PM's continuous-loop prompt instructs calling this once per tick at the start of each iteration. Reduces per-iteration MCP read count from 3-4 (separate `get_window_state` × 2 + `get_burn_rate` + `read_current_focus` calls) to 1.
+
+**Read-side aggregation is asymmetric vs write-side** (per F8.2 Q3-A vs Q10-B): reads share point-in-time freshness semantics (snapshot at moment of call); writes have distinct audit-trail semantics that bundling would conflate. No write-side aggregator ships; PM emits via existing per-tool writes (`record_spin_rationale`, `record_sampleable_event`, `complete_current_focus`).
+
+**Decision-input scope** per F8.2 Q8-B: `pace_recommendation` (subscription_5h primary) + Mike presence (`current_pm_mode` field on subscription_5h_state) + active focus state. Queue depth deferred to M4d (when `get_queue` ships); recent dispatch outcomes (`get_recent_dispatches`) NOT bundled — operator-facing diagnostic surface, not load-bearing per-iteration input.
+
+**Failure shapes** propagate from underlying handlers — cold-start snapshot → both window-state reads return `pace_recommendation='unknown'`; stale snapshot / api_key_overflow deferred / null-bucket → existing placeholders surface unchanged.
+
+**Allowed for PM only.**
+
+**Not audited** (read-only, called every iteration).
+
 #### `get_utilization_report`
 
 ```python
@@ -786,6 +825,8 @@ class GetAuditLogOutput(BaseModel):
 | get_current_focus | no | yes | no | no | no |
 | record_spin_rationale | no | yes | no | no | no |
 | record_sampleable_event | no | yes | no | no | no |
+| wait_for_next_tick | no | yes | no | no | no |
+| get_loop_state | no | yes | no | no | no |
 | get_utilization_report | yes | yes | no | no | no |
 | notify_human | no | yes | no | no | no |
 | get_unread_replies | no | yes | no | no | no |

@@ -1707,6 +1707,84 @@ Per D1.1, capture in the closeout doc:
        discrepancy against canonical disposition (F1.3 here).
   Pattern is durable across both roles; capture as
   three-direction discipline.
+- **Bidirectional-discipline fifth invocation has hybrid
+  direction-shape (commit 7 prep, F8.6.A, 2026-05-06).** Both
+  prep-instruction-error AND framing-precedent-application
+  fired simultaneously: (a) Mike's prep instruction said
+  pm_supervisor.py consumes tools/budget.py + tools/pm_focus.py
+  (substantively wrong per Reading D defense's
+  symmetry-with-EngineerSupervisor + single-responsibility +
+  closure-pattern-precedent arguments); (b) Code's first Reading
+  D defense leveraged the P-2 architectural-separation citation
+  applied more strongly than the docstring's text supports
+  (citation is scoped specifically to `_reconstruct_state`'s
+  no-op behavior; "subprocess owns startup reads" doesn't
+  generalize to "supervisor doesn't grow loop-driver state at
+  any commit"). Both errors corrected in one verification round.
+  **Refines the prior closeout note about prep-instruction
+  frequency:** the pattern isn't reviewing-Claude prep
+  instructions running loose in isolation; it's that
+  prep-instructions and framing-precedent-application can
+  compound, and verification discipline (paste citation
+  verbatim) catches the compound through citation precision.
+  Once cited verbatim, over-extension becomes self-evident and
+  triggers re-defense on independent arguments. Three-direction
+  classification stays useful but compound instances expected
+  going forward.
+- **Carry-forward annotation discipline (commit 7 prep, F8.6.B,
+  2026-05-06).** When downstream commits change baseline
+  assumptions for an existing carry-forward note, the discipline
+  is to **annotate in-place** preserving the original reasoning
+  chain — not to silently rewrite. Format: `**DISPOSITIONED YYYY-MM-DD
+  (commit N prep, F<X>.<Y> Q<Z>-<reading>):** <new value> per
+  <reasoning>; <prior assumption> from commits <a-b> prep
+  preserved as historical context; volume framings from prior
+  commits hold under <new value> with margin. **Re-evaluation
+  trigger:** <empirical condition that warrants revisit>`.
+  Preserves the cumulative reasoning chain so future-Claude
+  reading the closeout sees the trajectory of decisions, not
+  just the final state. First instance: F8.2 Q2-B disposition
+  changing tick cadence baseline from anticipated 30s (commits
+  3-4 prep) to 60s default (commit 7 disposition).
+- **Code-inspection sentinel observability convention (commit 7
+  draft, 2026-05-06).** Code-inspection sentinels (tests that
+  read production source files as text and assert forbidden
+  patterns) are brittle to legitimate refactor by design — that
+  brittleness is the appropriate cost of explicit
+  disposition-pinning. To distinguish substantive architectural
+  drift from path/pattern staleness, when a code-inspection
+  sentinel fires the disposition pass categorizes the failure:
+  - **Mode 1 (legitimate refactor):** source-file rename /
+    split / reorganization preserves architectural intent;
+    sentinel breaks because path or pattern is stale. FIX:
+    update sentinel's path / pattern. EXPECTED REFACTORING
+    COST: mechanical. Track as Mode 1 fire in that commit's
+    diff checkpoint with one-line note.
+  - **Mode 2 (architectural drift):** code change violates the
+    dispositioned invariant substantively. Sentinel fires
+    correctly. FIX: revert the architectural drift, NOT the
+    sentinel. (If genuine substantive reason to change the
+    invariant: re-litigate the disposition in a prep checkpoint,
+    then update sentinel after re-disposition lands.) Track as
+    Mode 2 fire (a discipline win — sentinel caught real
+    violation).
+  Sentinel failure messages must explicitly distinguish the two
+  modes and prompt the developer to determine which applies
+  (see test_pm_supervisor_does_not_import_tools_budget_or_pm_focus
+  + test_pm_loop_module_does_not_define_read_current_helper for
+  the canonical message shape).
+  **Mode 1 / Mode 2 tracking + (b)-revisit trigger:** track Mode
+  1 fire count + update complexity per chain. (b) revisit
+  trigger (sentinel-pattern-vs-runtime-test): 3+ Mode 1 fires
+  within chain OR single Mode 1 fire requiring materially
+  complex sentinel update (more than mechanical path / pattern
+  adjustment). Either trips revisit. Mode 2 fires don't trigger
+  (b) revisit — they validate the (a) sentinel-pattern choice.
+  Makes the sentinel-pattern choice empirical-not-aesthetic;
+  future-Claude reviewing a fire knows which mode + which fix.
+  First commit shipping the convention: commit 7 of
+  M5-continuous-pm-driver, with two sentinels (Q4 + Q9
+  invariant pins).
 - **F2.1 surface-as-finding rule fifth invocation at commit 5
   draft (2026-05-05) — trigger condition NOT FIRED per metric
   clarification.** 19 collected / 7 unique vs F2.1's +9 estimate.
@@ -4145,6 +4223,606 @@ iteration loop — the load-bearing implementation work).
 
 ---
 
+# Followup-13 — commit 7 prep checkpoint (continuous loop driver core — keystone implementation)
+
+**Date:** 2026-05-06. **Sub-milestone:** M5-continuous-pm-driver.
+**Commit scope:** F2.1 row 7 — the architectural keystone.
+**Prerequisites landed:** commits 1-6 (workflow_id α, ff47573;
+pm_current_focus, b1ad27a; pm_spin_rationale_log, 433cef5;
+audit_sample_log, 1e323ca; effort plumbing, 71d1e86; spec amendment,
+1eeea94).
+
+**Structural framing:** load-bearing implementation work. Five prior
+commits laid the table-and-tool primitives PM's loop will consume
+(focus, spin-rationale, audit-sample, window-state, burn-rate);
+commit 7 wires PM's actual per-iteration loop behavior. The
+keystone shape means **decision density highest in the chain so
+far** — Mike's prep-instruction framing is right.
+
+**Active carry-forward consumed at this prep** (per grounding doc §
+Carry-forward notes "→ commit 7"):
+
+- pm_spin row volume (commit 3 disposition): scales linearly with
+  loop tick cadence per F4.2 Q1 Reading A (per-tick emission, no
+  dedup). 30s cadence → ~2880 rows/day; 5s → ~17,280; 5min → ~288.
+  Materially-different cadence reopens F4.2 Q1 disposition (per-tick
+  dedup may become defensible at high volume) and softens/sharpens
+  F4.2 Q6 audit-log non-integration tiebreaker observation.
+- Sampler-trigger MCP call volume (commit 4 disposition): scales
+  with cadence × per-iteration sampleable-event count (~2-5 events
+  per iteration per F5.6.D extension framing). At 30s cadence with
+  typical event mix: ~5,760-14,400 record_sampleable_event MCP
+  calls/day. Materially-different cadence reopens F5.2 Q3 Reading
+  A explicit-hook disposition (embedded-handler alternative may
+  win on call-volume grounds at high cadence).
+
+Both volume topics resolve at this commit's Q2 disposition (tick
+cadence value).
+
+**Active watch-for-pattern that may trip at this commit:**
+
+1. **read_current_X rowid-DESC helper at threshold-of-three.**
+   Existing instances: `read_current_pm_mode` (commit M5-pm-mode-
+   and-window-state); `read_current_focus` (commit 2 of this
+   chain). Loop driver at commit 7 may add a third instance for
+   keep-alive logic (e.g., `read_most_recent_spin_rationale` for
+   hysteresis or anti-flapping). Per F4.5.1 reframe (carried forward
+   to closeout § Discipline-pattern observations): threshold-of-three
+   is **trigger-to-evaluate not mandate-to-extract**. Surface
+   extraction question explicitly per Q9 below if a third instance
+   lands.
+2. **Production-code-surface-for-testability at threshold-of-three
+   (currently 2).** Existing instances: token_store=None defensive
+   surface; _run_lifespan_body refactor. Commit 7's loop iteration
+   mechanism likely needs test seam (injectable clock for testing
+   iteration cadence; injectable snapshot-getter for fallback
+   paths). If a third instance lands per Q6 below, surface as
+   prep-checkpoint contradiction per the original BACKLOG entry.
+3. **bridge → tools cross-layer imports at 2 going to 3-4.** Mike's
+   prep-instruction framing anticipates pm_supervisor.py importing
+   tools/budget.py and tools/pm_focus.py (instances 3 and 4),
+   which would trip the layer-split reconsideration watch.
+   Surface explicitly per Q4 below — my Reading D recommendation
+   defends "minimal supervisor extension; no new bridge→tools
+   imports" against Mike's framing on architectural-pattern-
+   preservation grounds. Bidirectional-discipline territory; this
+   may be the fifth instance.
+
+---
+
+## F8.1 — touch points
+
+Per F2.1 row 7 + per Q4 disposition shape:
+
+| File | Status | Touch shape |
+|---|---|---|
+| `src/meridian_orchestrator/tools/pm_loop.py` | NEW | MCP tool implementations: `wait_for_next_tick` per Q1; `get_loop_state` aggregator per Q3 (conditional). Pydantic schemas. Module-internal helpers. |
+| `src/meridian_orchestrator/server.py` | EDIT | `_register_pm_loop_tools` helper + invoke from `build_server`. Wrapper exposes pm_loop tools as MCP. |
+| `src/meridian_orchestrator/main.py` | EDIT | Lifespan-time wiring of cadence config (Settings.pm_loop_tick_seconds) into pm_loop tools via closure pattern (mirrors get_oauth_usage_snapshot). |
+| `src/meridian_orchestrator/config.py` | EDIT | Add `pm_loop_tick_seconds: float` Settings field per Q2 disposition (default value disposition-dependent). |
+| `src/meridian_orchestrator/bridge/pm_supervisor.py` | UNCHANGED IF Q4 Reading D; EDIT IF Q4 Reading A/B/C | Per Q4 disposition. Reading D: zero changes; loop logic lives in tools/pm_loop.py + pm.yaml prompt. Reading A/B/C: extends supervisor with tools/ imports + new state. |
+| `config/agents/pm.yaml` | EDIT (per Q5) | system_prompt extension with continuous-mode loop instructions (call get_loop_state, decide, record_spin_rationale, wait_for_next_tick, repeat). |
+| `tests/unit/tools/test_pm_loop.py` | NEW | Direct-handler tests for wait_for_next_tick + get_loop_state. Includes injectable clock per Q6. |
+| `tests/integration/test_pm_loop_mcp_wrapper.py` | NEW | End-to-end MCP tests. |
+| `tests/integration/test_pm_supervisor.py` | EDIT (conditional on Q4) | Extensions if pm_supervisor.py grows new state. |
+| `docs/kickoff/06-mcp-tools-phase-one.md` | EDIT | New tool entries (wait_for_next_tick + get_loop_state + permission rows). |
+| `docs/kickoff/02-architecture.md` | EDIT (small) | Possibly: row in Phase 1 specifics naming continuous loop driver. |
+| `docs/kickoff/11-engineer-bridge.md` | EDIT (conditional) | Per Q4-A (if pm_supervisor extends), possibly add notes; per Q4-D, unchanged. |
+
+---
+
+## F8.2 — open questions (Q1-Q10)
+
+### Q1 — Tick cadence enforcement mechanism
+
+How does PM's continuous loop pace itself? PM is a Claude Code
+subprocess; CC has no native sleep tool, no per-turn timer.
+
+- **Reading A — server-side `wait_for_next_tick` MCP tool.** PM
+  calls this tool at end of each iteration; server-side handler
+  sleeps for `tick_seconds` (read from Settings via closure) then
+  returns. Daemon-controlled cadence; PM's prompt instructions
+  drive the call-pattern. Test seam: monkeypatch asyncio.sleep
+  for deterministic tests. Standard pattern for CC-subprocess
+  cadence control.
+- **Reading B — PM-prompt-driven sleep instruction.** Prompt says
+  "wait N seconds between iterations." Without a CC sleep tool,
+  PM has no actual sleep mechanism — would need to do busy-work
+  (e.g., issue MCP no-op calls in a loop) or skip sleep entirely.
+  Not viable with current CC surface.
+- **Reading C — event-driven loop (no fixed cadence).** PM iterates
+  only when state changes (new task in queue, Mike-presence flip,
+  dispatch outcome, etc.). PM blocks on a "wait_for_event" tool
+  that returns when any of those events occur. Higher complexity
+  (event-firing infrastructure); changes the loop's semantic
+  shape from "tick" to "react."
+- **Reading D — daemon-side throttling via subprocess control.**
+  Daemon SIGSTOPs / SIGCONTs the PM subprocess at tick boundaries.
+  Out-of-band cadence enforcement. Operationally fragile (signal
+  handling mid-MCP-call risks subprocess corruption); rejected
+  for OS-level complexity.
+
+**Recommendation: Reading A.** Server-side MCP-tool sleep is the
+established pattern for CC-subprocess server-controlled blocking
+behavior (precedent: would mirror how get_window_state's
+snapshot-staleness gates pace_recommendation, though not exactly
+the same shape). Test seam straightforward. Cadence configurable
+via Settings. Reading C is interesting for Phase 2 (event-driven
+loops have better capacity utilization properties) but is a
+materially different design surface; Phase 1 tick-cadence is the
+right starting point per F2 Section 2 framing.
+
+### Q2 — Tick interval default value
+
+Mike's carry-forward names three operating points: 30s (anticipated
+baseline); 5s (tight responsiveness); 5min (cost-conscious). What's
+the Phase 1 default?
+
+- **Reading A — 30s.** Anticipated baseline. ~2880 pm_spin rows/day;
+  ~5,760-14,400 sampler-trigger MCP calls/day. Within commit 3 +
+  commit 4 framing tolerance. Operator can tune via Settings env
+  var.
+- **Reading B — 60s.** Conservative; halves volumes vs Reading A.
+  ~1440 rows/day; ~2880-7200 MCP calls/day. Operator tunes down to
+  30s (or lower) for responsiveness.
+- **Reading C — 5min (300s).** Cost-conscious starting point.
+  ~288 rows/day; ~576-1440 MCP calls/day. Operator tunes down for
+  responsiveness as workload demands.
+- **Reading D — adaptive cadence.** Loop runs at tight interval
+  (e.g., 30s) when active (queued work + Mike absent); tight
+  interval (5s) when Mike interactive; loose interval (5min) when
+  idle. Server-side adaptive; PM doesn't control it. Higher
+  complexity.
+
+**Recommendation: Reading B (60s default).** Argument: 30s is
+"anticipated baseline" but the volume framing assumed 30s without
+discounting that commits 3-4 didn't yet have empirical operator
+data. 60s halves volume across both watch-for-pattern surfaces
+(pm_spin row growth + sampler-trigger MCP volume) while remaining
+responsive (Mike's interactive-mode auto-flip happens within a
+single tick window for any reasonable workload pattern). Reading
+A's 30s is operator-tunable to; conservative-then-tune-down is
+better than aggressive-then-tune-up for Phase 1's "no empirical
+data yet" state. Reading C's 5min is too loose for the
+continuous-loop framing; Reading D's adaptive cadence is Phase 2
+shape.
+
+**Carry-forward resolution:** at 60s default, both volume framings
+from commits 3-4 hold (within "operational noise" / "marginal MCP
+volume" bounds). F4.2 Q1 (per-tick no dedup for pm_spin) doesn't
+reopen. F5.2 Q3 (explicit hook for sampler) doesn't reopen. The
+carry-forward sleeps unless operator tunes cadence below ~10s.
+
+### Q3 — Loop state aggregator MCP tool
+
+PM's per-iteration reads (per F2 Section 2): get_window_state ×2
+(subscription_5h + subscription_7d_opus), get_burn_rate, pm_mode_log
+(via get_window_state's current_pm_mode field), pm_current_focus
+(via get_current_focus). That's 3-4 separate MCP calls per iteration
+in the disaggregated case.
+
+- **Reading A — `get_loop_state` aggregator.** New MCP tool that
+  bundles all per-iteration reads into one structured response.
+  PM's prompt says "call get_loop_state at start of each
+  iteration." Reduces per-iteration MCP call count from 3-4 to 1.
+  Schema cost: new Pydantic output model with nested fields.
+- **Reading B — disaggregated; PM calls individual tools per
+  iteration.** No new aggregator tool. PM's prompt enumerates the
+  reads. Higher MCP call volume per iteration.
+- **Reading C — aggregator optional; both shipped.** PM's prompt
+  recommends aggregator; individual tools available for ad-hoc
+  reads. Maximum flexibility; maximum surface.
+
+**Recommendation: Reading A (aggregator).** Per-iteration call
+count matters at scale (60s cadence × 4 calls = 5,760 reads/day
+that could be 1,440 with aggregator). The aggregator mirrors
+get_window_state's existing aggregation pattern (window state +
+PM mode + age in one read). Schema cost is one-time; runtime
+benefit is permanent. Reading B is only defensible if the
+aggregator's shape would be wrong (e.g., the four reads have
+different freshness semantics that bundling would obscure) —
+not the case here, since all are point-in-time snapshots PM
+consumes for one-decision purposes.
+
+### Q4 — pm_supervisor.py scope at commit 7 (LOAD-BEARING)
+
+This is the load-bearing question per F8 anticipated pushback.
+What does bridge/pm_supervisor.py change at commit 7?
+
+Mike's prep-instruction framing names "loop driver in
+bridge/pm_supervisor.py consumes tools/budget.py and tools/pm_focus.py"
+as the watch-trigger expectation (instances 3 and 4 of bridge→tools
+imports). But the M5-pm-supervisor-base disposition (P-2 Reading B,
+recorded in pm_supervisor's docstring at lines 20-29) established
+the pattern: **daemon owns lifecycle; subprocess owns reads via
+prompt instructions.**
+
+The P-2 disposition is explicit:
+> Architectural separation: daemon owns lifecycle (spawn / heartbeat
+> / respawn / token); subprocess owns startup reads via prompt
+> instructions.
+
+Loop driver concerns are subprocess-side reads + decisions; the
+daemon-side supervisor's role is unchanged at commit 7 if the
+P-2 pattern holds.
+
+- **Reading A — supervisor extends with tools/budget.py +
+  tools/pm_focus.py imports** (per Mike's prep framing; trips
+  bridge→tools watch at instances 3-4). Supervisor reads window
+  state for compaction-timing decisions; reads current focus for
+  diagnostic surfacing. Triggers F2.4 layer-split reconsideration.
+- **Reading B — supervisor imports only tools/budget.py for
+  compaction-timing decisions** (instance 3; doesn't trip the
+  4-instance threshold). Compaction-timing actually lands at
+  commit 8, not commit 7; pulling this in at 7 is premature.
+- **Reading C — supervisor extends with tools/pm_loop.py imports
+  only.** Loop infrastructure consumed at supervisor layer (e.g.,
+  for surfacing iteration metrics in dashboard). Adds one
+  bridge→tools instance.
+- **Reading D — supervisor unchanged at commit 7.** Loop logic
+  lives entirely in tools/pm_loop.py + pm.yaml prompt extension.
+  Honors P-2 architectural separation; preserves "daemon owns
+  lifecycle, subprocess owns reads" pattern. Zero new
+  bridge→tools imports; layer-split watch doesn't trip at this
+  commit.
+- **Reading E — supervisor extends with NEW non-tools state
+  only** (e.g., loop tick cadence config; audit-friendly
+  per-iteration metrics like "last seen iteration timestamp").
+  No new tools/ imports; daemon-side state grows but stays
+  within the watchdog scope. Compromise: supervisor knows about
+  the loop's existence without consuming tools/.
+
+**Recommendation: Reading D.** P-2 pattern is the right
+architectural commitment to preserve. Bridge→tools imports at
+instances 3-4 would represent material drift from the
+"supervisor as watchdog" framing established at M5-pm-supervisor-
+base. The loop's daemon-side state (cadence config) flows through
+main.py's lifespan into tools/pm_loop.py via closure pattern
+(mirrors `get_oauth_usage_snapshot` from M5-pm-mode-and-window-state
+commit 7) — no supervisor involvement needed.
+
+**Bidirectional-discipline territory:** Mike's prep-instruction
+framing anticipated Reading A (3-4 imports). Reading D contradicts
+Mike's framing on architectural-pattern-preservation grounds. If
+Mike's framing was the substantive expectation (supervisor SHOULD
+take on more responsibility at commit 7 for some reason I'm
+missing), Reading A or B/C/E lands; surface as F8.5.1 anticipated
+pushback so the disposition is conscious.
+
+If Reading D holds: zero new bridge→tools instances at commit 7;
+watch stays at 2; doesn't trip layer-split threshold.
+
+### Q5 — pm.yaml system_prompt extension scope
+
+PM's continuous-mode loop needs prompt instructions. Current
+system_prompt covers high-level continuous-mode behavior;
+commit 7 adds operational specifics (call get_loop_state,
+record_spin_rationale, wait_for_next_tick, repeat).
+
+- **Reading A — substantive extension at commit 7.** Add a
+  dedicated "continuous-mode iteration loop" section (~30-50 lines)
+  with explicit per-tick instruction sequence + decision
+  guidance.
+- **Reading B — minimal extension at commit 7.** Brief paragraph
+  pointing at the new tools; rely on PM's general continuous-mode
+  framing for the rest.
+- **Reading C — extension splits across commits 7 and 8.** Commit
+  7 covers loop iteration; commit 8 (compaction + handoff) covers
+  compaction-prep and handoff-doc instructions. Both substantial.
+- **Reading D — extension lands at commit 8 alongside compaction
+  prompt instructions.** Commit 7 ships tools/pm_loop.py without
+  prompt updates; PM's loop is implicit (default CC behavior of
+  reading available tools and using them). Defers all prompt work
+  to commit 8.
+
+**Recommendation: Reading A (substantive extension).** PM's loop
+behavior requires explicit prompt guidance — without it, PM's
+default behavior is "respond to Mike's input then stop" (CC's
+default mode), not "iterate until shutdown_recommended." The
+prompt extension IS the behavioral driver; tools/pm_loop.py
+provides the surface but doesn't drive use. Reading D defers the
+load-bearing instruction-set behind a tools-only commit, which
+ships infrastructure without consumer; commit 7's integration
+test surface would be poor.
+
+Reading C's split has merit if compaction prompt instructions
+materially expand commit 8 — surface in commit 8 prep if so. At
+this commit, ship the loop instructions in scope.
+
+### Q6 — Production-code-surface-for-testability — clock injection
+
+`wait_for_next_tick` (Q1 Reading A) sleeps. Tests need
+deterministic cadence assertions; can't actually wait 60s per test.
+
+- **Reading A — monkeypatch asyncio.sleep in tests.** Standard
+  Python testing pattern; no production-code change beyond what
+  Q1 Reading A's tool already provides.
+- **Reading B — explicit clock injection seam.** `wait_for_next_tick`
+  takes optional `_clock_sleep` parameter (defaults to
+  `asyncio.sleep`); tests inject a fake. Production-code-surface
+  expansion for testability — would be the third instance of the
+  watch-for-pattern.
+- **Reading C — Settings-based override.** Test fixtures set
+  `MERIDIAN_ORCH_PM_LOOP_TICK_SECONDS=0.001` to make the sleep
+  near-instant. No production-code-surface change; tests use
+  small but real sleeps.
+
+**Recommendation: Reading A (monkeypatch).** Established Python
+pattern; doesn't expand production-code-surface; doesn't trip the
+testability watch. Commit 4's Sampler tests already use
+monkeypatch.setattr for asyncio.create_subprocess_exec; same
+discipline applies here. Reading B's explicit injection is more
+"correct" by some testability framings but trips the watch
+without offsetting benefit. Reading C's small-but-real sleeps
+introduce flakiness on slow CI machines.
+
+If Reading A holds: zero new testability-surface instances at
+commit 7; watch stays at 2; doesn't trip threshold.
+
+### Q7 — Mike-interactive-mode handling in the loop
+
+When pm_mode_log indicates Mike is interactive, what does the
+continuous loop do?
+
+- **Reading A — pause iteration entirely.** Loop calls
+  wait_for_next_tick but skips all per-iteration writes (no
+  spin_rationale row; no focus changes). Resumes on next tick if
+  Mike no longer interactive.
+- **Reading B — continue iterating with `mike_presence` rationale.**
+  Loop emits spin_rationale row with `decision='kept_alive'` +
+  `rationale_tag='mike_presence'` per F4.2 Q3 disposition's
+  rationale taxonomy. Continues focus state-tracking; defers any
+  dispatch-affecting work (no new submit_task at this commit
+  anyway since M4d not shipped).
+- **Reading C — shut down PM-continuous subprocess.** Loop signals
+  shutdown; supervisor terminates PM. Interactive PM (Mike's
+  Claude Code session) takes over. Aggressive; risks losing
+  continuous-loop state.
+
+**Recommendation: Reading B.** F4.2 Q3 disposition explicitly
+named `mike_presence` as one of the four rationale_tag closed-enum
+values; Reading B uses that as designed. The loop's
+narration/fitness telemetry stays continuous (operator can later
+analyze "how often was PM kept alive due to Mike presence");
+Reading A's gap-during-interactive loses signal. Reading C is
+addendum-incompatible (PM-continuous is meant to stay alive
+aggressively per orchestrator-utilization-addendum).
+
+### Q8 — Keep-alive vs shutdown_recommended decision logic
+
+What inputs feed the per-tick decision? PM's prompt drives the
+actual decision; the question is what state the loop_state
+aggregator surfaces for the decision.
+
+- **Reading A — full state input.** queue_depth (M4d future,
+  currently always 0) + Mike presence + pace_recommendation +
+  recent dispatch outcomes (from get_recent_dispatches).
+- **Reading B — minimal at commit 7; expand at M4d.** pace_recommendation
+  + Mike presence. Defer queue-depth signal until M4d ships
+  get_queue.
+- **Reading C — pace_recommendation only.** Bottoms out: PM stays
+  alive until subscription_5h hits conserve threshold (signaled
+  via pace_recommendation='conserve'); shutdown_recommended at
+  conserve. Compaction-prep at commit 8 picks up there.
+
+**Recommendation: Reading B.** Reading C is too narrow — Mike-presence
+detection is a load-bearing input for the loop's spin-rationale
+classification (F4.2 Q3 disposition explicitly named
+`mike_presence`); excluding it would invalidate one quarter of the
+rationale taxonomy. Reading A's queue_depth is M4d-shipped, not
+available at commit 7 — including in the aggregator's output
+schema requires either a stub field or a forward-compatible
+shape. Reading B is the right Phase 1 scope: pace_recommendation
+(routing pacing) + Mike presence (load-aware throttling). Defer
+queue_depth to M4d.
+
+### Q9 — read_current_X helper extraction at threshold-of-three
+
+Per active watch-for-pattern: `read_current_pm_mode` (1) +
+`read_current_focus` (2) exist; commit 7 may add a third.
+
+Question: does commit 7 add a `read_most_recent_spin_rationale`
+or similar third-instance helper?
+
+- **Reading A — yes, add helper for hysteresis logic.** Loop's
+  decision logic reads last spin_rationale to avoid rapid flapping
+  between rationale_tags. Third instance lands; per F4.5.1 reframe,
+  surface extraction-evaluation question.
+- **Reading B — no new helper at commit 7.** Loop's decision
+  state lives in PM's prompt (each tick decides afresh); no
+  daemon-side hysteresis needed. Zero new bridge/tools state.
+  Watch stays at 2.
+- **Reading C — helper added but as private utility within
+  tools/pm_loop.py** (not at module-toplevel like
+  `read_current_pm_mode`). Doesn't count as "third instance" of
+  the established pattern — it's a per-module implementation
+  detail, not a reusable shared helper.
+
+**Recommendation: Reading B.** Hysteresis logic is PM-prompt's
+responsibility, not the loop infrastructure's. PM's prompt can
+read its own previous decision via the audit_log → get_audit_log
+(M6) path or via inspection of pm_spin_rationale_log via direct
+SQL (not currently MCP-exposed); but the loop infrastructure
+shouldn't pre-bake hysteresis assumptions. Reading B keeps the
+loop's role at "surface state + record decisions"; PM's prompt
+does the smart logic.
+
+If Reading B holds: zero new read_current_X instances at commit 7;
+watch stays at 2; threshold-of-three doesn't trip yet.
+
+### Q10 — Loop iteration write-tool aggregation
+
+Each iteration may write multiple things: pm_spin_rationale_log
+row (per-tick); pm_current_focus updates (on focus changes);
+audit_sample_log writes (when sampleable events occur); audit_log
+rows (existing tools' audit emissions).
+
+Does commit 7 add a `record_loop_iteration` aggregator that
+bundles per-tick writes?
+
+- **Reading A — aggregator write tool.** New MCP tool that takes
+  per-iteration write payload (decision, rationale_tag, optional
+  focus changes, optional sample triggers) and dispatches to
+  pm_spin / pm_focus / sampler in one call. Reduces MCP call
+  count for write-side per iteration.
+- **Reading B — no aggregator; PM calls existing tools
+  individually.** record_spin_rationale + complete_current_focus
+  + record_sampleable_event are separate calls. Higher per-tick
+  MCP call volume but cleaner separation.
+- **Reading C — aggregator optional.** Both shipped; PM prompt
+  recommends aggregator for typical iterations.
+
+**Recommendation: Reading B.** Write-side aggregation is harder
+than read-side aggregation because the writes have distinct
+audit-trail semantics — pm_spin_rationale_log row IS its own
+durable record (commit 3 Q6 disposition); rolling it into a
+parent aggregate audit row would re-litigate that disposition.
+Read-side aggregation (Q3 Reading A) bundles point-in-time reads
+which all have the same freshness shape; write-side aggregation
+would conflate distinct event semantics. Reading B keeps writes
+explicit; per-iteration MCP call count slightly higher (~3-4 vs
+1) but each call carries clear semantic load.
+
+---
+
+## F8.3 — watch-for-pattern check
+
+| Pattern | Status pre-commit | Commit 7 instance (per recommendations) | Disposition |
+|---|---|---|---|
+| Closed-enum CHECK + sentinel test | 9+ instances; established convention per F2.5 graduation | Possibly +0; new MCP tool inputs use existing Literals (PmMode, etc.). Surface if a new closed-enum lands. | No threshold concern. |
+| `read_current_X` rowid-DESC helper | 2 | +0 per Q9 Reading B (no new helper at commit 7). Threshold-of-three watch continues; possibly trips at commit 8 (compaction-related read of focus state). | No trip at commit 7. |
+| `bridge/` → `tools/` cross-layer imports | 2 | +0 per Q4 Reading D (supervisor unchanged). Mike's prep framing anticipated +2; my recommendation contradicts on P-2 architectural-pattern grounds. **Anticipated pushback F8.5.1.** | No trip at commit 7 if Reading D holds. |
+| Production-code-surface-for-testability | 2 | +0 per Q6 Reading A (monkeypatch asyncio.sleep; no explicit injection seam). Threshold-of-three watch continues. | No trip at commit 7. |
+| Audit-action `pm.<surface>.<verb>` namespace | 5 | +0 (existing actions reused; no new audit shape). | No expansion. |
+| F2.1 surface-as-finding rule | 5 invocations | Likely +1 at commit 7 draft. F2.1 estimate +18 unique. Trigger condition (>200% over via unique-function metric per F6.6 clarification) at >36 unique tests — possible at this commit's keystone scope but not certain. | Surface at diff checkpoint. |
+| Cadence-volume carry-forward (commits 3-4) | Active | Resolved per Q2 disposition. At Reading B (60s default), both commit-3 and commit-4 framings hold. | Carry-forward closes. |
+
+---
+
+## F8.4 — test-target estimate
+
+F2.1 estimate: +18. Working breakdown under recommended dispositions
+(Q1-A, Q2-B, Q3-A, Q4-D, Q5-A, Q6-A, Q7-B, Q8-B, Q9-B, Q10-B):
+
+| Layer | Count |
+|---|---|
+| `wait_for_next_tick` MCP handler tests (sleep behavior + cadence config + cancel-safety) | 3-4 |
+| `get_loop_state` aggregator handler tests (state composition + freshness + Mike-presence reflection + per-bucket data) | 4-5 |
+| Pydantic schemas (LoopStateOutput shape; closed-enum sentinels if any) | 1-2 |
+| MCP wrapper integration (PM-allowed × 2 tools; non-PM rejected × 3 parametrized × 2 tools) | 2 unique / 8 collected |
+| Settings `pm_loop_tick_seconds` default + range validation | 2 |
+| Lifespan wiring (Sampler-style closure for pm_loop tools) | 1 |
+| Q4-D invariant pin (test asserts pm_supervisor.py has no new tools/ imports — sentinel against future drift) | 1 |
+| Q9-B invariant pin (test asserts no new read_current_X helper added) | 1 |
+| Q6-A test pattern (monkeypatch asyncio.sleep) — used in cadence tests | (covered above) |
+| **Total under recommendations** | **15-19 unique / 20-26 collected** |
+
+**vs F2.1 estimate of +18 unique:** roughly aligned (15-19 / 18 = 83-106%).
+Per closeout pattern observation, expect actual to land slightly
+higher with parametrize blow-ups. F2.1 trigger condition (>200%
+unique-function metric) at >36 unique — well above expected actual.
+**Trigger should not fire at commit 7 under recommendations.**
+
+If Q4 lands as Reading A/B/C (supervisor extends), test count
+grows by +3-5 unique for supervisor extension tests; pushes total
+to ~18-24. Still under trigger threshold.
+
+---
+
+## F8.5 — anticipated pushbacks
+
+Five weak points likely to surface at review:
+
+1. **Q4 Reading D contradicts your prep-instruction framing.** Your
+   prep instruction said "loop driver in bridge/pm_supervisor.py
+   consumes tools/budget.py and tools/pm_focus.py" — anticipating
+   Reading A (instances 3-4 of bridge→tools, tripping the layer-
+   split watch). My Reading D recommendation defends "supervisor
+   unchanged at commit 7" on P-2 architectural-pattern grounds
+   (recorded in pm_supervisor's own docstring lines 20-29). If
+   your framing was the substantive expectation (supervisor SHOULD
+   take on more loop-driver responsibility), surface why so
+   Reading A/B/C/E lands; if Reading D is right, your prep
+   instruction may be the fifth bidirectional-discipline instance
+   operating in the third direction (prep-instruction error).
+   Genuinely contestable; test the precedent's conditions.
+
+2. **Q1 Reading A `wait_for_next_tick` introduces a new MCP tool
+   pattern (server-side blocking).** No existing Phase 1 MCP tool
+   blocks server-side for arbitrary durations. Closest analog is
+   none — even get_window_state returns immediately. The blocking-
+   behavior pattern is novel; future reviewers may push back on
+   "should we use a different mechanism" (e.g., HTTP long-poll;
+   server-sent events). For Phase 1, blocking MCP is the simplest
+   fit (CC subprocess blocks on its own MCP call regardless of
+   server-side mechanism); flagging the pattern for future
+   architectural review.
+
+3. **Q2 Reading B 60s vs Reading A 30s default cadence.** My
+   recommendation diverges from the carry-forward's "anticipated
+   30s" baseline. Argument: anticipation isn't operator data;
+   conservative-then-tune-down is better than aggressive-then-
+   tune-up at Phase 1. Reviewing-Claude may push back: "30s was
+   already framed as anticipated baseline; defaulting to 60s
+   doubles the loop's responsiveness lag without offsetting
+   operator benefit." Both readings defensible; the disposition
+   has trajectory implications for commits 3-4 watch-for-pattern
+   framings.
+
+4. **Q5 Reading A substantive prompt extension may bleed into
+   commit 8 scope.** Loop iteration prompt + compaction prompt are
+   conceptually distinct but operationally interleaved (compaction
+   triggers from loop iteration's pace_recommendation read). If
+   the prompt extension at commit 7 has to anticipate compaction
+   cleanly, scope creeps toward commit 8. Reading C's split-across-
+   commits pattern is defensible if scope creep materializes.
+
+5. **Q10 Reading B leaves per-iteration MCP call count at 3-4.**
+   Each iteration: get_loop_state (1) + record_spin_rationale (1)
+   + wait_for_next_tick (1) + optional declare_current_focus /
+   complete_current_focus / record_sampleable_event (0-3). Mean
+   ~4-5 calls/iteration. At 60s cadence: ~5,760-7,200 MCP
+   calls/day total. Reading A's write-aggregator would reduce
+   this; my reasoning rejected on audit-trail-semantics grounds.
+   If MCP call volume becomes an operational concern (commits
+   8-9 may surface this), Reading A revisits.
+
+---
+
+## F8.6 — what lands at the diff checkpoint
+
+After Mike disposition Q1-Q10 + the five anticipated-pushback
+items:
+
+- `tools/pm_loop.py` drafted with Q1+Q3+Q6 dispositions
+- `Settings.pm_loop_tick_seconds` per Q2 (default value
+  disposition-dependent; range validation)
+- `main.py` lifespan wires cadence config via closure pattern
+- `server.py` `_register_pm_loop_tools` for the new MCP tools
+- `config/agents/pm.yaml` system_prompt extension per Q5
+- `bridge/pm_supervisor.py` per Q4 (Reading D: unchanged; A/B/C/E:
+  extended)
+- Tests per F8.4 estimate (~15-19 unique / 20-26 collected)
+- Spec amendments: 06-mcp-tools (new tool entries +
+  permission rows); possibly 02 (small reference) + 11 (only if
+  Q4 brings supervisor changes)
+- F2.1 divergence assessment surfaced at diff checkpoint per
+  unique-function metric (per F6.6 clarification)
+- Carry-forward "→ commit 7" entry RESOLVED in grounding doc §
+  Carry-forward notes (cadence-volume framings hold under Q2-B
+  60s default); update entry header to "RESOLVED 2026-05-06"
+
+Diff checkpoint surfaces commit-by-commit; commit 7 lands; commit
+8 prep opens (compaction-trigger + handoff-doc generation +
+PMSupervisor._reconstruct_state extending to read most-recent
+handoff). Commit 8's prep will revisit Q4 (supervisor scope grows
+materially at compaction-trigger commit) and Q9 (read-helper
+threshold may trip if compaction needs handoff-doc-state read).
+
+**End of Followup-13.**
+
+---
+
 # Carry-forward notes
 
 **Convention established 2026-05-04 (Decision 5 disposition, commit 3 prep):**
@@ -4230,4 +4908,36 @@ Surface whether the chosen cadence triggers reopening of:
 **Detail prose**: F4.2 Q1 disposition pin in this grounding doc
 (grep "DISPOSITIONED 2026-05-04: Reading A accepted" within F4.2
 Q1); F5.2 Q3 disposition prose for the sampler-trigger interface.
+
+**DISPOSITIONED 2026-05-06 (commit 7 prep, F8.2 Q2-B):** Anticipated
+30s at commits 3-4 prep; dispositioned to 60s at commit 7 per
+conservative-then-tune-down framing. Volume framings from commits
+3-4 (pm_spin operational noise at ~2880 rows/day under 30s baseline
+→ ~1440 rows/day under 60s; sampler-trigger marginal MCP volume
+at ~5,760-14,400 calls/day under 30s → ~2,880-7,200 calls/day under
+60s) hold under 60s with margin. **Re-evaluation trigger:** empirical
+data showing PM under-responsiveness at 60s warrants tune-down to
+30s or lower.
+
+### → commits 8-9: per-iteration MCP write call count at 3-4 (from commit 7)
+
+Per F8.2 Q10-B disposition (write-side aggregation rejected on
+audit-trail-semantics grounds): per-iteration MCP write call
+count at typical iteration is spin_rationale (1) + sample_event
+(0-1) + complete_current_focus (0-1, on completion ticks) ≈ 1-3
+writes per iteration; ~2,880-7,200 write calls/day under 60s
+cadence baseline (Q2-B disposition).
+
+**Re-evaluation trigger:** if commits 8-9 add write events that
+push per-iteration count materially higher (e.g., handoff-doc
+generation at compaction trigger emits multiple writes), revisit
+F8.2 Q10 write-tool aggregation rejection. Aggregator was rejected
+on audit-trail-semantics grounds; if call volume becomes operational
+concern, evaluate hybrid (aggregator for batched-emit-of-related-
+writes within one transaction; per-tool emit for distinct-semantic
+writes).
+
+**Detail prose**: F8.2 Q10 disposition prose; F8.2 Q3 read-aggregation
+asymmetric framing (read aggregation good per Q3-A; write
+aggregation bad per Q10-B).
 

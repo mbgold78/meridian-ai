@@ -72,6 +72,27 @@ Section established 2026-05-05 per M5-continuous-pm-driver F5.6 Decision 4 dispo
 
 If a counter-case surfaces during future commit prep, the disposing-Claude should evaluate and either (a) extend the rule to cover the new shape, or (b) document the case as an exception. Don't let the rule erode silently.
 
+## Architectural patterns to review
+
+Section established 2026-05-06 per M5-continuous-pm-driver F8.2 Q1-A novel-pattern flag (Decision 5 lazy-create rule). Patterns whose first instance lands during a sub-milestone but whose architectural implications warrant review when a second instance materializes. Trigger framing: "when second instance lands, evaluate whether <pattern> is becoming established convention (formalize) or one-off (document as exception)."
+
+### Server-side blocking MCP tool
+
+**First instance:** `wait_for_next_tick` (M5-continuous-pm-driver commit 7, `tools/pm_loop.py`). PM's continuous loop calls this tool at end of each iteration; server-side handler sleeps for `Settings.pm_loop_tick_seconds` then returns. Daemon-controlled cadence; PM-prompt-driven call pattern.
+
+**Why flagged:** No existing Phase 1 MCP tool blocks server-side for arbitrary durations. Closest analog is none — even `get_window_state` returns immediately. Blocking-behavior pattern is novel for the daemon's MCP surface.
+
+**Trigger to revisit:** when a second server-side blocking MCP tool lands (in any sub-milestone), evaluate:
+- Is the blocking-MCP pattern becoming the convention for daemon-driven cadence / synchronization on subprocess agents? If so, formalize via shared base / utility (e.g., `tools/_blocking.py` with cancel-safety + timeout + clock-injection helpers).
+- Or is it remaining one-off for the continuous-loop case? If so, document `wait_for_next_tick` as exception in `tools/pm_loop.py` module docstring; future blocking-MCP needs carry their own justification.
+
+**Architectural alternatives** (for second-instance evaluation):
+- HTTP long-poll pattern (server holds connection until event)
+- Server-sent events / streaming (one-way push from server to subprocess)
+- Event-driven loop (subprocess subscribes to events; server pushes when events fire — eliminates blocking entirely)
+
+For Phase 1, blocking MCP is the simplest fit (CC subprocess blocks on its own MCP call regardless of server-side mechanism); pattern review only matters at second instance.
+
 ## Carry-forward to future sub-milestones
 
 Section established 2026-05-05 per Decision 5 convention (M5-continuous-pm-driver F3.6.D, refined per M5-continuous-pm-driver F5.6.C). Lazy-create on first cross-sub-milestone carry-forward; entries name the destination explicitly + cross-reference detail-prose location. Distinct from `## Deferred` (which is for things to do at unspecified-future-time); this section is for routing notes from one sub-milestone to a specifically-named future sub-milestone.

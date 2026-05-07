@@ -269,6 +269,21 @@ async def _run_lifespan_body(
             # opt-in shape; operator sets non-zero via env var to enable.
             sampler = Sampler(settings.audit_sample_percentage)
 
+            # M5-continuous-pm-driver commit 7: PM loop tick cadence.
+            # Lazy-callable closure resolves to settings.pm_loop_tick_seconds
+            # at each wait_for_next_tick MCP invocation. Effectively
+            # static across daemon lifetime (Settings constructed once
+            # at startup), but the callable shape mirrors
+            # get_oauth_usage_snapshot precedent for consistency and
+            # admits future hot-reload paths if Settings ever grows
+            # one. Per F8.6.A Reading D disposition: cadence config
+            # flows through main.py lifespan via closure to
+            # tools/pm_loop.py, NOT through pm_supervisor.py
+            # (preserving symmetric-supervisor-shape with
+            # EngineerSupervisor + single-responsibility separation).
+            def get_pm_loop_tick_seconds() -> float:
+                return settings.pm_loop_tick_seconds
+
             mcp_task = asyncio.create_task(
                 serve_mcp(
                     settings,
@@ -279,6 +294,7 @@ async def _run_lifespan_body(
                     get_dispatcher=get_dispatcher,
                     get_oauth_usage_snapshot=get_oauth_usage_snapshot,
                     sampler=sampler,
+                    get_pm_loop_tick_seconds=get_pm_loop_tick_seconds,
                 ),
                 name="mcp-server",
             )

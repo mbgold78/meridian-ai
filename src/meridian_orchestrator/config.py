@@ -117,6 +117,25 @@ class Settings(BaseSettings):
     # when real-session data shows per-kind tuning is warranted.
     audit_sample_percentage: float = Field(default=0.0, ge=0.0, le=1.0)
 
+    # M5-continuous-pm-driver commit 7: tick cadence for the continuous
+    # PM loop's `wait_for_next_tick` MCP tool. PM's continuous-mode
+    # subprocess calls wait_for_next_tick at end of each iteration;
+    # server-side handler sleeps this many seconds then returns.
+    #
+    # Default 60.0 seconds per F8.2 Q2-B disposition (conservative-
+    # then-tune-down framing; cadence-volume carry-forward from
+    # commits 3-4 holds with margin under 60s baseline). Operator
+    # may tune via env var: tighter for responsiveness (down to ~5s),
+    # looser for cost-conscious operation (up to ~300s / 5min).
+    #
+    # Range guard: ge=1.0 (sub-second tick risks runaway loop;
+    # measurable cost overhead per MCP call; PM's prompt-driven
+    # decision logic doesn't react meaningfully at sub-second
+    # cadence). le=3600.0 (one-hour ceiling; longer is effectively
+    # off-by-default and operator should disable via the
+    # enable_pm_supervisor flag instead of pinning a useless cadence).
+    pm_loop_tick_seconds: float = Field(default=60.0, ge=1.0, le=3600.0)
+
     @model_validator(mode="after")
     def _require_substrate_working_directory_when_supervisor_enabled(
         self,

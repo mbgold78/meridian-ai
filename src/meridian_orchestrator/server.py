@@ -127,6 +127,12 @@ from meridian_orchestrator.tools.pm_focus import (
     declare_current_focus,
     get_current_focus,
 )
+from meridian_orchestrator.tools.pm_loop import (
+    GetLoopStateOutput,
+    WaitForNextTickOutput,
+    get_loop_state,
+    wait_for_next_tick,
+)
 from meridian_orchestrator.tools.pm_mode import (
     PmMode,
     SetPmModeInput,
@@ -262,6 +268,7 @@ def build_server(
     get_dispatcher: Callable[[], BridgeDispatcher | None] | None = None,
     get_oauth_usage_snapshot: SnapshotProvider | None = None,
     sampler: Sampler | None = None,
+    get_pm_loop_tick_seconds: Callable[[], float] | None = None,
 ) -> FastMCP:
     """Construct the FastMCP server with auth + the current tool set.
 
@@ -347,6 +354,14 @@ def build_server(
         _register_window_state_tools(
             mcp, storage, token_store, get_oauth_usage_snapshot
         )
+        if get_pm_loop_tick_seconds is not None:
+            _register_pm_loop_tools(
+                mcp,
+                storage,
+                token_store,
+                get_oauth_usage_snapshot,
+                get_pm_loop_tick_seconds,
+            )
 
     if storage is not None and get_dispatcher is not None and registry is not None:
         _register_dispatch_initiation_tools(
@@ -1016,6 +1031,84 @@ def _register_window_state_tools(
         )
 
 
+def _register_pm_loop_tools(
+    mcp: FastMCP,
+    storage: Storage,
+    token_store: TokenStore,
+    get_oauth_usage_snapshot: SnapshotProvider,
+    get_pm_loop_tick_seconds: Callable[[], float],
+) -> None:
+    """Register wait_for_next_tick + get_loop_state (M5-continuous-pm-driver
+    commit 7).
+
+    Two MCP tools ship per F8.6 dispositions Q1-A + Q3-A:
+    PM-continuous subprocess at this commit forward is the load-bearing
+    caller; both tools bundle / pace the loop's per-iteration sequence.
+
+    **wait_for_next_tick** is the first server-side blocking MCP tool
+    in Phase 1 — sleeps for ``Settings.pm_loop_tick_seconds`` (default
+    60s per F8.2 Q2-B) then returns. Cadence resolved via the
+    ``get_pm_loop_tick_seconds`` closure (mirrors
+    ``get_oauth_usage_snapshot`` lazy-callable pattern; lifespan-time
+    config). Pattern flagged in BACKLOG.md § Architectural patterns
+    to review.
+
+    **get_loop_state** aggregates per-iteration reads (subscription_5h
+    + subscription_7d_opus window state + global burn rate + active
+    pm_current_focus) into one MCP response. Reduces per-iteration
+    MCP read count from 3-4 to 1.
+
+    Permission: PM-only at handler layer. Mike's interactive PM
+    session governed by client-side defaults; doesn't run the
+    continuous-loop iteration sequence.
+    """
+
+    @mcp.tool(
+        name="wait_for_next_tick",
+        description=(
+            "PM only. Sleep for the configured pm_loop_tick_seconds "
+            "(default 60s) then return. PM's continuous loop calls "
+            "this at the end of each iteration to pace the loop. "
+            "Cadence is daemon-controlled; PM-prompt-driven call "
+            "pattern. Returns slept_seconds for cadence verification."
+        ),
+    )
+    async def _wait_for_next_tick() -> WaitForNextTickOutput:
+        _resolve_agent_id()
+        await _observe_caller(storage, token_store, "wait_for_next_tick")
+        caller_role = _resolve_caller_role_via_token()
+        return await wait_for_next_tick(
+            get_tick_seconds=get_pm_loop_tick_seconds,
+            caller_role=caller_role,
+        )
+
+    @mcp.tool(
+        name="get_loop_state",
+        description=(
+            "PM only. Aggregator: returns per-iteration loop state in "
+            "one MCP response. Bundles subscription_5h window state "
+            "(primary pacing + Mike-presence detection via "
+            "current_pm_mode field), subscription_7d_opus window state "
+            "(routing-tier downgrade context), global burn rate, and "
+            "active pm_current_focus row. Reduces per-iteration read "
+            "count from 3-4 to 1. Read-side aggregation is asymmetric "
+            "vs write-side: reads share point-in-time freshness; "
+            "writes have distinct audit-trail semantics that bundling "
+            "would conflate."
+        ),
+    )
+    async def _get_loop_state() -> GetLoopStateOutput:
+        agent_id = _resolve_agent_id()
+        await _observe_caller(storage, token_store, "get_loop_state")
+        caller_role = _resolve_caller_role_via_token()
+        return await get_loop_state(
+            storage=storage,
+            get_snapshot=get_oauth_usage_snapshot,
+            caller_agent_id=agent_id,
+            caller_role=caller_role,
+        )
+
+
 def _register_dispatch_completion_tools(
     mcp: FastMCP,
     storage: Storage,
@@ -1335,6 +1428,7 @@ async def serve(
     get_dispatcher: Callable[[], BridgeDispatcher | None] | None = None,
     get_oauth_usage_snapshot: SnapshotProvider | None = None,
     sampler: Sampler | None = None,
+    get_pm_loop_tick_seconds: Callable[[], float] | None = None,
 ) -> None:
     """Run the MCP HTTP server until cancelled.
 
@@ -1357,6 +1451,7 @@ async def serve(
         get_dispatcher=get_dispatcher,
         get_oauth_usage_snapshot=get_oauth_usage_snapshot,
         sampler=sampler,
+        get_pm_loop_tick_seconds=get_pm_loop_tick_seconds,
     )
     app = mcp.streamable_http_app()
     config = uvicorn.Config(
