@@ -577,7 +577,7 @@ async def record_api_call(
                 "notes": request.notes,
                 "workflow_id": resolved_workflow_id,
                 "agent_role": caller_agent_role,
-                "task_type": request.task_type,
+                "task_type": resolved_task_type,
             },
         )
 

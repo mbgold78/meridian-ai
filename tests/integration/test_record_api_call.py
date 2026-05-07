@@ -1346,6 +1346,24 @@ async def test_task_type_alpha_resolves_chain_root_when_root_has_task_type(
         "Q2 commit 3 + CQ2 commit 7 disposition."
     )
 
+    # T1 (commit 8.5): audit details_json.task_type MUST match
+    # api_usage.task_type. F1 was caused by audit writing
+    # request.task_type instead of resolved_task_type, silently
+    # diverging audit from api_usage on every server-derived case.
+    audit = await storage.fetch_one(
+        "SELECT details_json FROM audit_log "
+        "WHERE action = 'api.record_call' "
+        "ORDER BY rowid DESC LIMIT 1"
+    )
+    assert audit is not None
+    audit_details = json.loads(audit["details_json"])
+    assert audit_details["task_type"] == row["task_type"], (
+        f"audit task_type={audit_details['task_type']!r} diverges "
+        f"from api_usage task_type={row['task_type']!r}. F1 regression: "
+        "audit must capture resolved value (server-derived wins per "
+        "Reading B), not request.task_type."
+    )
+
 
 async def test_task_type_alpha_falls_through_when_chain_root_task_type_null(
     storage: SqliteStorage,
@@ -1386,6 +1404,21 @@ async def test_task_type_alpha_falls_through_when_chain_root_task_type_null(
         f"task_type={row['task_type']!r}, expected 'execution'. "
         "When server-derived is None (chain root has NULL task_type), "
         "caller-supplied falls through per Reading B precedence."
+    )
+
+    # T1 (commit 8.5): audit details_json.task_type MUST match
+    # api_usage.task_type. Caller-supplied path coverage.
+    audit = await storage.fetch_one(
+        "SELECT details_json FROM audit_log "
+        "WHERE action = 'api.record_call' "
+        "ORDER BY rowid DESC LIMIT 1"
+    )
+    assert audit is not None
+    audit_details = json.loads(audit["details_json"])
+    assert audit_details["task_type"] == row["task_type"], (
+        f"audit task_type={audit_details['task_type']!r} diverges "
+        f"from api_usage task_type={row['task_type']!r} on caller-"
+        "supplied falls-through path."
     )
 
 
@@ -1461,3 +1494,20 @@ async def test_task_type_alpha_conflict_emits_warning(
         "WHERE action = 'api.record_call.task_type_conflict'"
     )
     assert audits == []
+
+    # T1 (commit 8.5): audit details_json.task_type MUST match
+    # api_usage.task_type — server-derived wins on conflict; audit
+    # captures the WINNING value, not the caller-supplied one. F1
+    # regression: audit must record what was actually written.
+    audit = await storage.fetch_one(
+        "SELECT details_json FROM audit_log "
+        "WHERE action = 'api.record_call' "
+        "ORDER BY rowid DESC LIMIT 1"
+    )
+    assert audit is not None
+    audit_details = json.loads(audit["details_json"])
+    assert audit_details["task_type"] == row["task_type"] == "planning", (
+        f"audit task_type={audit_details['task_type']!r} diverges "
+        f"from api_usage task_type={row['task_type']!r} on conflict "
+        "path. Server-derived must win in BOTH api_usage AND audit."
+    )
