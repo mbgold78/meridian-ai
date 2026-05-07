@@ -65,6 +65,7 @@ from __future__ import annotations
 import uuid
 from typing import Any, Literal
 
+import structlog
 from pydantic import BaseModel, Field
 
 from meridian_orchestrator.agents.permissions import PermissionResolver
@@ -77,6 +78,8 @@ from meridian_orchestrator.errors import (
 from meridian_orchestrator.errors import PermissionError as OrchestratorPermissionError
 from meridian_orchestrator.storage.interface import Storage
 from meridian_orchestrator.storage.models import Task, TaskStatus, TaskType
+
+logger = structlog.get_logger(__name__)
 
 # ----- Pydantic schemas ----------------------------------------------------
 
@@ -221,20 +224,28 @@ def _check_can_submit_task(
     """
     if caller_role == target_role:
         if caller_source != "oauth":
+            logger.warning(
+                "permission_denied.submit_task.self_submit",
+                caller_role=caller_role,
+                target_role=target_role,
+                caller_source=caller_source,
+                reason="static-token self-submit; only OAuth callers permitted per Q9",
+            )
             raise OrchestratorPermissionError(
-                f"caller role {caller_role!r} cannot self-submit "
-                "(only OAuth callers may self-submit; static-token callers "
-                "are agent processes that should not enqueue work for themselves)"
+                "permission denied for submit_task"
             )
         # OAuth self-submit allowed — spec's "direct report" hierarchy
         # bypass acknowledged via Q9 disposition.
         return
     if not permissions.manages_directly(caller_role, target_role):  # type: ignore[arg-type]
+        logger.warning(
+            "permission_denied.submit_task.hierarchy_bypass",
+            caller_role=caller_role,
+            target_role=target_role,
+            reason="target not in caller's direct manages list per 06-mcp-tools-phase-one.md:44",
+        )
         raise OrchestratorPermissionError(
-            f"caller role {caller_role!r} cannot submit task for "
-            f"target_role {target_role!r} (hierarchy bypass: target is "
-            "not in caller's direct manages list per "
-            "06-mcp-tools-phase-one.md:44)"
+            "permission denied for submit_task"
         )
 
 
@@ -291,10 +302,17 @@ async def _check_can_submit_task_parent_ownership(
     if submitter_role == caller_role:
         return dict(row)
 
+    logger.warning(
+        "permission_denied.submit_task.parent_ownership",
+        caller_agent_id=caller_agent_id,
+        caller_role=caller_role,
+        parent_task_id=parent_task_id,
+        parent_claimed_by=row["claimed_by"],
+        parent_submitter_role=submitter_role,
+        reason="neither clause-1 (claimed_by) nor clause-2 (submitter-role) matched",
+    )
     raise OrchestratorPermissionError(
-        f"caller {caller_agent_id!r} (role={caller_role!r}) does not own "
-        f"parent task {parent_task_id!r} (clauses: claimed_by="
-        f"{row['claimed_by']!r}, submitter_role={submitter_role!r})"
+        "permission denied for submit_task"
     )
 
 
@@ -484,11 +502,14 @@ def _check_can_claim(
     M4d-task-management-surface commit 4, 2026-05-07).
     """
     if caller_role != target_agent_role:
+        logger.warning(
+            "permission_denied.claim_task.role_mismatch",
+            caller_role=caller_role,
+            target_agent_role=target_agent_role,
+            reason="strict role equality required per 06-mcp-tools-phase-one.md:111",
+        )
         raise OrchestratorPermissionError(
-            f"caller role {caller_role!r} cannot claim task with "
-            f"agent_role={target_agent_role!r} (strict role equality "
-            "required per 06-mcp-tools-phase-one.md:111; sibling-role "
-            "claims rejected even within the same dispatch chain)"
+            "permission denied for claim_task"
         )
 
 
@@ -661,12 +682,17 @@ def _check_can_update_task_status(
         if submitter_role == caller_role:
             return
 
+    logger.warning(
+        "permission_denied.update_task_status.clauses_failed",
+        caller_agent_id=caller_agent_id,
+        caller_role=caller_role,
+        target_status=target_status,
+        task_claimed_by=task["claimed_by"],
+        task_submitter_role=task.get("submitter_role"),
+        reason="clause 1 (claimed_by) failed; clause 2 (submitter-role) only applies when target_status='cancelled'",
+    )
     raise OrchestratorPermissionError(
-        f"caller {caller_agent_id!r} (role={caller_role!r}) cannot "
-        f"update status of task to {target_status!r} (clauses: "
-        f"claimed_by={task['claimed_by']!r}, "
-        f"submitter_role={task.get('submitter_role')!r}; clause 2 "
-        "applies only when target_status='cancelled')"
+        "permission denied for update_task_status"
     )
 
 
@@ -881,10 +907,14 @@ async def get_queue(
             request.agent_role,  # type: ignore[arg-type]
         )
     ):
+        logger.warning(
+            "permission_denied.get_queue.agent_role_filter_conflict",
+            caller_role=caller_role,
+            requested_agent_role=request.agent_role,
+            reason="agent_role filter outside caller's hierarchy scope per 06-mcp-tools-phase-one.md:65",
+        )
         raise OrchestratorPermissionError(
-            f"caller role {caller_role!r} cannot filter queue by "
-            f"agent_role={request.agent_role!r} (outside caller's "
-            "hierarchy scope per 06-mcp-tools-phase-one.md:65)"
+            "permission denied for get_queue"
         )
 
     where_clauses: list[str] = [hierarchy_clause]
@@ -971,12 +1001,18 @@ async def _check_can_read_subtasks(
     if permissions.is_descendant(caller_role, parent["agent_role"]):  # type: ignore[arg-type]
         return
 
+    logger.warning(
+        "permission_denied.get_subtasks.not_in_chain",
+        caller_agent_id=caller_agent_id,
+        caller_role=caller_role,
+        parent_task_id=parent_task_id,
+        parent_submitted_by=parent["submitted_by"],
+        parent_claimed_by=parent["claimed_by"],
+        parent_role=parent["agent_role"],
+        reason="caller not submitter, claimed_by, or ancestor of parent",
+    )
     raise OrchestratorPermissionError(
-        f"caller {caller_agent_id!r} (role={caller_role!r}) not in "
-        f"chain of parent_task_id={parent_task_id!r} (clauses: "
-        f"submitter={parent['submitted_by']!r}, "
-        f"claimed_by={parent['claimed_by']!r}, "
-        f"parent_role={parent['agent_role']!r})"
+        "permission denied for get_subtasks"
     )
 
 
@@ -1096,12 +1132,18 @@ async def _check_can_set_priority(
     if permissions.is_descendant(caller_role, row["agent_role"]):  # type: ignore[arg-type]
         return dict(row)
 
+    logger.warning(
+        "permission_denied.set_task_priority.clauses_failed",
+        caller_agent_id=caller_agent_id,
+        caller_role=caller_role,
+        task_id=task_id,
+        task_submitted_by=row["submitted_by"],
+        task_claimed_by=row["claimed_by"],
+        task_role=row["agent_role"],
+        reason="caller not submitter, claimed_by, or ancestor of task",
+    )
     raise OrchestratorPermissionError(
-        f"caller {caller_agent_id!r} (role={caller_role!r}) cannot "
-        f"set priority on task {task_id!r} (clauses: "
-        f"submitter={row['submitted_by']!r}, "
-        f"claimed_by={row['claimed_by']!r}, "
-        f"task_role={row['agent_role']!r})"
+        "permission denied for set_task_priority"
     )
 
 

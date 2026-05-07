@@ -303,7 +303,7 @@ def test_check_can_submit_task_non_direct_managee_rejects() -> None:
     bypasses."""
     resolver = _submit_task_resolver()
     with pytest.raises(
-        OrchestratorPermissionError, match="hierarchy bypass"
+        OrchestratorPermissionError, match="permission denied for submit_task"
     ):
         _check_can_submit_task(
             caller_role="pm",
@@ -320,7 +320,7 @@ def test_check_can_submit_task_self_target_static_rejects() -> None:
     delegating-down-the-hierarchy work). Q9 runs first; never reaches
     hierarchy gate."""
     resolver = _submit_task_resolver()
-    with pytest.raises(OrchestratorPermissionError, match="self-submit"):
+    with pytest.raises(OrchestratorPermissionError, match="permission denied for submit_task"):
         _check_can_submit_task(
             caller_role="pm",
             target_role="pm",
@@ -351,7 +351,7 @@ def test_check_can_submit_task_inverse_hierarchy_rejects() -> None:
     manage PM; PM manages engineer); hierarchy gate raises."""
     resolver = _submit_task_resolver()
     with pytest.raises(
-        OrchestratorPermissionError, match="hierarchy bypass"
+        OrchestratorPermissionError, match="permission denied for submit_task"
     ):
         _check_can_submit_task(
             caller_role="engineer",
@@ -454,7 +454,7 @@ async def test_parent_ownership_neither_clause_matches_rejects(
         submitted_by="agent-pm",
         claimed_by="agent-eng-a",
     )
-    with pytest.raises(OrchestratorPermissionError, match="does not own"):
+    with pytest.raises(OrchestratorPermissionError, match="permission denied for submit_task"):
         await _check_can_submit_task_parent_ownership(
             storage=storage,
             parent_task_id="parent-fail",
@@ -751,7 +751,7 @@ def test_check_can_claim_strict_role_equality(
         )
     else:
         with pytest.raises(
-            OrchestratorPermissionError, match="strict role equality"
+            OrchestratorPermissionError, match="permission denied for claim_task"
         ):
             _check_can_claim(
                 caller_role=caller_role,
@@ -870,7 +870,7 @@ async def test_claim_task_role_mismatch_raises_permission_error(
     )
 
     with pytest.raises(
-        OrchestratorPermissionError, match="strict role equality"
+        OrchestratorPermissionError, match="permission denied for claim_task"
     ):
         await claim_task(
             storage=storage,
@@ -984,7 +984,7 @@ def test_check_can_update_task_status_two_clause_or(
             target_status=target_status,
         )
     else:
-        with pytest.raises(OrchestratorPermissionError, match="cannot"):
+        with pytest.raises(OrchestratorPermissionError, match="permission denied for update_task_status"):
             _check_can_update_task_status(
                 task=task,
                 caller_agent_id=caller_agent_id,
@@ -1231,7 +1231,7 @@ async def test_get_queue_agent_role_filter_conflict_raises_per_cq5(
     agent_role='engineer' is outside scope (impl's scope = {self}
     only); raises rather than silently returning empty."""
     with pytest.raises(
-        OrchestratorPermissionError, match="cannot filter queue"
+        OrchestratorPermissionError, match="permission denied for get_queue"
     ):
         await get_queue(
             storage=storage,
@@ -1350,7 +1350,7 @@ async def test_check_can_read_subtasks_in_chain_matrix(
         )
     else:
         with pytest.raises(
-            OrchestratorPermissionError, match="not in chain"
+            OrchestratorPermissionError, match="permission denied for get_subtasks"
         ):
             await _check_can_read_subtasks(
                 storage=storage,
@@ -1504,7 +1504,7 @@ async def test_check_can_set_priority_three_clause_or(
         assert result["id"] == task_id
     else:
         with pytest.raises(
-            OrchestratorPermissionError, match="cannot set priority"
+            OrchestratorPermissionError, match="permission denied for set_task_priority"
         ):
             await _check_can_set_priority(
                 storage=storage,
@@ -1579,4 +1579,51 @@ async def test_set_task_priority_not_found_raises(
             caller_agent_id="agent-pm",
             caller_role="pm",
         )
+
+
+# ---------------------------------------------------------------------------
+# F1 fix: permission-denied error messages MUST NOT leak forensic detail
+# ---------------------------------------------------------------------------
+
+
+def test_permission_denied_messages_do_not_leak_forensic_fields() -> None:
+    """Spec wording (06-mcp-tools-phase-one.md:14-22): 'No permission
+    graph leakage in error messages.' Per F1 codex post-close finding +
+    Workstream 1 fix: error messages are generic per-tool ('permission
+    denied for <tool>'); forensic detail (caller_agent_id, task_id,
+    claimed_by, submitter_role, parent_role, etc.) is logged via
+    structlog WARNING with structured fields, NOT in the
+    OrchestratorPermissionError message text.
+
+    Exercises the simplest helper (_check_can_claim) to verify the
+    contract; covers the message-shape invariant for ALL 7 raise sites
+    via a representative case. Forbidden-substring sentinel — failure
+    here means a future refactor regressed the F1 fix."""
+    forbidden_substrings = [
+        "agent-",            # caller_agent_id leakage
+        "task-",             # task_id leakage
+        "human:mike",        # literal leakage
+        "claimed_by",        # field-name leakage
+        "submitter",         # field-name leakage
+        "submitter_role",    # field-name leakage
+        "agent_role",        # field-name leakage
+    ]
+
+    try:
+        _check_can_claim(caller_role="implementer", target_agent_role="tester")
+    except OrchestratorPermissionError as e:
+        message = str(e)
+        # Generic message present.
+        assert "permission denied for claim_task" in message, (
+            f"expected generic 'permission denied for claim_task'; got {message!r}"
+        )
+        # No forensic-field leakage.
+        for forbidden in forbidden_substrings:
+            assert forbidden not in message, (
+                f"forensic-field leakage in error message: {forbidden!r} "
+                f"appears in {message!r}. F1 spec violation regression."
+            )
+    else:
+        msg = "_check_can_claim should have raised OrchestratorPermissionError"
+        raise AssertionError(msg)
 
