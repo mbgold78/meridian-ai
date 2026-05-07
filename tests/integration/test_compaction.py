@@ -34,6 +34,7 @@ import pytest_asyncio
 from meridian_orchestrator.agents.registry import AgentRegistry
 from meridian_orchestrator.auth import TokenStore
 from meridian_orchestrator.bridge.engineer_supervisor import EngineerSupervisor
+from meridian_orchestrator.bridge.pm_supervisor import PMSupervisor
 from meridian_orchestrator.bridge.supervisor_base import (
     SupervisorLaunchContext,
     SupervisorSubprocessHandle,
@@ -172,6 +173,49 @@ async def _build_supervisor(
     return supervisor, token_store, issued.record.agent_id
 
 
+async def _build_pm_supervisor(
+    storage: SqliteStorage,
+    settings: Settings,
+    tmp_path: Path,
+    *,
+    service: str,
+    proc_queue: list[_ControllableProc] | None = None,
+) -> tuple[PMSupervisor, TokenStore, str]:
+    """PM-supervisor fixture mirroring _build_supervisor for the
+    Q3-A signal_compaction permission-widening path. Returns the
+    PMSupervisor, the token_store, and the resolved pm agent_id."""
+    agents_dir = tmp_path / "config" / "agents"
+    _seed_repo_yamls(agents_dir)
+    token_store = TokenStore(service=service)
+    issued = token_store.issue(
+        agent_id=None, role="pm", label="pm-supervisor-test"
+    )
+    registry = AgentRegistry(agents_dir, token_store=token_store)
+    await registry.initial_load()
+
+    queue = proc_queue if proc_queue is not None else []
+
+    async def launcher(
+        ctx: SupervisorLaunchContext,
+    ) -> SupervisorSubprocessHandle:
+        if not queue:
+            queue.append(_ControllableProc(cooperative_terminate=True))
+        return queue.pop(0)
+
+    supervisor = PMSupervisor(
+        registry=registry,
+        working_directory=settings.pm_continuous_dir,
+        storage=storage,
+        token_store=token_store,
+        subprocess_launcher=launcher,
+        timeout_seconds=10,
+        check_interval_seconds=0.05,
+        respawn_cap=3,
+        respawn_window_seconds=60,
+    )
+    return supervisor, token_store, issued.record.agent_id
+
+
 # ----- Tests --------------------------------------------------------------
 
 
@@ -218,16 +262,32 @@ async def test_signal_compaction_writes_audit_and_returns_accepted(
         await supervisor.shutdown()
 
 
-async def test_signal_compaction_engineer_only(
+async def test_signal_compaction_engineer_or_pm_only(
     storage: SqliteStorage, settings: Settings, tmp_path: Path
 ) -> None:
-    """Permission denial: non-engineer roles cannot signal compaction."""
+    """Permission denial: implementer/tester roles cannot signal
+    compaction (rejected at the role gate). PM is allowed at the role
+    gate per F9.2 Q3 Reading A widening (M5-continuous-pm-driver
+    commit 8) but is rejected at the agent_id gate when calling against
+    an engineer-supervisor whose supervisor_agent_id binds to engineer's
+    agent_id, not PM's.
+
+    Two gates exercised:
+
+    1. ``_require_role(caller_role, "engineer", "pm")`` rejects
+       implementer/tester roles regardless of agent_id.
+    2. ``supervisor.supervisor_agent_id != caller_agent_id`` rejects
+       PM caller against engineer-supervisor (PM agent_id wouldn't
+       match engineer-supervisor's bound agent_id in production).
+    """
     supervisor, _, agent_id = await _build_supervisor(
         storage, settings, tmp_path, service="compact-perms"
     )
     await supervisor.start()
     try:
-        for bad_role in ("pm", "implementer", "tester"):
+        # Gate 1: role rejection. implementer/tester fail at _require_role
+        # before any agent_id check.
+        for bad_role in ("implementer", "tester"):
             with pytest.raises(OrchestratorPermissionError):
                 await signal_compaction(
                     storage=storage,
@@ -236,6 +296,20 @@ async def test_signal_compaction_engineer_only(
                     caller_agent_id=agent_id,
                     caller_role=bad_role,
                 )
+
+        # Gate 2: agent_id rejection. PM passes role gate (allowed at
+        # commit 8) but fails the agent_id check because the
+        # engineer-supervisor's supervisor_agent_id binds to engineer's
+        # agent_id, and a PM caller's agent_id wouldn't match.
+        with pytest.raises(OrchestratorPermissionError):
+            await signal_compaction(
+                storage=storage,
+                supervisor=supervisor,
+                request=SignalCompactionInput(iteration_marker="x"),
+                caller_agent_id="pm-agent-id-not-matching-supervisor",
+                caller_role="pm",
+            )
+
         # The flag stays False — none of the rejected calls flipped it
         assert supervisor._compaction_pending is False
     finally:
@@ -418,6 +492,135 @@ async def test_compacted_status_check_constraint_rejects_invalid_status(
             "VALUES ('d-bad', 'task-1', 'implementer', 'bogus_state', "
             "'/tmp/test', 300)",
         )
+
+
+# ----- M5-continuous-pm-driver commit 8 — Q3-A permission widening -----
+
+
+async def test_pm_signal_compaction_writes_pm_namespaced_audit(
+    storage: SqliteStorage, settings: Settings, tmp_path: Path
+) -> None:
+    """F9.2 Q3 Reading A widening: PM caller against PM supervisor
+    succeeds; audit action is `pm.compaction_triggered` (role-prefixed
+    per F9.2 Q3-A audit-namespace symmetry)."""
+    supervisor, _, agent_id = await _build_pm_supervisor(
+        storage, settings, tmp_path, service="pm-compact-handler"
+    )
+    await supervisor.start()
+    try:
+        assert supervisor._compaction_pending is False
+        dispatch_id = supervisor.current_dispatch_id
+        assert dispatch_id is not None
+
+        out = await signal_compaction(
+            storage=storage,
+            supervisor=supervisor,
+            request=SignalCompactionInput(
+                iteration_marker="pm-iter-1", proxy_value=0.85
+            ),
+            caller_agent_id=agent_id,
+            caller_role="pm",
+        )
+
+        assert out.accepted is True
+        assert out.next_action == "exit_clean"
+        assert supervisor._compaction_pending is True
+
+        # Audit action is role-prefixed for PM
+        rows = await storage.fetch_all(
+            "SELECT details_json FROM audit_log "
+            "WHERE action = 'pm.compaction_triggered' AND target = ?",
+            (dispatch_id,),
+        )
+        assert len(rows) == 1
+        details = json.loads(rows[0]["details_json"])
+        assert details["dispatch_id"] == dispatch_id
+        assert details["iteration_marker"] == "pm-iter-1"
+        assert details["proxy_value"] == 0.85
+
+        # Engineer-namespaced action does NOT fire for PM caller —
+        # contract pin against accidental hardcoding regression.
+        engineer_rows = await storage.fetch_all(
+            "SELECT id FROM audit_log "
+            "WHERE action = 'engineer.compaction_triggered' AND target = ?",
+            (dispatch_id,),
+        )
+        assert len(engineer_rows) == 0
+    finally:
+        await supervisor.shutdown()
+
+
+async def test_pm_compaction_full_lifecycle_writes_pm_namespaced_audits(
+    storage: SqliteStorage, settings: Settings, tmp_path: Path
+) -> None:
+    """Full PM compaction lifecycle: signal → subprocess clean exit →
+    watchdog observes both → row marked `compacted` + respawn fresh.
+    Audit chain uses `pm.*` namespace (handle_compaction_completed
+    derives action from self._token_role()).
+
+    Q3-A symmetry pin: if a future commit reverts the role-derived
+    action shape in supervisor_base._handle_compaction_completed back
+    to a hardcoded `engineer.compaction_completed`, this test fails."""
+    initial_proc = _ControllableProc(cooperative_terminate=True)
+    next_proc = _ControllableProc(cooperative_terminate=True)
+    supervisor, _token_store, agent_id = await _build_pm_supervisor(
+        storage,
+        settings,
+        tmp_path,
+        service="pm-compact-lifecycle",
+        proc_queue=[initial_proc, next_proc],
+    )
+    await supervisor.start()
+    initial_dispatch_id = supervisor.current_dispatch_id
+    assert initial_dispatch_id is not None
+
+    try:
+        await signal_compaction(
+            storage=storage,
+            supervisor=supervisor,
+            request=SignalCompactionInput(iteration_marker="pm-lifecycle-1"),
+            caller_agent_id=agent_id,
+            caller_role="pm",
+        )
+        initial_proc.signal_clean_exit()
+
+        await _wait_until(
+            lambda: supervisor.current_dispatch_id is not None
+            and supervisor.current_dispatch_id != initial_dispatch_id,
+            timeout=4.0,
+        )
+
+        # Original row → 'compacted'
+        old_row = await storage.fetch_one(
+            "SELECT status, completed_at FROM dispatches WHERE id = ?",
+            (initial_dispatch_id,),
+        )
+        assert old_row is not None
+        assert old_row["status"] == "compacted"
+
+        # Audit chain present with PM namespace on both events
+        actions = [
+            r["action"]
+            for r in await storage.fetch_all(
+                "SELECT action FROM audit_log WHERE target = ? "
+                "ORDER BY timestamp, rowid",
+                (initial_dispatch_id,),
+            )
+        ]
+        assert "pm.compaction_triggered" in actions
+        assert "pm.compaction_completed" in actions
+        # Engineer namespace explicitly absent — supervisor base's
+        # action derivation is role-aware, not hardcoded
+        assert "engineer.compaction_triggered" not in actions
+        assert "engineer.compaction_completed" not in actions
+
+        # Compaction-driven respawns do not increment the cap counter
+        assert len(supervisor._respawn_history) == 0
+    finally:
+        await supervisor.shutdown()
+
+
+# ----- existing edge-case test follows -------------------------------------
 
 
 async def test_daemon_restart_between_signal_and_exit_marks_failed(

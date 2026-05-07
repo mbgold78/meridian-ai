@@ -72,6 +72,35 @@ Section established 2026-05-05 per M5-continuous-pm-driver F5.6 Decision 4 dispo
 
 If a counter-case surfaces during future commit prep, the disposing-Claude should evaluate and either (a) extend the rule to cover the new shape, or (b) document the case as an exception. Don't let the rule erode silently.
 
+### Internal-spec-consistency scan at sub-milestone close (paired with phase-boundary scan)
+
+**Rule:** Internal-spec-consistency scan runs at **sub-milestone close AND at phase boundary** — paired conventions, neither subsumes the other. Both required.
+
+- **Sub-milestone scope** (narrower; triggers more often): for each architectural concept introduced or modified at this sub-milestone, grep mentions across `docs/kickoff/` + `bridge/*.py` + `tools/*.py` docstrings; flag mentions divergent from the disposition that landed at this sub-milestone. Catches recently-created drift at creation point — cheaper to fix; smaller blast radius.
+- **Phase scope** (broader; triggers less often): full architectural-concept inventory; divergence check across all sources. Catches accumulated drift across sub-milestones.
+
+**Reasoning:** Existing phase-boundary scan catches **spec-vs-implementation drift** (spec says X exists but X doesn't) but does NOT catch **internal-spec-contradiction** (multiple spec sources internally contradict on whether X is implemented or how X works). The two drift categories surface differently — implementation drift surfaces at code-write pressure; internal-spec drift surfaces only when the contradiction becomes load-bearing (e.g., when a downstream commit tries to implement against the contradicted concept). By that point, the drift is older + has more dependent context + costlier to resolve.
+
+Sub-milestone-boundary scan catches recently-created drift at creation point. Phase-boundary scan catches accumulated drift before phase transitions. Both run; neither alone is sufficient.
+
+**Operational shape:** at sub-milestone close, for each architectural concept introduced or modified at this sub-milestone:
+
+1. Grep all `docs/kickoff/` + `bridge/*.py` + `tools/*.py` docstrings + relevant `docs/working/<sub-milestone>-grounding.md` for mentions of the concept.
+2. Produce a "concept → mentions" table — one row per source location.
+3. Read each mention; flag rows where the mention diverges (on mechanism, location, or behavior) from the disposition that landed at this sub-milestone.
+4. Surface flagged rows as a sub-milestone closeout finding; resolve via spec amendments at sub-milestone close OR via a follow-on commit early in the next sub-milestone.
+
+Cheap to run; catches the spec-vs-spec category before next-sub-milestone commit-pressure forces it.
+
+**Established at:** M5-continuous-pm-driver commit 8 prep (2026-05-07; F9.0 / F9.8 surfacing). Worked example: M5-pm-supervisor-base disposition (P-2 Reading B, 2026-05-01) chose subprocess-side handoff-doc reading for `pm_supervisor.py`'s `_reconstruct_state` behavior. Five other spec sources (`bridge/supervisor_base.py:196` + `:284-298`; `bridge/engineer_supervisor.py:23` + `:152-154`; `docs/kickoff/11-engineer-bridge.md:753`) still described the daemon-side override mechanism — unamended. Sub-milestone-boundary scan at M5-pm-supervisor-base close would have surfaced the divergence; instead it stayed latent until M5-continuous-pm-driver commit 8 implementation pressure forced resolution. Resolution shipped at commit 8 atomically with the runtime change per `feedback_spec_amendment_runtime_drift` convention.
+
+**Distinct from `feedback_spec_amendment_runtime_drift`:** the drift-runtime convention covers "when amending spec, also amend runtime files that consume the spec." This convention covers "when sub-milestone closes, scan for spec sources that internally contradict on the concepts introduced or modified at this sub-milestone." Different surface; both required.
+
+**Known exception cases:** None yet. Possible exception shapes:
+
+- **Concept introduced but not yet load-bearing** — a sub-milestone may introduce a concept whose mechanism is genuinely undecided (e.g., placeholder spec text marking the concept as "deferred"). Skip those at sub-milestone scan; they surface naturally at the next sub-milestone that exercises the concept under decision pressure.
+- **Concept whose internal contradiction is intentional** — rare; if a contradiction is deliberate (e.g., "Phase 1 ships X mechanism, Phase 2 will ship Y mechanism, both currently documented"), document the intentionality at the source locations. The scan should still surface the divergence so the disposing-Claude can confirm intentionality vs latent drift.
+
 ## Architectural patterns to review
 
 Section established 2026-05-06 per M5-continuous-pm-driver F8.2 Q1-A novel-pattern flag (Decision 5 lazy-create rule). Patterns whose first instance lands during a sub-milestone but whose architectural implications warrant review when a second instance materializes. Trigger framing: "when second instance lands, evaluate whether <pattern> is becoming established convention (formalize) or one-off (document as exception)."

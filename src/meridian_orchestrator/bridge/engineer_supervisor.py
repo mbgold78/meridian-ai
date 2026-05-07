@@ -20,8 +20,12 @@ on first start if it doesn't exist.
 Post-respawn state reconstruction: no-op. Engineer reads
 ``get_dispatch_status`` and ``get_recent_dispatches`` on every iteration,
 so the database is the source of truth and no daemon-side bookkeeping
-survives across respawns. PMSupervisor (M5) overrides this hook with a
-handoff-doc read.
+survives across respawns. PMSupervisor (M5) keeps this hook no-op too
+per M5-pm-supervisor-base P-2 Reading B + M5-continuous-pm-driver F9.0
+Reading Y disposition (2026-05-07); PM's handoff-doc reading at
+compaction respawn is a subprocess-prompt concern via
+:mod:`meridian_orchestrator.tools.pm_handoff` MCP tools + pm.yaml
+convention, NOT daemon-side ``_reconstruct_state`` override.
 
 See ``docs/kickoff/11-engineer-bridge.md`` § Long-running supervisors and
 § Heartbeat watchdog for the full lifecycle semantics.
@@ -149,8 +153,11 @@ class EngineerSupervisor(LongRunningSupervisor):
         Engineer reads ``get_dispatch_status`` and ``get_recent_dispatches``
         on every iteration of its operating loop, so the database is the
         source of truth and no daemon-side state survives across respawns
-        by design. The hook exists in the base for PMSupervisor (M5) which
-        will override it to read the most recent
-        ``/product/substrate/pm-handoffs/`` doc.
+        by design. PMSupervisor (M5) keeps this hook no-op too per
+        M5-continuous-pm-driver F9.0 Reading Y disposition (2026-05-07);
+        PM's handoff-doc reading at compaction respawn is a
+        subprocess-prompt concern via
+        :mod:`meridian_orchestrator.tools.pm_handoff` MCP tools, NOT
+        daemon-side ``_reconstruct_state`` override.
         """
         return None

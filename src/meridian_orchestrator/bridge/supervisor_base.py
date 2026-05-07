@@ -194,7 +194,10 @@ class LongRunningSupervisor(ABC):
     - :meth:`_token_role` and :meth:`_token_label` — for the issued token
     - :meth:`_supervisor_agent_id` — the agent_id the token binds to
     - :meth:`_reconstruct_state` — post-spawn daemon-side bookkeeping
-      (Engineer's is no-op; PM's reads handoff doc at M5)
+      (default no-op; both Engineer and PM keep no-op per architectural
+      separation — handoff-doc reading for PM lives subprocess-side via
+      tools/pm_handoff.py + pm.yaml convention; database is source of
+      truth for Engineer)
 
     The subclass holds no lifecycle state — all dispatch state lives on
     this base. Subclass tests can inspect the base's protected state
@@ -284,12 +287,26 @@ class LongRunningSupervisor(ABC):
     async def _reconstruct_state(self) -> None:
         """Daemon-side post-spawn hook. Default: no-op.
 
-        Engineer's subclass leaves this as no-op — the Engineer subprocess
-        reads ``get_dispatch_status`` and ``get_recent_dispatches`` on
-        every iteration, so the database is the source of truth and no
-        daemon-side bookkeeping is needed. PM's M5 subclass overrides to
-        read the most recent ``/product/substrate/pm-handoffs/`` doc per
-        the M5 PM-compaction strategy.
+        Both Engineer's and PM's subclasses leave this as no-op per
+        architectural separation (M5-pm-supervisor-base P-2 Reading B,
+        2026-05-01; reaffirmed at M5-continuous-pm-driver commit 8
+        per F9.0 Reading Y disposition, 2026-05-07):
+
+        - **Engineer**: the Engineer subprocess reads
+          ``get_dispatch_status`` and ``get_recent_dispatches`` on
+          every iteration, so the database is the source of truth and
+          no daemon-side bookkeeping is needed.
+        - **PM**: handoff-doc reading at compaction respawn is a
+          subprocess-prompt concern via :mod:`tools.pm_handoff`
+          (``write_pm_handoff`` + ``get_most_recent_handoff`` MCP
+          tools) + pm.yaml convention. The substrate filesystem layout
+          for handoffs is operator-tunable and evolves with PM-yaml
+          conventions; encapsulating it in tools/ keeps daemon-internal
+          lifecycle code substrate-layout-agnostic. A future revision
+          wanting daemon-side handoff-doc reading would need to
+          override this method AND remove
+          ``test_reconstruct_state_is_noop_at_initial_spawn_and_respawn``
+          and write a new spec (per Reading X future-proofing path).
 
         Called from :meth:`_spawn` on every spawn (initial start and each
         respawn). Subclasses that need to distinguish initial-vs-respawn
@@ -598,13 +615,21 @@ class LongRunningSupervisor(ABC):
         self, dispatch_id: str, exit_code: int
     ) -> None:
         """The supervisor exited cleanly after signal_compaction. Audit
-        compaction_completed, revoke token, mark row 'compacted', respawn
-        without touching the respawn-history (compaction is healthy
-        lifecycle, not failure recovery)."""
+        ``<role>.compaction_completed``, revoke token, mark row
+        'compacted', respawn without touching the respawn-history
+        (compaction is healthy lifecycle, not failure recovery).
+
+        Audit-action namespace is role-prefixed via
+        :meth:`_token_role` — engineer-supervisor writes
+        ``engineer.compaction_completed`` (preserves M4c convention);
+        pm-supervisor writes ``pm.compaction_completed`` (added at
+        M5-continuous-pm-driver commit 8 per F9.2 Q3 Reading A
+        symmetric-role-namespace framing).
+        """
         await write_audit(
             self._storage,
             actor="system",
-            action="engineer.compaction_completed",
+            action=f"{self._token_role()}.compaction_completed",
             target=dispatch_id,
             details={
                 "dispatch_id": dispatch_id,

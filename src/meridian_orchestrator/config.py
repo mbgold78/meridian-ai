@@ -136,6 +136,33 @@ class Settings(BaseSettings):
     # enable_pm_supervisor flag instead of pinning a useless cadence).
     pm_loop_tick_seconds: float = Field(default=60.0, ge=1.0, le=3600.0)
 
+    # M5-continuous-pm-driver commit 8: PM compaction handoff-doc
+    # directory. PM authors handoff docs at conserve-trigger via
+    # `write_pm_handoff` MCP tool; new PM subprocess on respawn reads
+    # most-recent handoff via `get_most_recent_handoff` MCP tool.
+    #
+    # Default: `<data_dir>/pm-handoffs/` per F9.2 Q5-B (Settings field;
+    # absolute-default under data_dir; env-tunable). Field is
+    # `Path | None` to admit env-var override; the default-resolution
+    # closure in main.py's lifespan substitutes `<data_dir>/pm-handoffs/`
+    # when None. Operator override via env var:
+    # `MERIDIAN_ORCH_PM_HANDOFF_DIR=/product/substrate/pm-handoffs`
+    # for substrate-relative location semantics.
+    #
+    # The `/product/substrate/pm-handoffs/` framing in 11-engineer-bridge.md
+    # is aspirational; if Mike prefers that location operationally, set
+    # via env var. Phase 1 default keeps handoff files alongside
+    # daemon-managed state instead of inside substrate-managed working
+    # directory (where the substrate's git operations might interact
+    # with them).
+    #
+    # Per F9.0 Reading Y disposition (2026-05-07): handoff-doc reading
+    # is subprocess-prompt concern via tools/pm_handoff.py + pm.yaml,
+    # NOT daemon-side _reconstruct_state override. This Settings field
+    # plumbs through main.py lifespan to a closure consumed by
+    # tools/pm_handoff.py — zero new bridge → tools imports.
+    pm_handoff_dir: Path | None = Field(default=None)
+
     @model_validator(mode="after")
     def _require_substrate_working_directory_when_supervisor_enabled(
         self,

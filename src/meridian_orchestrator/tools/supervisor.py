@@ -3,26 +3,41 @@
 Distinct from :mod:`meridian_orchestrator.tools.dispatch` (which holds
 sub-agent dispatch tools — work delegated to child subprocesses).
 Supervisor-lifecycle tools manage the supervisor's *own* existence:
-compaction signaling at M4c-compaction; PMSupervisor mode transitions
-arrive at M5; future supervisor-lifecycle tools land here too.
+compaction signaling at M4c-compaction (Engineer); PM compaction
+extension at M5-continuous-pm-driver commit 8; future supervisor-
+lifecycle tools land here too.
 
 Currently ships:
 
-- :func:`signal_compaction` — Engineer-only. Engineer calls this when its
-  iteration-boundary check (M5: ``get_window_state(bucket='subscription_5h') >= 80%``)
-  decides compaction is appropriate. Sets the in-process
-  ``_compaction_pending`` flag on the resolved supervisor; Engineer's
-  subprocess is expected to exit cleanly afterward. The watchdog observes
-  the clean exit and the flag, audits ``engineer.compaction_completed``,
-  marks the dispatch row ``status='compacted'``, and respawns the
-  Engineer fresh (no respawn-history increment — compaction is healthy
-  lifecycle, not failure recovery).
+- :func:`signal_compaction` — Engineer or PM. Caller signals an
+  imminent clean exit for compaction. Sets the in-process
+  ``_compaction_pending`` flag on the resolved supervisor; the
+  caller's subprocess is expected to exit cleanly afterward. The
+  watchdog observes the clean exit and the flag, audits
+  ``<role>.compaction_completed``, marks the dispatch row
+  ``status='compacted'``, and respawns the supervisor fresh (no
+  respawn-history increment — compaction is healthy lifecycle,
+  not failure recovery).
 
-At M4c, no production code triggers this — Engineer's prompt logic
-that calls it is wired at M5 (depends on ``record_api_call`` and
-``get_window_state``). Tests fire the trigger directly via this tool's
+  Permission widened from engineer-only to engineer + pm at
+  M5-continuous-pm-driver commit 8 per F9.2 Q3 Reading A
+  (extend ``signal_compaction`` permission). The supervisor-level
+  compaction lifecycle (set ``_compaction_pending``, clean-exit,
+  no cap-counter increment, respawn fresh) is genuinely identical
+  for Engineer and PM; the role-distinct work happens at handoff-
+  write (PM only, in :mod:`tools.pm_handoff`) and at the prompt-
+  driven detection trigger (PM-yaml convention). The wrapper layer
+  (``server._register_supervisor_tools``) resolves which supervisor
+  to pass based on caller role; this handler is supervisor-instance-
+  agnostic but role-aware for the audit-action namespace.
+
+At M4c, Engineer's prompt logic that calls signal_compaction was
+not yet wired (depended on ``record_api_call`` + ``get_window_state``
+at M5). At M5-continuous-pm-driver commit 8, PM's prompt-driven
+compaction trigger ships; Engineer's prompt-side wiring lands at
+M5-flag-flips. Tests fire the trigger directly via this tool's
 handler to exercise the full lifecycle. See ``11-engineer-bridge.md``
-§ Engineer compaction for the full semantics.
+§ Engineer compaction + § PM compaction for the full semantics.
 """
 
 from __future__ import annotations
@@ -78,32 +93,47 @@ async def signal_compaction(
     caller_agent_id: str,
     caller_role: str,
 ) -> SignalCompactionOutput:
-    """Engineer signals an imminent clean exit for compaction.
+    """Engineer or PM signals an imminent clean exit for compaction.
 
     Validates:
 
-    1. Caller's role is ``engineer`` (PERMISSION_DENIED otherwise).
+    1. Caller's role is ``engineer`` or ``pm`` (PERMISSION_DENIED
+       otherwise). Per F9.2 Q3 Reading A widening at
+       M5-continuous-pm-driver commit 8.
     2. The supervisor has an active dispatch row (CONFLICT otherwise — the
        supervisor was just started and hasn't issued a dispatch yet, or the
        supervisor is in shutdown).
     3. The caller's resolved agent_id matches the supervisor's agent_id
-       (PERMISSION_DENIED otherwise — only the engineer-supervisor's own
-       Engineer can signal its own compaction).
+       (PERMISSION_DENIED otherwise — only the supervisor's own subprocess
+       can signal its own compaction).
 
     On success: marks ``supervisor._compaction_pending = True`` (via the
     public :meth:`mark_compaction_pending` method), audits
-    ``engineer.compaction_triggered`` with the iteration_marker and
+    ``<role>.compaction_triggered`` with the iteration_marker and
     proxy_value, returns ``next_action='exit_clean'``. The caller is
     expected to terminate cleanly (rc=0) afterward.
 
+    **Audit-action namespace per role**: ``engineer.compaction_triggered``
+    when caller is engineer; ``pm.compaction_triggered`` when caller is
+    pm. The watchdog continues to write the role-prefixed
+    ``<role>.compaction_completed`` audit after observing clean exit;
+    namespace symmetry is preserved at the supervisor base layer.
+
     The watchdog will observe the clean exit and the in-process flag,
-    write ``engineer.compaction_completed``, mark the dispatch row
+    write ``<role>.compaction_completed``, mark the dispatch row
     ``status='compacted'``, and respawn the supervisor fresh. The
     daemon-restart edge case (flag lost between signal and exit → exit
     classified as ``dispatch.subprocess_unexpected_exit``) is documented
-    in ``11-engineer-bridge.md`` § Engineer compaction.
+    in ``11-engineer-bridge.md`` § Engineer compaction; the same edge
+    case applies to PM compaction at the supervisor base layer.
+
+    The wrapper at ``server._register_supervisor_tools`` resolves which
+    supervisor to pass based on caller role (engineer → engineer-
+    supervisor; pm → pm-supervisor). This handler is supervisor-
+    instance-agnostic; the supervisor passed in already matches the
+    caller's role at the wrapper layer.
     """
-    _require_role(caller_role, "engineer")
+    _require_role(caller_role, "engineer", "pm")
 
     current_dispatch_id = supervisor.current_dispatch_id
     if current_dispatch_id is None:
@@ -115,7 +145,7 @@ async def signal_compaction(
     if supervisor.supervisor_agent_id != caller_agent_id:
         raise OrchestratorPermissionError(
             "caller is not the supervisor's bound agent — only the "
-            "supervisor's own Engineer subprocess may signal its compaction"
+            "supervisor's own subprocess may signal its compaction"
         )
 
     row = await storage.fetch_one(
@@ -135,10 +165,17 @@ async def signal_compaction(
 
     supervisor.mark_compaction_pending()
 
+    # Audit action prefixed by caller role per F9.2 Q3-A audit-namespace
+    # symmetry. Engineer → "engineer.compaction_triggered" (preserves
+    # M4c convention; existing tests + spec text); PM →
+    # "pm.compaction_triggered" (new at commit 8; matches pm.<surface>.<verb>
+    # namespace established at commits 2-4).
+    action = f"{caller_role}.compaction_triggered"
+
     await write_audit(
         storage,
         actor=caller_agent_id,
-        action="engineer.compaction_triggered",
+        action=action,
         target=current_dispatch_id,
         details={
             "dispatch_id": current_dispatch_id,

@@ -136,7 +136,7 @@ The `unknown` value is returned by `get_window_state` when the cached `/api/oaut
 
 - **`subscription_5h` normal/upgrade.** All dispatchable work routes against the subscription. Most common state.
 - **`subscription_7d_opus` high.** Per-task tier downgrade Opus → Sonnet for non-critical work; Opus reserved for critical-priority tasks until the 7-day Opus counter recovers. The 5-hour counter continues to gate immediate pacing; the 7-day counter only changes routing tier choices.
-- **`subscription_5h` conserve (< 20% remaining).** New dispatches paused; in-flight finish. PM compaction pre-staged; Engineer compacts at 80% per `11-engineer-bridge.md` § Engineer compaction.
+- **`subscription_5h` conserve (< 20% remaining).** New dispatches paused; in-flight finish. PM compacts at 80% per `11-engineer-bridge.md` § PM compaction (handoff-doc via `write_pm_handoff` MCP tool + `signal_compaction`); Engineer compacts at 80% per `11-engineer-bridge.md` § Engineer compaction. Handoff-doc reading on PM respawn is subprocess-prompt concern via `get_most_recent_handoff` MCP tool, NOT daemon-side `_reconstruct_state` override (per F9.0 Reading Y, M5-continuous-pm-driver commit 8).
 - **`subscription_5h` rate_limited.** Surface to Mike as `info`-urgency. Resume aggressively at window reset (resets_at on the cached snapshot).
 - **Subscription saturated, `extra_usage.is_enabled: false`.** Queue task; surface `urgent`-urgency to Mike — autonomous chain is genuinely capacity-constrained. Operator decides whether to enable overflow.
 - **Subscription saturated, `extra_usage.is_enabled: true`.** Route to `api_key_overflow`. Surface `info`-urgency to Mike per call (overflow billing is real money; visibility matters).

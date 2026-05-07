@@ -26,6 +26,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import structlog
@@ -126,6 +127,13 @@ from meridian_orchestrator.tools.pm_focus import (
     complete_current_focus,
     declare_current_focus,
     get_current_focus,
+)
+from meridian_orchestrator.tools.pm_handoff import (
+    GetMostRecentHandoffOutput,
+    WritePmHandoffInput,
+    WritePmHandoffOutput,
+    get_most_recent_handoff,
+    write_pm_handoff,
 )
 from meridian_orchestrator.tools.pm_loop import (
     GetLoopStateOutput,
@@ -265,10 +273,12 @@ def build_server(
     registry: AgentRegistry | None = None,
     storage: Storage | None = None,
     get_engineer_supervisor: Callable[[], LongRunningSupervisor | None] | None = None,
+    get_pm_supervisor: Callable[[], LongRunningSupervisor | None] | None = None,
     get_dispatcher: Callable[[], BridgeDispatcher | None] | None = None,
     get_oauth_usage_snapshot: SnapshotProvider | None = None,
     sampler: Sampler | None = None,
     get_pm_loop_tick_seconds: Callable[[], float] | None = None,
+    get_pm_handoff_dir: Callable[[], Path] | None = None,
 ) -> FastMCP:
     """Construct the FastMCP server with auth + the current tool set.
 
@@ -349,6 +359,10 @@ def build_server(
         _register_pm_spin_tools(mcp, storage, token_store)
         if sampler is not None:
             _register_audit_sample_tools(mcp, storage, token_store, sampler)
+        if get_pm_handoff_dir is not None:
+            _register_pm_handoff_tools(
+                mcp, storage, token_store, get_pm_handoff_dir
+            )
 
     if storage is not None and get_oauth_usage_snapshot is not None:
         _register_window_state_tools(
@@ -368,9 +382,15 @@ def build_server(
             mcp, storage, registry, token_store, get_dispatcher
         )
 
-    if storage is not None and get_engineer_supervisor is not None:
+    if storage is not None and (
+        get_engineer_supervisor is not None or get_pm_supervisor is not None
+    ):
         _register_supervisor_tools(
-            mcp, storage, token_store, get_engineer_supervisor
+            mcp,
+            storage,
+            token_store,
+            get_engineer_supervisor,
+            get_pm_supervisor,
         )
 
     return mcp
@@ -1109,6 +1129,86 @@ def _register_pm_loop_tools(
         )
 
 
+def _register_pm_handoff_tools(
+    mcp: FastMCP,
+    storage: Storage,
+    token_store: TokenStore,
+    get_pm_handoff_dir: Callable[[], Path],
+) -> None:
+    """Register write_pm_handoff + get_most_recent_handoff
+    (M5-continuous-pm-driver commit 8).
+
+    Two MCP tools ship per F9.2 Q1 Reading B (Reading Y disposition):
+    PM-continuous subprocess at compaction-trigger writes a handoff
+    doc summarizing current_focus + planned-next + open-questions +
+    recent-decisions-pointer + cohort-summary (per F2.3 Q1 Reading C
+    PM-yaml convention); the new PM subprocess on respawn reads the
+    most-recent handoff at startup.
+
+    **write_pm_handoff** (PM-only): writes the markdown content to
+    ``<handoff_dir>/<iso-timestamp>.md``; audits
+    ``pm.compaction.handoff_written`` with details (path, filename,
+    content_size, written_at).
+
+    **get_most_recent_handoff** (PM-only): returns the most-recent
+    handoff's content + written-at, or both None on cold-start.
+
+    Architectural separation per F9.0 Reading Y disposition (2026-05-07):
+    handoff-doc reading is subprocess-prompt concern via these MCP
+    tools, NOT daemon-side ``_reconstruct_state`` override. The handoff
+    directory path flows through main.py lifespan via the
+    ``get_pm_handoff_dir`` closure (mirrors ``get_pm_loop_tick_seconds``
+    + ``get_oauth_usage_snapshot`` precedents).
+
+    Permission: PM-only at handler layer. Mike's interactive PM
+    session governed by client-side defaults; doesn't run the
+    compaction lifecycle.
+    """
+
+    @mcp.tool(
+        name="write_pm_handoff",
+        description=(
+            "PM only. Write a compaction handoff doc to the configured "
+            "handoff directory. Filename is auto-generated as a "
+            "Windows-safe ISO-8601 UTC timestamp; PM authors content "
+            "with required-section markdown convention per pm.yaml. "
+            "Audits pm.compaction.handoff_written. Called at "
+            "conserve-trigger BEFORE signal_compaction."
+        ),
+    )
+    async def _write_pm_handoff(content: str) -> WritePmHandoffOutput:
+        agent_id = _resolve_agent_id()
+        await _observe_caller(storage, token_store, "write_pm_handoff")
+        caller_role = _resolve_caller_role_via_token()
+        return await write_pm_handoff(
+            storage=storage,
+            get_handoff_dir=get_pm_handoff_dir,
+            request=WritePmHandoffInput(content=content),
+            caller_agent_id=agent_id,
+            caller_role=caller_role,
+        )
+
+    @mcp.tool(
+        name="get_most_recent_handoff",
+        description=(
+            "PM only. Return the most-recent handoff's content + "
+            "written-at, or both None on cold-start (no prior "
+            "handoff). Called at PM startup to load resumed-context "
+            "from the prior compaction. No audit emission "
+            "(read-on-every-PM-startup volume would be operational "
+            "noise without diagnostic value)."
+        ),
+    )
+    async def _get_most_recent_handoff() -> GetMostRecentHandoffOutput:
+        _resolve_agent_id()
+        await _observe_caller(storage, token_store, "get_most_recent_handoff")
+        caller_role = _resolve_caller_role_via_token()
+        return await get_most_recent_handoff(
+            get_handoff_dir=get_pm_handoff_dir,
+            caller_role=caller_role,
+        )
+
+
 def _register_dispatch_completion_tools(
     mcp: FastMCP,
     storage: Storage,
@@ -1286,25 +1386,41 @@ def _register_supervisor_tools(
     mcp: FastMCP,
     storage: Storage,
     token_store: TokenStore,
-    get_engineer_supervisor: Callable[[], LongRunningSupervisor | None],
+    get_engineer_supervisor: Callable[[], LongRunningSupervisor | None] | None,
+    get_pm_supervisor: Callable[[], LongRunningSupervisor | None] | None,
 ) -> None:
     """Register supervisor-lifecycle tools.
 
-    The ``get_engineer_supervisor`` callable is evaluated lazily at each
-    tool invocation. The supervisor is constructed in ``main.py`` AFTER
-    the MCP server starts (the supervisor's MCP calls back to the daemon
+    Both supervisor closures are evaluated lazily at each tool
+    invocation — the supervisor is constructed in ``main.py`` AFTER the
+    MCP server starts (the supervisor's MCP calls back to the daemon
     need the server up), so a closure-captured reference would be stale
     at build_server time. The callable resolves at call time, returning
     the current supervisor or None if it hasn't been constructed yet.
+
+    ``signal_compaction`` permission widened from engineer-only to
+    engineer + pm at M5-continuous-pm-driver commit 8 per F9.2 Q3
+    Reading A. The wrapper resolves the caller's role and dispatches
+    to the matching supervisor (engineer → engineer-supervisor; pm →
+    pm-supervisor). The handler is supervisor-instance-agnostic but
+    role-aware for the audit-action namespace
+    (``<role>.compaction_triggered`` per F9.2 Q3-A audit-namespace
+    symmetry).
+
+    Either or both supervisor closures may be None — wrappers
+    surface a CONFLICT error when the caller's role-matching
+    supervisor is absent.
     """
 
     @mcp.tool(
         name="signal_compaction",
         description=(
-            "Engineer-only. Signals an imminent clean exit for compaction. "
-            "Sets the supervisor's compaction-pending flag; the watchdog "
-            "observes the subsequent clean exit and respawns the Engineer "
-            "fresh with status='compacted' (no respawn-cap increment)."
+            "Engineer or PM. Signals an imminent clean exit for "
+            "compaction. Sets the supervisor's compaction-pending flag; "
+            "the watchdog observes the subsequent clean exit and respawns "
+            "the supervisor fresh with status='compacted' (no respawn-cap "
+            "increment). Audit action is role-prefixed: "
+            "engineer.compaction_triggered or pm.compaction_triggered."
         ),
     )
     async def _signal_compaction(
@@ -1313,12 +1429,33 @@ def _register_supervisor_tools(
         agent_id = _resolve_agent_id()
         await _observe_caller(storage, token_store,"signal_compaction")
         caller_role = _resolve_caller_role_via_token()
-        supervisor = get_engineer_supervisor()
-        if supervisor is None:
-            raise ConflictError(
+        # Wrapper-layer supervisor resolution by caller role per F9.2
+        # Q3 Reading A. Handler enforces the engineer/pm allowlist; this
+        # check is operational (no supervisor for the caller's role
+        # configured in this daemon) rather than permission-driven.
+        if caller_role == "engineer":
+            supervisor = (
+                get_engineer_supervisor() if get_engineer_supervisor else None
+            )
+            missing_msg = (
                 "no engineer supervisor is running; signal_compaction "
                 "requires an active supervisor instance"
             )
+        elif caller_role == "pm":
+            supervisor = get_pm_supervisor() if get_pm_supervisor else None
+            missing_msg = (
+                "no PM supervisor is running; signal_compaction requires "
+                "an active supervisor instance"
+            )
+        else:
+            # Out-of-scope role; defer to handler's _require_role for
+            # the canonical PERMISSION_DENIED error shape.
+            supervisor = None
+            missing_msg = (
+                f"caller role {caller_role!r} cannot invoke signal_compaction"
+            )
+        if supervisor is None:
+            raise ConflictError(missing_msg)
         return await signal_compaction(
             storage=storage,
             supervisor=supervisor,
@@ -1425,10 +1562,12 @@ async def serve(
     registry: AgentRegistry | None = None,
     storage: Storage | None = None,
     get_engineer_supervisor: Callable[[], LongRunningSupervisor | None] | None = None,
+    get_pm_supervisor: Callable[[], LongRunningSupervisor | None] | None = None,
     get_dispatcher: Callable[[], BridgeDispatcher | None] | None = None,
     get_oauth_usage_snapshot: SnapshotProvider | None = None,
     sampler: Sampler | None = None,
     get_pm_loop_tick_seconds: Callable[[], float] | None = None,
+    get_pm_handoff_dir: Callable[[], Path] | None = None,
 ) -> None:
     """Run the MCP HTTP server until cancelled.
 
@@ -1448,10 +1587,12 @@ async def serve(
         registry=registry,
         storage=storage,
         get_engineer_supervisor=get_engineer_supervisor,
+        get_pm_supervisor=get_pm_supervisor,
         get_dispatcher=get_dispatcher,
         get_oauth_usage_snapshot=get_oauth_usage_snapshot,
         sampler=sampler,
         get_pm_loop_tick_seconds=get_pm_loop_tick_seconds,
+        get_pm_handoff_dir=get_pm_handoff_dir,
     )
     app = mcp.streamable_http_app()
     config = uvicorn.Config(

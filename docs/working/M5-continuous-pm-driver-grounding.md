@@ -394,18 +394,28 @@ Confirmed in `11-engineer-bridge.md:746` and
 **Constraint on the continuous loop:**
 
 - On compaction trigger, PM writes a handoff doc to
-  `/product/substrate/pm-handoffs/<timestamp>.md` summarizing
-  current_focus + planned-next + open-questions.
-- On respawn (post-compaction or post-crash), `PMSupervisor._reconstruct_state`
-  reads the most recent handoff doc and provides it as context to the
-  newly-spawned PM subprocess (via subprocess spec / env / stdin —
-  decision belongs with PMSupervisor implementation, not the loop).
-- The handoff doc shape is M5-continuous-pm-driver scope. Suggested
-  required sections: current_focus state at compaction, planned-next
-  task chain, open-questions to Mike, recent decisions log pointer,
-  cohort summary (workflow_id of in-flight chain). Free-form markdown
-  with required-section headers; PM authors at compaction; respawn-PM
-  reads at start.
+  `<Settings.pm_handoff_dir>/<timestamp>.md` (default
+  `<data_dir>/pm-handoffs/`; env-tunable to substrate-relative path)
+  summarizing current_focus + planned-next + open-questions.
+- On respawn (post-compaction or post-crash), the new PM subprocess
+  reads the most recent handoff doc via the `get_most_recent_handoff`
+  MCP tool at session-start (per pm.yaml § Compaction lifecycle), NOT
+  via daemon-side `PMSupervisor._reconstruct_state` override.
+  [SUPERSEDED 2026-05-07 by F9.0 Reading Y disposition — original
+  framing in this section described `PMSupervisor._reconstruct_state`
+  reading the doc daemon-side and providing it via subprocess spec /
+  env / stdin. Reading Y disposition (preserving M5-pm-supervisor-base
+  P-2 Reading B) places handoff-read subprocess-side via
+  `tools/pm_handoff.py` MCP tools per defense (4) substrate-evolution-
+  decoupling. Five+ spec sources amended at commit 8 atomically per
+  `feedback_spec_amendment_runtime_drift` convention.]
+- The handoff doc shape is M5-continuous-pm-driver scope. Required
+  sections per F2.3 Q1 Reading C (yaml-convention; not daemon-
+  validated): current_focus state at compaction, planned-next task
+  chain, open-questions to Mike, recent decisions log pointer, cohort
+  summary (workflow_id of in-flight chain). Free-form markdown with
+  required-section headers; PM authors at compaction; respawn-PM reads
+  at start.
 
 **Coupling to Section 2 narration tier 1:** the handoff doc is a
 natural output of PM's `current_focus` state at compaction. If
@@ -1105,7 +1115,7 @@ task-budget defer compose to a 9-commit chain.
 | 5 | Effort plumbing: agent yaml field, PMSupervisor + BridgeDispatcher pass `--effort` to claude subprocess | `config/agents/*.yaml`, `bridge/supervisor_base.py`, `bridge/dispatcher.py:_default_launcher`, `agents/config.py` | +9 |
 | 6 | Hybrid spec amendment: `docs/kickoff/opus-4-7-effort-and-thinking-addendum.md` + merges into 02 / 07 / 11 | `docs/kickoff/*` | +0 (docs) |
 | 7 | Continuous loop driver core: `get_window_state` polling + `check_budget_for_task` routing + iteration loop | `bridge/pm_supervisor.py` (new continuous-mode logic), `tools/pm_loop.py` (new) | +18 |
-| 8 | Compaction-trigger + handoff-doc generation + `PMSupervisor._reconstruct_state` reading most-recent handoff | `bridge/pm_supervisor.py` (extension), `tools/pm_handoff.py` (new) | +14 |
+| 8 | Compaction-trigger + handoff-doc generation + handoff-read via tools/pm_handoff.py MCP tools + signal_compaction permission widening to PM | `tools/pm_handoff.py` (new), `tools/supervisor.py` (permission widening), `bridge/supervisor_base.py` (role-derived audit action) | +14 |
 | 9 | e2e integration tests + drift-scan + sub-milestone closeout doc | `tests/integration/`, `docs/closeouts/` | +20 |
 
 **Total: ~101 net new tests** (revised from ~111 after commit 1 drop).
@@ -1149,6 +1159,20 @@ moves to M4d's migration namespace (TBD when M4d preps).
   on yamls (closed-enum Literal type) but has no test surface itself.
 - **Commits 7-8** are the loop. Consumer of all primitives shipped in
   commits 1-5.
+- **Commit 8 row amended in-place at commit 8 prep (F9.0 Reading Y
+  disposition, 2026-05-07).** Original framing described
+  "`PMSupervisor._reconstruct_state` reading most-recent handoff" with
+  files `bridge/pm_supervisor.py` (extension) + `tools/pm_handoff.py`
+  (new); per F9.0 Reading Y the handoff-read mechanism lives
+  subprocess-side via `tools/pm_handoff.py` MCP tools, NOT daemon-side
+  `_reconstruct_state` override. Files updated to reflect actual
+  amendment surface. PMSupervisor unchanged at commit 8 (invariant
+  test from M5-pm-supervisor-base stays green). Per
+  `feedback_spec_amendment_runtime_drift` convention: 5+ spec sources
+  (supervisor_base.py + engineer_supervisor.py docstrings; 11-engineer-
+  bridge.md:753; 02-architecture.md; 06-mcp-tools-phase-one.md;
+  this Section 5; this F2.1 row) amended atomically with the runtime
+  change.
 - **Commit 9** closes the chain.
 
 **Open question on decomposition (Q6 below):** is this the right
@@ -4940,4 +4964,1324 @@ writes).
 **Detail prose**: F8.2 Q10 disposition prose; F8.2 Q3 read-aggregation
 asymmetric framing (read aggregation good per Q3-A; write
 aggregation bad per Q10-B).
+
+**DISPOSITIONED 2026-05-07 (commit 8 prep, F9.2 Q9-A / F9.7
+disposition table):** Compaction is once-per-5h-cycle event under
+healthy operation; per-tick write count at conserve-trigger ticks
+spikes to 3-5 (handoff_written audit + signal_compaction audit +
+pm_spin row + 0-1 sample-event row) but compaction frequency is
+~0.001 of ticks under 60s cadence. Average per-tick write count
+effectively unchanged from commit 7 baseline (1-3 writes per
+typical tick). F8.2 Q10 write-tool aggregation rejection holds.
+**Re-evaluation trigger absent.** Carry-forward "→ commits 8-9:
+per-iteration MCP write call count at 3-4" RESOLVED at commit 8
+prep. Re-evaluation reactivates only if empirical operation shows
+compaction firing more frequently than once per 5h cycle.
+
+---
+
+# Followup-14 — commit 8 prep checkpoint (compaction-trigger + handoff-doc generation + handoff-read mechanism)
+
+**Date:** 2026-05-07. **Sub-milestone:** M5-continuous-pm-driver.
+**Commit scope:** F2.1 row 8 — compaction boundary work; commit 7's
+two architecturally-pressured invariants face their re-evaluation
+pressure here.
+**Prerequisites landed:** commits 1-7 (workflow_id α, ff47573;
+pm_current_focus, b1ad27a; pm_spin_rationale_log, 433cef5;
+audit_sample_log, 1e323ca; effort plumbing, 71d1e86; spec amendment,
+1eeea94; continuous loop driver core, af25497).
+
+**Structural framing.** Commit 8 wires PM's compaction lifecycle:
+detection (loop-side polling for `pace_recommendation == 'conserve'`),
+handoff-doc authoring, supervisor signal, post-respawn handoff-read.
+Two architectural pressure points surface here:
+
+1. **Spec contradiction on handoff-read mechanism location.** Multiple
+   recently-shipped sources (supervisor_base.py docstring;
+   engineer_supervisor.py docstring; 11-engineer-bridge.md:753;
+   F2.1 row 8 itself; Mike's prep-instruction framing) describe
+   `PMSupervisor._reconstruct_state` overriding to read the handoff
+   doc daemon-side. One recently-shipped source (pm_supervisor.py
+   P-2 Reading B disposition + pinning invariant test) says the
+   opposite — handoff-read is subprocess-prompt concern. Surfaced
+   as F9.0 below before any other dispositions because it shapes
+   touch-points + every downstream Q.
+
+2. **F8.6.A Reading D defense survival across the compaction
+   boundary.** Reading D at commit 7 ("supervisor unchanged") was
+   defended on (1) symmetric-with-EngineerSupervisor, (2)
+   single-responsibility lifecycle-vs-iteration, (3) loop-state
+   config flow via main.py lifespan closure. At commit 8 the
+   compaction boundary tests each defense; defense (1) breaks
+   explicitly per `11-engineer-bridge.md:543` ("PM compaction with
+   handoff doc is a different mechanism that ships at M5 — Engineer
+   does not need it because PM's altitude-1 reasoning carries
+   narrative context the DB doesn't capture"). F9.0 evaluates whether
+   the remaining defenses (2)+(3) carry on independent grounds
+   despite (1) breaking.
+
+**Active carry-forward consumed at this prep** (per grounding doc §
+Carry-forward notes "→ commits 8-9"):
+
+- per-iteration MCP write call count at 3-4 (from commit 7,
+  F8.2 Q10-B disposition). Commit 8 adds compaction-trigger writes
+  (handoff-doc generation; signal_compaction emit; pm_spin row with
+  conserve-time rationale). Per-tick write count at typical
+  (non-conserve) tick stays at 1-3; per-tick write count at
+  conserve-trigger tick spikes to 3-5. Compaction is a once-per-5h
+  event under healthy operation, not per-tick. **Average write
+  count effectively unchanged.** F8.2 Q10 aggregator-rejection does
+  NOT reopen on volume grounds. Re-evaluation trigger from carry-
+  forward header (handoff-doc generation pushing per-iteration write
+  count materially higher) does not fire — the handoff-write happens
+  at compaction-trigger ticks only, not every tick. See F9.2 Q9
+  re-evaluation below for explicit disposition.
+
+**Active watch-for-pattern that may trip at this commit:**
+
+1. **bridge → tools cross-layer imports at 2.** Per F9.0 below's
+   recommendation (Reading Y), supervisor unchanged → +0 imports;
+   watch stays at 2. Per Reading X, supervisor would import
+   filesystem-handoff-read helpers — likely not from tools/ layer
+   directly (filesystem reads are stdlib), so doesn't trip the
+   specific bridge → tools watch even under Reading X. Watch shape
+   for tools/pm_handoff.py's plumbing into pm_supervisor.py is
+   distinct: NEW pattern surface "supervisor consumes tools/-layer
+   modules directly" that would be instance 1 if it landed under
+   Reading X. Surface explicitly per F9.0 disposition.
+
+2. **read_current_X rowid-DESC helper at 2.** Q9-from-commit-7
+   threshold-of-three watch may appear to trip if commit 8 introduces
+   `read_most_recent_handoff` as a third instance of "read-most-recent-X"
+   pattern. Per F4.5.2 reframe (threshold-of-three is trigger-to-
+   evaluate, not mandate-to-extract), the abstraction-unit evaluation
+   distinguishes: `read_current_pm_mode` + `read_current_focus` share
+   the SQL-rowid-DESC abstraction unit; `read_most_recent_handoff` is
+   filesystem-directory-listing-by-timestamp. Different mechanism,
+   different semantic load. Per F9.2 Q8 below: handoff-read does NOT
+   count as third instance of the SQL-rowid-DESC pattern. Watch stays
+   at 2 for that pattern. A separate pattern "read most-recent file
+   by timestamp from substrate directory" emerges at instance 1, no
+   threshold concern.
+
+3. **Production-code-surface-for-testability at 2.** Commit 8's
+   handoff-read tools accept directory-path closure (mirrors
+   commit-7 cadence-config closure). Tests use tmp_path fixture +
+   monkeypatch over the closure — established Python pattern, no
+   new production-code seam. Watch stays at 2 if recommendations
+   hold.
+
+4. **Architectural-patterns-to-review** (BACKLOG.md § Architectural
+   patterns to review, established 2026-05-06). First-instance
+   pattern from commit 7: "server-side blocking MCP tool"
+   (`wait_for_next_tick`). Commit 8 may add a second blocking-MCP
+   tool if compaction-signal-then-block pattern lands as
+   `wait_for_compaction_completion` or similar. Per F9.2 Q4
+   recommendation below: NO, commit 8's signal_compaction surface
+   is non-blocking (subprocess exits cleanly post-signal; daemon
+   watches exit). Pattern stays at 1 instance.
+
+5. **Code-inspection sentinel observability convention** (commit 7
+   draft, F2.5). Two sentinels active:
+   `test_pm_supervisor_does_not_import_tools_budget_or_pm_focus`
+   (Q4 invariant) and `test_pm_loop_module_does_not_define_read_current_helper`
+   (Q9 invariant). Per F9.0 Reading Y: neither sentinel fires at
+   commit 8 (handoff tools live in new tools/pm_handoff.py module,
+   not in tools/pm_loop.py or pm_supervisor.py). Per F9.0 Reading X:
+   Q4 sentinel does NOT fire under Reading X (handoff-read uses
+   stdlib pathlib, not tools/budget.py or tools/pm_focus.py); Q9
+   sentinel does NOT fire (handoff-read in pm_handoff.py if added,
+   not in pm_loop.py). Both readings keep both sentinels green.
+   **Mode 1 / Mode 2 categorization:** if either sentinel fires
+   despite this expectation, categorize per F2.5 convention before
+   proceeding.
+
+---
+
+## F9.0 — spec contradiction on handoff-read mechanism (LOAD-BEARING)
+
+This is the central architectural decision for commit 8. Surfaced
+before F9.1 touch-points because the choice shapes touch-points,
+test surface, and every downstream Q.
+
+### The contradiction
+
+The codebase contains TWO conflicting specifications about whether
+`PMSupervisor._reconstruct_state` reads the handoff doc on respawn.
+
+**Reading X — daemon-side override** (per multiple shipped sources):
+
+- `bridge/supervisor_base.py:196-197`: "`_reconstruct_state` —
+  post-spawn daemon-side bookkeeping (Engineer's is no-op; PM's
+  reads handoff doc at M5)"
+- `bridge/supervisor_base.py:284-298` (default impl docstring):
+  "PM's M5 subclass overrides to read the most recent
+  `/product/substrate/pm-handoffs/` doc per the M5 PM-compaction
+  strategy."
+- `bridge/engineer_supervisor.py:23`: "PMSupervisor (M5) overrides
+  this hook with a handoff-doc read."
+- `bridge/engineer_supervisor.py:152-154` (no-op docstring): "The
+  hook exists in the base for PMSupervisor (M5) which will override
+  it to read the most recent `/product/substrate/pm-handoffs/` doc."
+- `docs/kickoff/11-engineer-bridge.md:753`: "[PMSupervisor's]
+  post-respawn state reconstruction that reads the most recent
+  `/product/substrate/pm-handoffs/` doc per the M5 PM compaction
+  strategy."
+- `docs/working/M5-continuous-pm-driver-grounding.md:399-402`
+  (Section 5): "On respawn (post-compaction or post-crash),
+  `PMSupervisor._reconstruct_state` reads the most recent handoff
+  doc and provides it as context to the newly-spawned PM subprocess
+  (via subprocess spec / env / stdin — decision belongs with
+  PMSupervisor implementation, not the loop)."
+- F2.1 row 8: "Compaction-trigger + handoff-doc generation +
+  `PMSupervisor._reconstruct_state` reading most-recent handoff."
+- Mike's prep-instruction framing for this commit:
+  "PMSupervisor._reconstruct_state extension to read most-recent
+  handoff is supervisor-side state behavior."
+
+**Reading Y — subprocess-side via prompt-driven MCP call** (per
+pm_supervisor.py's M5-pm-supervisor-base P-2 Reading B disposition):
+
+- `bridge/pm_supervisor.py:20-29` (just shipped at M5-pm-supervisor-
+  base, P-2 Reading B): "Handoff-doc reading is a subprocess-prompt
+  concern landed at M5-continuous-pm-driver, not daemon-side
+  bookkeeping. Architectural separation: daemon owns lifecycle
+  (spawn / heartbeat / respawn / token); subprocess owns startup
+  reads via prompt instructions."
+- `bridge/pm_supervisor.py:167-191` (`_reconstruct_state` no-op):
+  "Putting filesystem reads in this method would couple daemon code
+  to substrate filesystem layout that evolves with prompt changes —
+  wrong layer for that knowledge."
+- `tests/integration/test_pm_supervisor.py:369-410` (invariant pin
+  test `test_reconstruct_state_is_noop_at_initial_spawn_and_respawn`):
+  "Enforces the M5-pm-supervisor-base prep checkpoint P-2 Reading B
+  invariant: PMSupervisor._reconstruct_state is no-op."
+- F2.5 closeout note (commit 7 prep, F8.6.A Reading D defense
+  citation): "subprocess owns startup reads via prompt instructions."
+
+The contradiction is real, not a misreading. The two recent commits
+(M4c-engineer-supervisor and M5-pm-supervisor-base) reach OPPOSITE
+conclusions; supervisor_base.py and engineer_supervisor.py docstrings
+were authored before the M5-pm-supervisor-base P-2 disposition
+reversed the framing for pm_supervisor.py specifically. The
+contradiction is currently latent because handoff-reading isn't
+implemented; commit 8 is where the choice becomes load-bearing.
+
+Per memory `feedback_contradiction_handling`: surface both readings +
+recommendation; never ship-then-document.
+
+Per memory `feedback_spec_amendment_runtime_drift`: whichever direction
+commit 8 lands, multiple spec/runtime files need amendment to align.
+
+### Reading X — daemon-side `_reconstruct_state` override
+
+Mechanism (per Section 5 framing line 401: "via subprocess spec / env
+/ stdin — decision belongs with PMSupervisor implementation"):
+
+- `pm_supervisor.py` overrides `_reconstruct_state`. Reads the
+  most-recent file from `/product/substrate/pm-handoffs/<*>.md`,
+  loads its content, holds on supervisor instance.
+- New base-class hook `_extra_subprocess_prompt()` (or override
+  `_subprocess_prompt()` to concatenate yaml-prompt + handoff-content)
+  — supervisor injects handoff-content into subprocess prompt at
+  spawn time.
+- Or alternative: write handoff-content to a tempfile / stdin /
+  environment variable that the subprocess reads at startup.
+- pm.yaml prompt extension: at startup, instructs PM to look for
+  handoff content in [wherever Reading X chose to deliver it].
+
+Required spec amendments under Reading X (none invalidate Reading X
+pre-amendment, but the pm_supervisor.py P-2 framing must be reversed):
+
+- `bridge/pm_supervisor.py:20-29` docstring: reverse P-2 Reading B
+  framing to align with Reading X.
+- `bridge/pm_supervisor.py:167-191` `_reconstruct_state` docstring:
+  rewrite as the new daemon-side implementation's docs.
+- `tests/integration/test_pm_supervisor.py:369-410` invariant pin
+  test: explicitly REMOVE; new test asserts the daemon-side read
+  behavior.
+- New test: `test_reconstruct_state_reads_most_recent_handoff_at_respawn`
+  (or similar) — validates the read mechanism works.
+
+Test surface estimate: +6-9 unique tests for the daemon-side path
+(read tests, prompt-injection tests, base-class-hook tests if added,
+subprocess-spawn integration test with handoff content).
+
+### Reading Y — subprocess-side via tools/pm_handoff.py MCP tools (Reading D-extended)
+
+Mechanism:
+
+- New `tools/pm_handoff.py` module with two PM-only MCP tools:
+  `write_pm_handoff(content)` (write-side) and `get_most_recent_handoff()`
+  (read-side, returns content + metadata; or None if no handoff
+  exists yet).
+- `Settings.pm_handoff_dir` (path) plumbed via main.py lifespan to
+  closure-captured callable (mirrors the cadence-config and
+  `get_oauth_usage_snapshot` precedents).
+- pm.yaml prompt extension (continues from commit 7's loop-iteration
+  section):
+  - At startup: PM calls `get_most_recent_handoff()`; treats
+    returned content (if any) as resumed-context.
+  - At conserve-trigger: PM authors handoff content per required-
+    sections schema (per F2.3 Q1 Reading C); calls
+    `write_pm_handoff(content)`; calls `signal_compaction()`;
+    subprocess exits cleanly afterward.
+- `bridge/pm_supervisor.py` UNCHANGED. `_reconstruct_state` stays
+  no-op. Invariant test stays passing (no Mode 1 or Mode 2 fire).
+
+Required spec amendments under Reading Y (multiple, mostly docstring
++ kickoff text alignment):
+
+- `bridge/supervisor_base.py:196-197` and `:284-298` docstrings:
+  remove the "PM's M5 subclass overrides to read the handoff doc"
+  framing; replace with "all subclasses' default is no-op; subprocess-
+  side handoff-read in PM's case lives in tools/pm_handoff.py."
+- `bridge/engineer_supervisor.py:23` and `:152-154` docstrings:
+  remove "PMSupervisor (M5) overrides this hook with a handoff-doc
+  read" framing.
+- `docs/kickoff/11-engineer-bridge.md:753`: rewrite PMSupervisor entry
+  to reflect Reading Y (`_reconstruct_state` no-op; handoff-read in
+  tools/pm_handoff.py via PM-prompt-driven MCP call).
+- F2.1 row 8 framing: amend "PMSupervisor._reconstruct_state reading
+  most-recent handoff" → "tools/pm_handoff.py read+write helpers;
+  PMSupervisor unchanged."
+- Section 5 framing in this grounding doc: amend to align (Reading Y
+  framing for the handoff-read location).
+
+Test surface estimate: +9-12 unique tests for the handoff-tools path
+(write + read handlers; permission gates; tmp_path filesystem fixtures;
+empty-dir handling; sort-by-timestamp shape; lifespan wiring).
+
+### Recommendation: Reading Y
+
+Defenses for Reading Y, evaluated against commit 7's F8.6.A Reading D
+(1)+(2)+(3) defense survival pattern:
+
+**Defense (1) — symmetric with EngineerSupervisor.** BREAKS at this
+boundary. `11-engineer-bridge.md:543` is explicit: "PM compaction
+with handoff doc is a different mechanism that ships at M5 —
+Engineer does not need it because PM's altitude-1 reasoning carries
+narrative context the DB doesn't capture." The design EXPLICITLY
+breaks engineer-symmetry at the handoff boundary. Defense (1) does
+not carry. Reading Y cannot lean on it.
+
+**Defense (2) — single-responsibility lifecycle vs iteration scope.**
+HOLDS, but ambiguous. `_reconstruct_state` is documented as
+"post-spawn daemon-side bookkeeping" (lifecycle scope per its base-
+class framing). Reading the substrate filesystem at this hook IS
+lifecycle (spawn-time setup), not iteration. So defense (2)
+ambiguously SUPPORTS Reading X. But reframed: "subprocess startup
+reads via prompt instructions" puts handoff-read on the subprocess
+side per the design choice the M5-pm-supervisor-base disposition
+made. Both interpretations defensible; defense (2) doesn't decide
+on its own.
+
+**Defense (3) — loop-state config via main.py lifespan closure.**
+HOLDS. `Settings.pm_handoff_dir` flows via main.py lifespan to the
+new tools/pm_handoff.py closure (mirrors the cadence-config closure
+from commit 7; mirrors `get_oauth_usage_snapshot` precedent). Zero
+new bridge → tools imports. Reading Y consumes this defense
+symmetrically.
+
+**Independent defenses for Reading Y** (not derived from F8.6.A
+Reading D defense pattern):
+
+(4) **The substrate filesystem layout is operator-tunable substrate
+config, not daemon-internal infrastructure.** Putting filesystem
+reads in supervisor lifecycle code couples daemon to substrate-layout
+knowledge that's better encapsulated as MCP-tool-mediated boundary.
+This is the substantive reason given in pm_supervisor.py:175-177:
+"Putting filesystem reads in this method would couple daemon code
+to substrate filesystem layout that evolves with prompt changes —
+wrong layer for that knowledge." This argument was load-bearing at
+M5-pm-supervisor-base prep; it remains load-bearing at this boundary.
+
+(5) **Reading Y's failure mode is testable via established patterns.**
+tools/pm_handoff.py read-side handler tests use tmp_path fixture +
+closure-captured directory; mirrors audit/sampler.py + tools/pm_focus.py
+test shapes from commits 2-4. Reading X requires fixture growth on
+supervisor lifecycle integration tests (the existing
+test_pm_supervisor.py fixtures don't currently have substrate
+filesystem layout) — per memory `feedback_optional_dependency_in_helpers`,
+adding mandatory fixture-growth here is the wrong direction;
+optional-with-None-fallback is the lighter-touch shape, but Reading X
+needs the read to actually happen for handoff-context to reach PM.
+
+(6) **Reading Y preserves commit 7's architectural commitments
+without re-litigation.** F8.6.A Reading D's defense at commit 7
+explicitly anticipated the commit 8 boundary: pm_supervisor.py's
+docstring lines 184-189 future-proofed for "if a future revision
+wants daemon-side handoff-doc reading, override this method. The
+test ... will fail informatively, prompting a deliberate
+reconsideration of the layer separation." Reading X would invoke
+that future-proofing. Reading Y declines to invoke it on the grounds
+that the M5-pm-supervisor-base disposition still holds — no new
+substantive reason to reverse it has surfaced.
+
+**Defense (1) breaking is acknowledged.** The remaining defenses
+(2)+(3)+(4)+(5)+(6) carry on independent grounds. Reading Y's case
+doesn't depend on engineer-symmetry; it depends on the
+operator-tunable-substrate-layout argument + closure-pattern
+plumbing + commit-7-architectural-commitment preservation.
+
+### Counter-argument (Reading X case)
+
+Surface explicitly so the disposition is conscious (per memory
+`feedback_contradiction_handling`):
+
+- **Spec text consensus.** Five spec sources (supervisor_base.py
+  ×2 docstring locations; engineer_supervisor.py ×2 docstring
+  locations; 11-engineer-bridge.md:753) and Mike's prep-instruction
+  framing all describe Reading X. One spec source (pm_supervisor.py
+  M5-pm-supervisor-base disposition) describes Reading Y. The
+  numerical weight is not the deciding factor — pm_supervisor.py's
+  disposition was made WITH knowledge of the boundary it would face
+  here. But the spec text consensus signals operator/Mike intent
+  that the original framing was load-bearing.
+- **Failure-handling shape.** Under Reading X, handoff-read failure
+  (file missing, parse error, permission error) can halt the
+  supervisor before subprocess starts — operator gets a clear
+  daemon-side error. Under Reading Y, handoff-read failure happens
+  subprocess-side after spawn; PM observes None / error; PM-prompt
+  decides what to do (proceed without context, or signal an
+  operator-attention surface). Reading X's failure mode is
+  operationally cleaner if Mike values "supervisor halts on
+  handoff-corruption" semantics.
+- **Atomicity.** Under Reading X, daemon ensures handoff-read
+  completes before subprocess startup — no race between PM-startup-
+  read and any concurrent handoff-write (though concurrent writes
+  shouldn't occur in normal lifecycle). Under Reading Y, PM's
+  startup MCP call sequence is at PM's discretion — PM might call
+  other tools before reading handoff, observing intermediate state.
+  Likely not material in practice; surface for completeness.
+
+If Mike values failure-handling shape (Reading X argument) over
+substrate-layout-encapsulation (Reading Y argument), Reading X
+lands and the test invariant from commit 7 explicitly removes with
+re-disposition.
+
+### Disposition impact on F9.1 / F9.2 / F9.4
+
+Touch-points (F9.1) differ materially: Reading Y adds tools/pm_handoff.py
++ pm.yaml + main.py + Settings (mirrors commit-7 plumbing shape);
+Reading X adds pm_supervisor.py override + base-class hook for
+prompt-injection + new test pin + multiple docstring/spec amendments.
+
+Test estimate (F9.4) under Reading Y: ~17-20 unique. Under Reading X:
+~13-16 unique (smaller because no new MCP tools' permission/wrapper
+surface). F2.1 +14 estimate aligns better with Reading X's shape;
+Reading Y's higher count is driven by MCP-tool-permission-test
+parametrize patterns (each new tool ships with the
+non-PM-rejected-×3 parametrize block per established convention).
+
+---
+
+## F9.1 — touch points (per F9.0 Reading Y recommendation)
+
+| File | Status | Touch shape |
+|---|---|---|
+| `src/meridian_orchestrator/tools/pm_handoff.py` | NEW | `write_pm_handoff` (PM-only MCP) + `get_most_recent_handoff` (PM-only MCP). Pydantic schemas (`WritePmHandoffInput`, `GetMostRecentHandoffOutput`). Closure-captured handoff-dir resolution. Filesystem helpers (write file with timestamp; list dir + sort by timestamp + read top file). |
+| `src/meridian_orchestrator/server.py` | EDIT | `_register_pm_handoff_tools` helper + invoke from `build_server`. Wraps the two new MCP tools with permission gates. |
+| `src/meridian_orchestrator/main.py` | EDIT | Lifespan-time wiring of handoff-dir config (Settings.pm_handoff_dir) into pm_handoff tools via closure pattern (mirrors `get_oauth_usage_snapshot` + `Sampler` instance + `get_loop_tick_seconds` precedents). |
+| `src/meridian_orchestrator/config.py` | EDIT | Add `pm_handoff_dir: Path` Settings field per F9.2 Q5 disposition. Default `/product/substrate/pm-handoffs/` resolved against substrate root if Mike picks the conventional location. |
+| `src/meridian_orchestrator/tools/supervisor.py` | EDIT (per F9.2 Q3) | `signal_compaction` permission widening: PM-allowed alongside Engineer per Q3 Reading A; OR new `signal_pm_compaction` tool per Q3 Reading B. |
+| `src/meridian_orchestrator/bridge/pm_supervisor.py` | UNCHANGED | Per F9.0 Reading Y. `_reconstruct_state` stays no-op. Invariant test stays passing. |
+| `src/meridian_orchestrator/bridge/supervisor_base.py` | DOCSTRING-ONLY EDIT | Per F9.0 Reading Y spec amendment: remove "PM's M5 subclass overrides to read the handoff doc" framing (lines 196-197 + 284-298 docstrings). |
+| `src/meridian_orchestrator/bridge/engineer_supervisor.py` | DOCSTRING-ONLY EDIT | Per F9.0 Reading Y spec amendment: remove "PMSupervisor (M5) overrides this hook with a handoff-doc read" framing (lines 23 + 152-154). |
+| `config/agents/pm.yaml` | EDIT (per F9.2 Q10) | system_prompt extension: startup handoff-read instruction + conserve-trigger compaction-prep sequence (author handoff content with required sections; call `write_pm_handoff`; call `signal_compaction`). |
+| `tests/unit/tools/test_pm_handoff.py` | NEW | Direct-handler tests for both tools. Filesystem-fixture-based (tmp_path). Permission gates. Empty-dir handling. Sort-by-timestamp shape. |
+| `tests/integration/test_pm_handoff_mcp_wrapper.py` | NEW | End-to-end MCP tests with permission parametrize blow-ups. |
+| `tests/integration/test_pm_compaction_e2e.py` | NEW | Conserve-trigger → handoff-write → signal_compaction → supervisor respawn → next PM reads handoff. |
+| `docs/kickoff/06-mcp-tools-phase-one.md` | EDIT | Two new tool entries (write_pm_handoff + get_most_recent_handoff + permission rows). |
+| `docs/kickoff/11-engineer-bridge.md` | EDIT | Per F9.0 Reading Y spec amendment: amend line 753 PMSupervisor description; possibly add a § PM compaction subsection symmetric with § Engineer compaction. |
+| `docs/kickoff/02-architecture.md` | EDIT (small) | Reference to PM compaction mechanism (parallel to Engineer compaction reference). |
+
+Under F9.0 Reading X (alternative), touch points shift to
+`bridge/pm_supervisor.py` (override `_reconstruct_state`) + new
+base-class hook in `bridge/supervisor_base.py` for prompt-injection +
+explicit removal of `test_reconstruct_state_is_noop_at_initial_spawn_and_respawn`
++ new daemon-side handoff-read test. tools/pm_handoff.py would still
+likely exist for the WRITE side (PM authors handoff at compaction-
+trigger), so Reading X is "Reading Y for the write side + daemon-side
+override for the read side" — hybrid, but with a different
+architectural commitment.
+
+---
+
+## F9.2 — open questions (Q1-Q10)
+
+Numbered with multiple readings + recommendation. Reviewing-Claude
+reviews; Mike dispositions.
+
+### Q1 — Handoff-read mechanism location (LOAD-BEARING; subsumes F9.0)
+
+Disposition surface for the F9.0 spec contradiction.
+
+- **Reading A — Reading X** (daemon-side `_reconstruct_state`
+  override). Spec-text-consensus argument. Failure-handling shape
+  (supervisor halts on handoff-corruption). See F9.0 Reading X
+  prose for full mechanism + spec amendments.
+- **Reading B — Reading Y** (subprocess-side via tools/pm_handoff.py
+  MCP tools). M5-pm-supervisor-base P-2 Reading B preservation.
+  Substrate-layout-encapsulation argument. See F9.0 Reading Y prose
+  for full mechanism + spec amendments.
+- **Reading C — Hybrid.** Daemon-side reads the handoff filename
+  (most-recent path resolution); subprocess-side reads the content
+  via MCP tool that takes the path as input. Combines Reading X's
+  daemon-side path-resolution (where filesystem-layout knowledge
+  lives) with Reading Y's subprocess-side content delivery (where
+  prompt-context lives). More moving parts; less defensible than
+  picking one side cleanly.
+
+**Recommendation: Reading B (Reading Y).** Per F9.0 prose. Defenses
+(2)+(3)+(4)+(5)+(6) carry independently of defense (1) which breaks
+at this boundary. M5-pm-supervisor-base P-2 Reading B disposition
+holds without new substantive reason to reverse.
+
+If Mike values supervisor-halts-on-handoff-corruption semantics
+(Reading X argument 2), Reading A lands; the invariant test from
+commit 7 explicitly removes with re-disposition; spec amendments
+shift accordingly.
+
+### Q2 — Handoff doc shape: re-confirm F2.3 Q1 Reading C
+
+F2.3 Q1 (line 1247) dispositioned Reading C: required-section markdown
+schema as PM yaml convention; no daemon-side validation; audit-log
+scan for missing sections. Sections: `current_focus`, `planned_next`,
+`open_questions`, `recent_decisions_pointer`, `cohort_summary`.
+
+At commit 8 implementation pressure, does Reading C still hold, or
+does daemon-side validation become defensible?
+
+- **Reading A — re-confirm F2.3 Q1 Reading C.** Yaml-convention
+  + audit-emit-on-write. `write_pm_handoff` writes content as-is;
+  audits with `pm.compaction.handoff_written` action + details
+  (path, content_size, sections_detected_via_simple_regex). No
+  validation rejection on missing sections.
+- **Reading B — daemon-side strict validation.** `write_pm_handoff`
+  parses required sections from content; rejects write if any
+  required section missing. Tightest contract; highest schema cost
+  (regex / parser brittle to markdown variations).
+- **Reading C — soft validation with operator-visible warning.**
+  `write_pm_handoff` writes content; audits both `handoff_written`
+  + (if sections missing) `pm.compaction.handoff_sections_missing`
+  with details (which sections absent). Operator-visible signal
+  without write-rejection.
+
+**Recommendation: Reading A (re-confirm F2.3 Q1 Reading C).**
+Yaml-convention + audit-emit. F2.3 Q1's reasoning still holds:
+daemon doesn't structurally parse the doc semantically (PM's
+respawned-self reads the markdown via Q6 read-tool's content
+return; the daemon never parses sections). Reading C's
+section-detection-on-audit is more defensible than Reading B's
+strict-rejection but still adds parser surface to the daemon for
+no daemon-side consumer; defer until M6 dashboard wants the
+section-presence query.
+
+If commit 8 ships Reading A, audit-log scan for missing-sections
+remains future-work (M6 dashboard). Operator surface for handoff
+quality stays informal until then.
+
+### Q3 — Compaction-signal MCP tool: extend or new?
+
+PM's compaction at conserve-trigger needs to signal the supervisor
+to clean-exit + respawn. Engineer has `signal_compaction` (M4c,
+engineer-only). Does PM use the same tool with permission widened,
+or get a new `signal_pm_compaction`?
+
+- **Reading A — extend `signal_compaction` permission.** Single
+  tool, callable by both Engineer and PM. Handler resolves caller's
+  token to whichever supervisor (engineer or pm-continuous) has a
+  running dispatch and sets `_compaction_pending` on that instance.
+  Symmetric mechanism; one tool surface; mirrors how
+  `set_pm_mode` doesn't have an `engineer.set_engineer_mode` parallel.
+- **Reading B — new `signal_pm_compaction` tool.** Distinct surface
+  for PM-side compaction. Handler is dedicated (looks up
+  PMSupervisor instance only). Allows PM-specific compaction
+  semantics to evolve without entangling engineer's tool. Adds
+  duplicate code-shape.
+- **Reading C — extend with permission widening + behavior parity.**
+  Reading A with explicit assertion that PM and Engineer compaction
+  semantics are identical at the supervisor level (`_compaction_pending`
+  flag flow + clean-exit + respawn-without-cap-increment).
+  Differences (handoff-write side; PM-prompt-driven detection
+  trigger) live elsewhere. Just naming/ergonomics over Reading A.
+
+**Recommendation: Reading A (extend permission).** The supervisor-
+level compaction lifecycle is genuinely identical for Engineer and
+PM (set `_compaction_pending`, clean-exit, no cap-counter increment,
+respawn fresh). The role-distinct work happens at handoff-write
+(PM only) + handoff-read-on-respawn (PM only); both live in
+tools/pm_handoff.py, not in `signal_compaction`'s scope. Reading B's
+duplicate tool would diverge over time without architectural reason.
+Reading C is Reading A with extra ceremony.
+
+Permission widening shape: tools/supervisor.py allowed_roles
+extended from `("engineer",)` to `("engineer", "pm")`; handler's
+supervisor-resolution logic extended to look up either instance via
+the caller's token role. Per memory
+`project_mcp_tool_wrapper_activity_recording`: ensure `_observe_caller`
+fan-out continues to operate correctly under the widened permission.
+
+### Q4 — Compaction-trigger detection mechanism
+
+How does PM know it's time to compact?
+
+- **Reading A — loop-side polling on `pace_recommendation == 'conserve'`.**
+  PM's per-tick `get_loop_state.subscription_5h_state.pace_recommendation`
+  read surfaces `'conserve'` when subscription_5h utilization >= 80%.
+  PM's prompt judges: at first observation of `'conserve'` in this
+  cycle, run the compaction-prep sequence. Loop-side; subprocess-
+  driven; symmetric with Engineer's per-iteration compaction
+  detection per `11-engineer-bridge.md:516`.
+- **Reading B — daemon-side push.** Daemon observes pace_recommendation
+  flip in `get_oauth_usage_snapshot`; signals subprocess via a
+  new MCP tool that subprocess polls (e.g., `get_compaction_signal`).
+  Adds infrastructure surface; subprocess still polls so the
+  push-vs-poll distinction collapses.
+- **Reading C — daemon-side trigger via subprocess SIGTERM.**
+  Daemon detects pace_recommendation flip; sends signal to
+  subprocess to cleanly exit. Subprocess writes handoff during
+  exit-handler. OS-signal-handling-mid-MCP-call corruption risk
+  per F8.2 Q1 Reading D rejection at commit 7.
+
+**Recommendation: Reading A (loop-side polling).** Symmetric with
+Engineer's compaction detection (Engineer's prompt reads
+`get_window_state(bucket='subscription_5h')` per iteration; calls
+`signal_compaction` when conserve fires). PM has the same signal
+already aggregated in `get_loop_state.subscription_5h_state` per
+commit 7. Zero new infrastructure; the existing per-tick read covers
+detection. Reading B's push pattern adds infrastructure for no
+subprocess-controllability gain. Reading C's signal-handling is
+operationally fragile per the F8.2 Q1 Reading D framing.
+
+### Q5 — `Settings.pm_handoff_dir` plumbing
+
+Where does the handoff doc directory live?
+
+- **Reading A — Settings field; default to substrate-relative path.**
+  `Settings.pm_handoff_dir: Path` defaults to a substrate-relative
+  path (e.g., resolved against `Settings.substrate_root` if that
+  exists, or against a hardcoded `/product/substrate/pm-handoffs/`
+  fallback). Operator override via env var.
+- **Reading B — Settings field; absolute-only default.** Default
+  to an absolute path under data_dir (e.g., `<data_dir>/pm-handoffs/`).
+  Operator override via env var. Cleaner test-fixture shape (tmp_path
+  resolves directly).
+- **Reading C — yaml-driven.** PM yaml has `handoff_dir` field;
+  registry passes through to tools/pm_handoff.py via closure. More
+  layers; misaligns with the established pattern of operational
+  config in Settings (cadence, sample-percentage, etc.).
+
+**Recommendation: Reading B (Settings + absolute-default under
+data_dir).** Operationally cleanest. Test fixtures (tmp_path)
+override via env var. Production default `<data_dir>/pm-handoffs/`
+keeps handoff files alongside daemon-managed state instead of inside
+substrate-managed working directory (where the substrate's git
+operations might interact with them). The "/product/substrate/
+pm-handoffs/" framing in the kickoff docs is aspirational; if Mike
+prefers that location operationally, override via env var.
+
+If Mike prefers the substrate-relative location semantically (so
+PM operating sessions naturally read the handoff via substrate
+filesystem awareness), Reading A or substrate-root-coupled variant
+lands. Both are env-tunable; the question is the default.
+
+### Q6 — `get_most_recent_handoff` output shape
+
+What does the read-side MCP tool return?
+
+- **Reading A — content + metadata.** Output: `{content: str | None,
+  written_at: datetime | None, path: str | None, sections_detected:
+  list[str]}`. Returns None-fields when no handoff exists yet
+  (cold-start). PM prompt instructs handling of None case.
+- **Reading B — content only; None when absent.** Output: `{content:
+  str | None}`. Simpler shape; PM doesn't need metadata for resumed-
+  context purposes.
+- **Reading C — content + minimal metadata.** Output: `{content: str
+  | None, written_at: datetime | None}`. Drops path + sections
+  fields. Middle ground.
+
+**Recommendation: Reading C.** Content + timestamp gives PM enough
+to reason about "how recent is this resumed-context" without adding
+parser surface (sections_detected field would require a markdown
+parser). Path field has low operator-facing value at the MCP
+surface (audit_log records the path on writes).
+
+If Q2 lands as Reading C (soft validation with sections-missing
+audit), the section-detection logic lives audit-side at write time,
+not at read time; Q6 Reading C aligns.
+
+### Q7 — Anti-flapping discipline for once-per-5h-cycle compaction
+
+Section 5 self-test: "the loop should compact at most once per 5h
+cycle. PMSupervisor's three-respawns-per-hour cap provides the
+safety, but the design should not lean on the safety net." But:
+compaction-respawns explicitly do NOT count toward the 3-per-hour
+cap (per supervisor_base.py:646-654). So there's no automatic safety
+net for compaction oscillation. PM-prompt judgment is the primary
+discipline.
+
+What stops PM from compacting on every tick after the first
+conserve fire?
+
+- **Reading A — PM-prompt judgment + handoff-doc state.** PM's
+  prompt instructs: "compact only at the conserve-edge transition;
+  if you just woke up from compaction (handoff_written_at is
+  recent), don't compact again until next 5h cycle." PM consumes
+  `get_most_recent_handoff.written_at` to detect post-compaction
+  state. No daemon-side throttle.
+- **Reading B — daemon-side throttle on signal_compaction.** Handler
+  rejects (or audits-as-throttled) compaction signals within N
+  minutes of the previous compaction completion. N defaulted to
+  some fraction of the 5h cycle (e.g., 60 minutes minimum gap).
+- **Reading C — both.** Reading A as primary discipline + Reading B
+  as defense-in-depth.
+
+**Recommendation: Reading A (PM-prompt + handoff-doc state).**
+Per Q9-from-commit-7 disposition: hysteresis logic is PM-prompt's
+responsibility, not infrastructure's. Reading B adds daemon-side
+state (last-compaction-completed-at timestamp; per-supervisor) and
+re-introduces the "infrastructure encodes assumptions about
+behavior" pattern that Q9-B rejected.
+
+PM's startup read of handoff_written_at gives PM the state needed
+to judge "just-compacted, don't compact again immediately." If
+empirical operation surfaces oscillation, Reading C revisits.
+Defense-in-depth is the right framing for round 2, not round 1.
+
+### Q8 — Q9-from-commit-7 re-evaluation: read_current_X threshold
+
+Mike's prep instructions flagged: "threshold-of-three watch may trip
+(read_current_pm_mode + read_current_focus + read_current_handoff
+= 3)."
+
+Is `read_most_recent_handoff` (the helper underlying `get_most_recent_handoff`
+MCP tool) a third instance of the `read_current_X` rowid-DESC helper
+pattern?
+
+- **Reading A — yes, it's a third instance.** Surface similarity:
+  "read most-recent X." Threshold-of-three trips per F2.4. Per
+  F4.5.2 reframe: trigger-to-evaluate, evaluation says YES extract
+  shared utility for "read most recent X by ordering Y."
+- **Reading B — no, different abstraction unit.** Per F4.5.2 reframe:
+  abstraction-unit evaluation is the load-bearing question, not
+  surface similarity. `read_current_pm_mode` + `read_current_focus`
+  share the SQL-rowid-DESC abstraction unit (read top row from log
+  table by ROWID DESC LIMIT 1). `read_most_recent_handoff` is
+  filesystem-directory-listing-by-timestamp-suffix-sort. Different
+  mechanism (filesystem vs SQL), different ordering primitive
+  (filename string sort vs rowid integer), different semantic load.
+- **Reading C — surface similarity is enough at threshold-of-three;
+  evaluate at next instance.** Land helper non-extracted at commit
+  8; surface another evaluation at hypothetical fourth instance.
+  Lower disruption.
+
+**Recommendation: Reading B (different abstraction unit; threshold
+does NOT trip at this commit).** F4.5.2 reframe (Followup-7 / F2.5
+discipline note) is explicit: "Surface similarity does not imply
+shared semantic load. Reject extraction when the abstraction unit
+doesn't carry semantic weight." The SQL-rowid-DESC abstraction unit
+is "tail of an append-only log table"; filesystem-by-timestamp is
+"directory listing with timestamp-suffix file naming." Different
+data substrates, different ordering correctness conditions
+(filename sort assumes ISO-timestamp filenames; rowid sort assumes
+monotonic insertion ID). Sharing a helper would conflate these.
+
+Watch for the SQL-rowid-DESC pattern stays at 2. A NEW pattern
+"read most-recent file by timestamp from substrate directory" emerges
+at instance 1. No threshold concern.
+
+If commit 8 lands as Reading B, the Q9-from-commit-7 invariant pin
+test (`test_pm_loop_module_does_not_define_read_current_helper`) does
+NOT fire because the new helper lives in tools/pm_handoff.py, not
+tools/pm_loop.py. The pin's path scope (tools/pm_loop.py only) was
+chosen narrowly at commit 7 specifically so future commits adding
+read helpers to other modules don't have to re-litigate the pin.
+This anticipates exactly the boundary commit 8 is at.
+
+### Q9 — Q10-from-commit-7 re-evaluation: write aggregator rejection
+
+Per carry-forward "→ commits 8-9": if commit 8 adds write events
+that push per-iteration count materially higher, revisit F8.2 Q10
+write-tool aggregation rejection.
+
+Does commit 8's compaction-write surface (handoff-write +
+signal_compaction emit + pm_spin row at conserve-trigger) push
+per-iteration write count high enough to reopen?
+
+- **Reading A — no, compaction is once-per-5h-cycle event.** Per-tick
+  write count at typical (non-conserve) tick stays at 1-3 (commit
+  7's Q10-B disposition baseline). Per-tick write count at
+  conserve-trigger tick spikes to 3-5 (handoff_written audit +
+  signal_compaction audit + pm_spin row + maybe 1-2 sample-event
+  rows). Compaction occurs ~1× per 5h cycle under healthy operation;
+  this is ~0.003% of ticks under 60s cadence. Average write count
+  effectively unchanged. Q10 aggregator-rejection holds.
+- **Reading B — yes, reopen Q10 because compaction-tick write
+  semantics ARE related-write-bundle.** Handoff_written + signal_compaction
+  are causally bundled (PM authors handoff THEN signals); aggregator
+  could capture this as one "compaction_initiated" emit with both
+  rows derived. Different shape than Q10's normal-tick framing.
+- **Reading C — accept Reading A; flag for if compaction frequency
+  shifts.** If empirical operation shows compaction firing more
+  than once per 5h cycle (e.g., short-cycle subscription pressure
+  + PM's prompt judgment trips conservatively), revisit. Don't
+  pre-bake aggregator for hypothetical high-frequency compaction.
+
+**Recommendation: Reading A (Q10 stays rejected; compaction is
+once-per-cycle event, not per-tick concern).** Volume math: under
+60s cadence, ~3,600 ticks per 5h cycle, of which 1 is compaction-
+trigger. The marginal write events at the compaction tick (3-5 vs
+1-3) average to ~0.001 additional writes/tick across the cycle.
+Not a volume-budget concern.
+
+Reading B's "causally bundled" framing has merit at the audit-trail-
+shape level (handoff_written → signal_compaction is a causal chain),
+but Q10-B's rejection ground (write events have distinct audit-
+trail semantics) holds: handoff_written is its own durable record
+(action: `pm.compaction.handoff_written`, target: handoff-doc-path);
+signal_compaction is its own event (action: `pm.compaction.signaled`,
+target: dispatch_id). Bundling would conflate the records' targets
++ make audit-log query semantics murkier.
+
+Carry-forward "→ commits 8-9" RESOLVES at this commit's Reading A
+disposition.
+
+### Q10 — pm.yaml prompt extension scope at commit 8
+
+Commit 7 shipped the per-tick iteration loop section. Commit 8 adds
+compaction-prep + handoff sequence. How much yaml prompt expansion?
+
+- **Reading A — substantive extension.** New "Compaction lifecycle"
+  section (~30-40 lines) with: startup handoff-read instruction;
+  conserve-detection trigger; handoff-doc authoring guidance per
+  required-sections; write_pm_handoff + signal_compaction call
+  sequence; once-per-cycle anti-flapping discipline (Q7 Reading A
+  framing).
+- **Reading B — minimal extension.** Brief paragraph pointing at
+  the new tools; relies on PM's general continuous-mode framing for
+  the handoff-content-shape decision.
+- **Reading C — extend across commits 8 and 9.** Commit 8 ships
+  compaction trigger + write/read sequence; commit 9 (e2e tests +
+  closeout) adds the required-sections content guidance. Defers
+  schema-shape work.
+
+**Recommendation: Reading A (substantive extension).** Commit 7's
+F8.2 Q5 disposition picked Reading A for the same reason: the
+prompt extension IS the behavioral driver. Without explicit
+handoff-content guidance (required sections per F2.3 Q1 Reading C),
+PM's free-form authoring would skip required sections, and the
+audit-emit-on-missing-sections discipline never gets useful signal.
+
+The forward-reference placeholder at pm.yaml line 134 ("compaction-
+prep at commit 8 picks up the shutdown handling") replaces with
+concrete compaction-prep prose. The startup handoff-read instruction
+adds at the top of the continuous-mode iteration loop section.
+
+---
+
+## F9.3 — watch-for-pattern check
+
+| Pattern | Status pre-commit | Commit 8 instance (per F9.0 Reading Y + Q1-B + Q2-A + Q3-A + Q4-A + Q5-B + Q6-C + Q7-A + Q8-B + Q9-A + Q10-A) | Disposition |
+|---|---|---|---|
+| Closed-enum CHECK + sentinel test | 9+ instances; established convention per F2.5 graduation | +0 expected; new MCP tool inputs/outputs use existing types. Audit-action namespace adds two new actions (`pm.compaction.handoff_written`, `pm.compaction.signaled`) — string convention, not closed-enum. | No threshold concern. |
+| `read_current_X` rowid-DESC helper | 2 | +0 per Q8 Reading B. Filesystem-by-timestamp pattern (instance 1 of NEW pattern) is a different abstraction unit per F4.5.2 reframe. | No trip; SQL pattern stays at 2; new filesystem pattern starts at 1. |
+| `bridge/` → `tools/` cross-layer imports | 2 | +0 per F9.0 Reading Y (supervisor unchanged). Reading X would still likely +0 (filesystem reads use stdlib, not tools/-layer). | No trip. |
+| Production-code-surface-for-testability | 2 | +0 per Q5 + closure pattern (mirrors commit-7 cadence-config plumbing). tmp_path + monkeypatch on the closure are established patterns. | No trip. |
+| Audit-action `pm.<surface>.<verb>` namespace | 5 | +2 (`pm.compaction.handoff_written`, `pm.compaction.signaled`). Convention-conforming; no expansion question. | No expansion concern. |
+| Server-side blocking MCP tool (BACKLOG.md § Architectural patterns to review) | 1 (`wait_for_next_tick`) | +0 per Q4 Reading A (loop-side polling, not blocking). | No second-instance trigger; pattern-review stays deferred. |
+| Closure-captured callable for tools/-layer config | 4 (`get_oauth_usage_snapshot`, Sampler instance, `get_loop_tick_seconds`, soon `get_pm_handoff_dir`) | +1. Pattern is now established convention; the +1 is convention-conforming. | No threshold concern; pattern is graduated like closed-enum. |
+| Code-inspection sentinel | 2 (Q4 invariant + Q9 invariant from commit 7) | +0-1. Q1 disposition (whichever lands) may add a pin (e.g., if Reading B holds, "tools/pm_handoff.py defines no read_most_recent_X helper outside its declared shape" — but this would over-pin and isn't necessary). Default: no new pin; the architectural pinning at commit 7 covers commit 8's territory. | If a new sentinel feels load-bearing during draft, surface for explicit add. |
+| Spec amendment scope | 0 prior at this sub-milestone (commit 6 did kickoff doc merges; this is structural amendment) | +5-7 spec/runtime files per F9.0 Reading Y (supervisor_base.py + engineer_supervisor.py + 11-engineer-bridge.md + 02-architecture.md + 06-mcp-tools-phase-one.md + Section 5 grounding doc + F2.1 row 8 framing). Per memory `feedback_spec_amendment_runtime_drift`. | Surface as F9.5 anticipated pushback — multi-file amendment scope is non-trivial. |
+| F2.1 surface-as-finding rule | 5 invocations + 1 NOT-FIRED clarification | Likely +1 at commit 8 draft. F2.1 estimate +14 unique. Trigger condition (>200% over via unique-function metric per F6.6 clarification) at >28 unique tests — possible if Reading Y's MCP-tool-permission parametrize blow-ups push count. | Surface at diff checkpoint. |
+| Carry-forward "→ commits 8-9" | Active (per-iteration write count) | RESOLVED per Q9 Reading A. Annotate per F8.6.B carry-forward annotation discipline: "DISPOSITIONED 2026-05-07 (commit 8 prep, F9.2 Q9-A): per-iteration write count at compaction-trigger ticks spikes to 3-5 but compaction is once-per-5h-cycle event; average write count effectively unchanged. Q10 aggregator-rejection holds." | Carry-forward closes. |
+
+---
+
+## F9.4 — test-target estimate
+
+F2.1 estimate: +14. Working breakdown under recommended dispositions
+(Q1-B, Q2-A, Q3-A, Q4-A, Q5-B, Q6-C, Q7-A, Q8-B, Q9-A, Q10-A):
+
+| Layer | Count |
+|---|---|
+| `write_pm_handoff` handler tests (write succeeds; permission gate; audit emission shape; filename timestamp uniqueness; directory-create-on-missing) | 4-5 |
+| `get_most_recent_handoff` handler tests (returns most recent; returns None on empty dir; permission gate; sort-by-timestamp shape with ISO filenames; malformed filename ignored) | 4-5 |
+| Pydantic schemas (output models for both tools; closed-enum sentinels — none expected per F9.3) | 1 |
+| MCP wrapper integration (PM-allowed × 2 tools; non-PM rejected × 3 parametrized × 2 tools) | 2 unique / 8 collected |
+| Settings `pm_handoff_dir` default + path-resolution validation | 2 |
+| Lifespan wiring (closure pattern for pm_handoff tools) | 1 |
+| `signal_compaction` permission widening tests (PM-allowed; supervisor-resolution to PMSupervisor instance; `_compaction_pending` flag set on PMSupervisor; mirror of existing engineer tests) | 3-4 |
+| Audit emission shape (`pm.compaction.handoff_written` + `pm.compaction.signaled` action strings; details fields) | 2 |
+| E2e: PM at conserve writes handoff + signals + supervisor respawns + new PM reads handoff + handoff content matches | 1-2 |
+| pm.yaml system_prompt extension verification (yaml-load test + presence of compaction-section keywords; no new closed-enum sentinels needed) | 1 |
+| **Total under recommendations** | **17-22 unique / 22-29 collected** |
+
+**vs F2.1 estimate of +14 unique:** trajectory is 17-22 / 14 =
+121-157% over. F2.1 trigger condition (>200% via unique-function
+metric) at >28 unique — under threshold. **Trigger should not fire
+at commit 8 under recommendations.** Surface as F2.1 finding 6th
+invocation at diff checkpoint with three-reason framing.
+
+If Q1 lands as Reading A (Reading X — daemon-side override), test
+count shifts: -3-5 unique (no new MCP-tool-permission parametrize
+blow-ups for read-side; tools/pm_handoff.py still exists for write
+side) + 4-6 unique (new pm_supervisor.py override tests + base-class
+hook tests + invariant-test removal/replacement). Net: ~17-23 unique,
+similar magnitude.
+
+---
+
+## F9.5 — anticipated pushbacks
+
+Six weak points likely to surface at review:
+
+1. **F9.0 Reading Y contradicts spec text consensus.** Five spec
+   sources describe Reading X; Mike's prep-instruction framing
+   describes Reading X. My recommendation is Reading Y based on
+   pm_supervisor.py's M5-pm-supervisor-base disposition, which is
+   one source against five. The reasoning chain (P-2 Reading B
+   was made knowing this exact boundary; defenses (2)+(3)+(4)+(5)+(6)
+   carry independently of (1)) is defensible but reasonable people
+   can prefer the spec-text-consensus on operator-clarity grounds
+   alone. Genuinely contestable; this is the load-bearing prep-
+   checkpoint disposition for commit 8.
+
+2. **Defense (1) breaking is honest.** F8.6.A Reading D defense at
+   commit 7 used "symmetric with EngineerSupervisor" as one of three
+   defense legs. At commit 8 boundary it breaks explicitly — the
+   design intentionally diverges Engineer/PM at handoff per
+   `11-engineer-bridge.md:543`. F9.0 Reading Y's case rests on the
+   remaining (2)+(3)+(4)+(5)+(6) defenses. If reviewing-Claude
+   tests the precedent's actual conditions (per the F2.5
+   framing-precedent-application discipline), the test exposes
+   that one of the original three legs no longer carries — a real
+   cost to the precedent's authority. Independent grounds carry
+   the recommendation; the precedent-extension is partial, not
+   total. Honest framing required. **Hybrid bidirectional-discipline
+   instance:** prep-instruction-error (Mike's Reading X framing) +
+   framing-precedent-application (Reading D's defense (1) breaking
+   at this boundary).
+
+3. **Multi-file spec amendment scope per Reading Y.** Reading Y
+   requires editing supervisor_base.py + engineer_supervisor.py
+   docstrings + 11-engineer-bridge.md:753 + 02-architecture.md +
+   Section 5 of this grounding doc + F2.1 row 8 framing. Five-to-
+   seven-file amendment is non-trivial; mistakes risk leaving stale
+   spec text that contradicts the runtime behavior. Per memory
+   `feedback_spec_amendment_runtime_drift`: ensure ALL referencing
+   spec/runtime files amend in the same commit or follow-on commit
+   (commit 9 closeout could pick up stragglers — but cleaner is
+   one-commit atomic amendment). Reviewing-Claude may push back:
+   "Reading X has a smaller amendment surface (just remove invariant
+   test + amend pm_supervisor.py docstring; spec text already says
+   Reading X)." This is a legitimate operational consideration.
+
+4. **`get_most_recent_handoff` returns None on cold-start.** First
+   PM startup ever (no prior handoff) → None content. PM's prompt
+   must handle the None case ("you have no resumed-context; treat
+   this as a fresh continuous-mode session"). Yaml-prompt extension
+   needs explicit cold-start guidance. Reviewing-Claude may push
+   back: "Cold-start handling is yaml-prompt's job; what if PM
+   doesn't handle it?" — this is the standard
+   yaml-convention-without-daemon-validation tradeoff. Audit-log
+   surfaces missing-section behavior post-hoc.
+
+5. **Anti-flapping leans on PM-prompt judgment (Q7 Reading A).**
+   Per Q9-from-commit-7 disposition rationale (hysteresis is PM-
+   prompt's responsibility), Reading A defers oscillation
+   prevention to PM's judgment + handoff-doc state. Reviewing-
+   Claude may push back: "PM's prompt is auto-iterating; what if
+   PM's judgment fails and oscillation occurs?" Mitigation per
+   Q7 Reading C (defense-in-depth) revisits at empirical
+   oscillation observation. Reading A is round-1 discipline;
+   round-2 adds Reading B if needed. Acknowledge this is
+   trust-the-prompt territory.
+
+6. **F2.1 estimate divergence at +21% to +57% over.** Sixth
+   invocation of F2.1 surface-as-finding rule. Per F2.5 unique-
+   function metric clarification: trigger at >200% (>28 unique);
+   17-22 estimated unique stays under. Three-reason framing
+   (precedent-mirror tests, pushback-driven additions, disposition-
+   driven invariant pins) likely applies; surface explicitly at
+   diff checkpoint with reason breakdown. Trajectory across
+   commits 2-7 (50% / 37% / 110% / -22% / -22% / TBD-7): commit 8
+   estimate at ~125% would land in the upper-middle of the
+   distribution; not a trigger fire but worth noting in the
+   trajectory observation.
+
+---
+
+## F9.6 — what lands at the diff checkpoint
+
+After Mike disposition Q1-Q10 + the six anticipated-pushback items
+above:
+
+- `tools/pm_handoff.py` drafted with Q1-B + Q2-A + Q5-B + Q6-C +
+  Q7-A dispositions (write_pm_handoff, get_most_recent_handoff;
+  closure-captured handoff-dir; ISO-timestamp filename convention).
+- `Settings.pm_handoff_dir` per Q5 (default under data_dir; env-
+  tunable).
+- `main.py` lifespan wires handoff-dir config via closure pattern.
+- `server.py` `_register_pm_handoff_tools` for the new MCP tools.
+- `tools/supervisor.py` permission widening on `signal_compaction`
+  per Q3-A; supervisor-resolution logic extended to pm-continuous.
+- `config/agents/pm.yaml` system_prompt extension per Q10-A
+  (compaction lifecycle section ~30-40 lines).
+- `bridge/pm_supervisor.py` UNCHANGED per F9.0 Reading Y (Q1-B);
+  invariant test stays passing.
+- `bridge/supervisor_base.py` + `bridge/engineer_supervisor.py`
+  docstring amendments per F9.0 Reading Y spec amendment surface.
+- `docs/kickoff/06-mcp-tools-phase-one.md` new tool entries +
+  permission rows.
+- `docs/kickoff/11-engineer-bridge.md` line 753 amendment +
+  possible new § PM compaction subsection.
+- `docs/kickoff/02-architecture.md` small reference to PM
+  compaction mechanism.
+- Section 5 of THIS grounding doc amended for Reading Y framing
+  (inline annotation per F8.6.B carry-forward annotation discipline:
+  preserve original Reading X framing as historical context with
+  `[SUPERSEDED 2026-05-07 — see F9.0 Reading Y disposition]` marker
+  per memory `feedback_supersession_marker_shape`).
+- F2.1 row 8 framing amendment at line 1108 (per Reading Y).
+- Tests per F9.4 estimate (~17-22 unique / 22-29 collected).
+- F2.1 divergence assessment surfaced at diff checkpoint per
+  unique-function metric (per F6.6 clarification) — sixth invocation.
+- Carry-forward "→ commits 8-9" entry RESOLVED in grounding doc §
+  Carry-forward notes (Q9 Reading A disposition); update entry
+  header to "RESOLVED 2026-05-07."
+
+Diff checkpoint surfaces commit-by-commit; commit 8 lands; commit 9
+prep opens (e2e integration tests + drift-scan + sub-milestone
+closeout doc).
+
+**End of Followup-14.**
+
+---
+
+# Followup-15 — F9.2 disposition feedback + Q1 verification cycle + convention-gap addition
+
+**Date:** 2026-05-07. Captures Mike's dispositions on F9.2 Q1-Q10
+following the verification cycle (9 verbatim citations + Reading Y
+defense restatement + F4.5.2 reframe verification + test-pin
+forbidden_helpers verbatim).
+
+## F9.7 — accepts noted (Q1 / Q2 / Q3 / Q4 / Q5 / Q6 / Q7 / Q8 / Q9 / Q10)
+
+| Question | Disposition | Note |
+|---|---|---|
+| Q1 | Reading B (Reading Y — subprocess-side via tools/pm_handoff.py) | Two converging reasons — see F9.7.A. Spec amendment scope ships atomically with runtime change per `feedback_spec_amendment_runtime_drift` convention. |
+| Q2 | Reading A (re-confirm F2.3 Q1 Reading C — yaml-convention + audit-emit) | No daemon-side strict validation; audit-emit-on-write with `pm.compaction.handoff_written` action. |
+| Q3 | Reading A (extend `signal_compaction` permission to PM) | Single tool, callable by both Engineer and PM; handler resolves caller token to whichever supervisor has running dispatch. |
+| Q4 | Reading A (loop-side polling on pace_recommendation == 'conserve') | Symmetric with Engineer's compaction detection per `11-engineer-bridge.md:516`. |
+| Q5 | Reading B (Settings field; absolute-default under data_dir) | `<data_dir>/pm-handoffs/` default; env-tunable. |
+| Q6 | Reading C (content + minimal metadata) | Output: `{content: str | None, written_at: datetime | None}`. |
+| Q7 | Reading A (PM-prompt + handoff-doc state anti-flapping) | Hysteresis is PM-prompt's responsibility per Q9-from-commit-7 disposition rationale. |
+| Q8 | Reading B (different abstraction unit; threshold does NOT trip) | Pin abstraction-unit-correctness-model distinction explicitly — see F9.7.B. |
+| Q9 | Reading A (Q10-from-commit-7 stays rejected; carry-forward RESOLVES) | Compaction once-per-5h-cycle event; average per-tick write count effectively unchanged. |
+| Q10 | Reading A (substantive prompt extension at commit 8) | New "Compaction lifecycle" section ~30-40 lines in pm.yaml. |
+
+## F9.7.A — Q1 disposition: Reading Y substance
+
+Reading Y accepted on two converging substantive grounds.
+
+**Reason 1 — defense (4) substrate-evolution-decoupling carries on
+operational grounds, not aesthetic grounds.**
+
+Substrate is Mike's product-content git repo with its own evolution
+cadence and audience. The substrate filesystem layout (path scheme;
+filename convention; possible manifest files; possible per-cycle
+subdirectories) is operator-tunable per PM-yaml convention changes.
+
+Concrete failure mode under Reading X: Mike decides handoff docs
+need a manifest file or new directory structure → `pm_supervisor.py`
+update + daemon redeploy. Under Reading Y: `pm.yaml` convention +
+`tools/pm_handoff.py` update — both inside the daemon-orchestration
+layer that should evolve with PM behavior. Substrate evolution
+shouldn't force daemon evolution. `Settings.pm_handoff_dir` under
+Reading X mitigates path-coupling shallowly but not
+structural-coupling.
+
+Defense (4) is substantive architecture, not "less coupling is
+cleaner" aesthetics. The other Reading-Y defenses ((2) indeterminate;
+(3) convention-respect; (6) meta-discipline) are supporting context
+only; defense (5) ergonomics rightly removed from the case per
+honest restatement.
+
+**Reason 2 — spec-text-consensus cuts the wrong way on
+recency-and-deliberateness.**
+
+Five Reading X sources are temporally older (`supervisor_base.py`
+and `engineer_supervisor.py` docstrings; `11-engineer-bridge.md`).
+The Reading Y disposition cites M5-pm-supervisor-base prep checkpoint
+(2026-05-01) — reconsidered position. Reading X sources weren't
+re-amended at M5-pm-supervisor-base because that disposition's
+spec-amendment scope wasn't traced across the codebase. **Source
+count favors Reading X; recency-and-deliberateness favors Reading Y.**
+
+The spec-vs-spec drift is exactly the category F9.8's convention-
+gap finding identifies. The convention extension (sub-milestone-
+boundary internal-spec-consistency scan) would have caught this
+at M5-pm-supervisor-base sub-milestone close.
+
+### Q1 disposition impact on commit 8 spec amendment scope
+
+Per `feedback_spec_amendment_runtime_drift` convention, runtime
+change ships with spec update. Commit 8 atomic amendment list:
+
+1. `bridge/supervisor_base.py:196-197` docstring — change "PM's
+   reads handoff doc at M5" to align with Reading Y; PM's
+   `_reconstruct_state` stays no-op; handoff-read is
+   subprocess-prompt concern via `tools/pm_handoff.py`.
+2. `bridge/supervisor_base.py:284-298` docstring (default
+   `_reconstruct_state` impl) — same amendment to "PM's M5 subclass
+   overrides to read the most recent `/product/substrate/pm-handoffs/`
+   doc."
+3. `bridge/engineer_supervisor.py:23` docstring — change "PMSupervisor
+   (M5) overrides this hook with a handoff-doc read" to "PM's
+   `_reconstruct_state` stays no-op per M5-pm-supervisor-base P-2
+   Reading B; handoff-read is subprocess-prompt concern."
+4. `bridge/engineer_supervisor.py:152-154` docstring — same amendment.
+5. `docs/kickoff/11-engineer-bridge.md:753` — change "post-respawn
+   state reconstruction that reads the most recent
+   `/product/substrate/pm-handoffs/` doc" to "post-respawn state
+   reconstruction is no-op per architectural separation; handoff-doc
+   reading is subprocess-prompt concern via `tools/pm_handoff.py`
+   and `pm.yaml` convention."
+6. `docs/kickoff/11-engineer-bridge.md` — possibly add new § PM
+   compaction subsection symmetric with § Engineer compaction.
+7. `docs/working/M5-continuous-pm-driver-grounding.md:399-402`
+   (Section 5 framing) — amend to align; in-place annotation per
+   F8.6.B carry-forward annotation discipline.
+8. `docs/working/M5-continuous-pm-driver-grounding.md:1108` (F2.1
+   row 8 framing) — amend "PMSupervisor._reconstruct_state reading
+   most-recent handoff" → "tools/pm_handoff.py read+write helpers;
+   PMSupervisor unchanged."
+9. `docs/kickoff/06-mcp-tools-phase-one.md` — add `write_pm_handoff`
+   + `get_most_recent_handoff` tool entries; amend `signal_compaction`
+   permission row to include PM.
+10. `docs/kickoff/02-architecture.md` — small reference to PM
+    compaction mechanism (parallel to Engineer compaction reference).
+
+Amendment lands in commit 8 atomically. No spec-amendment commit
+split-off; the runtime change's spec update is part of the same
+atomic disposition.
+
+## F9.7.B — Q8 disposition: abstraction-unit-correctness-model distinction (pin)
+
+Q8 reasoning lands as part of the disposition prose, not just as
+acceptance. Future-Claude reading the disposition cold sees the
+substantive distinction, not just the conclusion.
+
+**Pinned reasoning (Q8 disposition prose):**
+
+Filesystem-by-timestamp and SQL-rowid-DESC have different
+**correctness conditions**, not just different surface syntax:
+
+- **SQL-rowid-DESC depends on rowid monotonicity** — a database
+  invariant guaranteed by SQLite's append-only ROWID semantics.
+  Trustable; doesn't break under operator action.
+- **Filesystem-by-timestamp depends on ISO-timestamp lexical sort
+  matching chronological order** — a filename convention. PM-
+  convention-dependent; can break if Mike changes filename schema
+  (e.g., switches from `<iso-timestamp>.md` to `<seq-number>.md`
+  or adds prefixes that re-order lexical sort).
+
+A shared "find most recent of ordered sequence" helper would hide
+this difference. Future-Claude using a generic helper might assume
+both backends have the same correctness model — **they don't**.
+Different correctness models → different testing requirements →
+different code paths → different helpers warranted.
+
+Per F4.5.2 reframe ("evaluate abstraction unit; reject extraction
+when abstraction unit doesn't carry semantic weight"): the
+abstraction unit "find most recent of ordered sequence" is generic
+sequence-finding competence, NOT load-bearing semantic logic. The
+load-bearing semantic logic is per-substrate (rowid-monotonicity
+vs filename-convention). Extracting at three would conflate
+different correctness models behind a uniform-looking interface.
+
+**`read_current_X` rowid-DESC watch stays at 2** (read_current_pm_mode
++ read_current_focus). `read_most_recent_handoff` is instance 1 of
+a NEW pattern (filesystem-most-recent-by-timestamp) — no threshold
+concern.
+
+**Sentinel-test pin scope:** the commit-7 invariant pin
+(`test_pm_loop_module_does_not_define_read_current_helper`) protects
+both `read_current_*` and `read_most_recent_*` naming patterns
+within `tools/pm_loop.py` only. The new `read_most_recent_handoff`
+in `tools/pm_handoff.py` is outside the pin's file scope; pin stays
+green. **No re-litigation of Q9-from-commit-7 needed.**
+
+## F9.8 — convention-gap finding (sub-milestone-boundary internal-spec-consistency scan)
+
+Captured for closeout § Discipline-pattern observations. Refined
+per Mike's sub-milestone-boundary scope refinement.
+
+**Phase-boundary scan convention has gap (commit 8 prep, F9.0
+surfacing, 2026-05-07).** Existing phase-boundary scan catches
+spec-vs-implementation drift (spec says X exists but X doesn't).
+Commit 8 surfaced **internal-spec-contradiction across 5+ sources
+at compaction-trigger pressure point**, latent through commits 1-7:
+
+- `bridge/supervisor_base.py:196`
+- `bridge/supervisor_base.py:284-298`
+- `bridge/engineer_supervisor.py:23`
+- `bridge/engineer_supervisor.py:152-154`
+- `docs/kickoff/11-engineer-bridge.md:753`
+- `docs/working/M5-continuous-pm-driver-grounding.md` Section 5 framing
+- F2.1 row 8 framing
+
+…all describe Reading X (daemon-side `_reconstruct_state` override).
+
+- `bridge/pm_supervisor.py:20-29`
+- `bridge/pm_supervisor.py:167-191`
+- `tests/integration/test_pm_supervisor.py:369-410` invariant pin
+
+…describe Reading Y (subprocess-side via prompt-driven MCP call).
+
+Latent through M5-pm-supervisor-base + M5-continuous-pm-driver
+commits 1-7 because handoff-reading not implemented; surfaces at
+commit 8 implementation pressure.
+
+**Convention extension (refined per Mike's sub-milestone-boundary
+refinement):**
+
+Internal-spec-consistency scan runs at **sub-milestone close AND
+phase boundary** — paired conventions, neither subsumes the other.
+
+- **Sub-milestone scope** (narrower; triggers more often): any
+  architectural concept introduced or modified at this sub-
+  milestone — grep mentions across `docs/kickoff/` + `bridge/*.py`
+  + `tools/*.py` docstrings; flag mentions divergent from the
+  disposition that landed at this sub-milestone. Catches recently-
+  created drift at creation point — cheaper to fix; smaller blast
+  radius.
+- **Phase scope** (broader; triggers less often): full
+  architectural-concept inventory; divergence check across all
+  sources. Catches accumulated drift across sub-milestones.
+
+**Operational shape:** at sub-milestone close, for each architectural
+concept introduced or modified at this sub-milestone, grep all
+`docs/kickoff/` + `bridge/*.py` + `tools/*.py` docstrings for
+mentions; produce a "concept → mentions" table; flag rows where
+mentions diverge on mechanism, location, or behavior. Cheap to run;
+catches this category before next-sub-milestone commit-pressure
+forces it.
+
+**Worked example.** M5-pm-supervisor-base disposition (P-2 Reading B,
+2026-05-01) chose Reading Y for `pm_supervisor.py`'s
+`_reconstruct_state` behavior. Sub-milestone-boundary scan at
+M5-pm-supervisor-base close would have surfaced: 5 other spec
+sources still describe Reading X mechanism — unamended. Disposition
+cycle adds spec amendments to the closing commit OR raises a
+follow-on commit. Either way, the spec drift doesn't ship into
+M5-continuous-pm-driver where commit-8 implementation pressure
+forces resolution.
+
+**Convention durability (BACKLOG.md placement).** Lands in
+`BACKLOG.md` § Conventions alongside other durable conventions
+(test-colocation per Decision 4 from commit 4; carry-forward
+note routing per Decision 5 from commits 3-4). M5-pm-supervisor-base
++ M5-continuous-pm-driver instance is the worked example.
+
+**Distinct finding from Q1 disposition.** Q1 dispositions resolves
+the contradiction one direction; the convention gap is independent
+— even if Q1 had landed as Reading X, the spec-internal-consistency
+check would have caught the latent contradiction at M5-pm-supervisor-
+base sub-milestone close.
+
+## F9.9 — bidirectional-discipline classification: sixth invocation, fourth direction-shape
+
+Capture for F2.5 closeout discipline-pattern observations.
+
+**Sixth bidirectional-discipline instance.** Direction-shape is new:
+
+| # | Instance | Direction-shape | Locus |
+|---|---|---|---|
+| 1 | F1.1 task_type γ scope-punt revisit | Substance reversal | Code's first surfacing wrong; revisit produces correction |
+| 2 | F5.6.B Q1 closed-enum reversal | Substance reversal | Code's recommendation wrong-on-merits; pushback exposes wrong-ness |
+| 3 | F6.5.1 / F6.6.B Q1 framing-precedent reset | Framing-precedent-application | Code's recommendation right but defended via precedent that doesn't carry |
+| 4 | F7.5.1 / Q1 (commit 6 prep) | Prep-instruction error | Reviewing-Claude's prep instruction wrong; Code surfaces |
+| 5 | F8.6.A Q4 (commit 7 prep) | Hybrid (prep-instruction-error + framing-precedent-application) | Both fired simultaneously |
+| 6 | F9.0 / Q1 (commit 8 prep) | **Spec-text-consensus vs reconsidered-disposition tension** | Code's verification revealed source count cuts one way, recency-and-deliberateness cuts the other; disposition substantively requires weighing recency over count |
+
+**Fourth direction-shape captured:** spec-text-consensus vs
+reconsidered-disposition tension. When spec sources contradict,
+source count is one input but recency and deliberateness can override.
+The convention extension (sub-milestone-boundary internal-spec-
+consistency scan per F9.8) catches this category before commit-
+pressure forces it.
+
+Pattern operating across both review-roles + the timing axis is
+genuinely tri-axial: substance / framing-application / direction-of-
+prep-error / temporal-source-recency. Capture as four-direction
+discipline.
+
+## F9.10 — what lands at commit 8 diff checkpoint (post-disposition)
+
+After Mike's dispositions Q1-Q10:
+
+**Code (new files):**
+- `src/meridian_orchestrator/tools/pm_handoff.py` — `write_pm_handoff`
+  + `get_most_recent_handoff` MCP tools per Q1-B + Q5-B + Q6-C.
+  Pydantic schemas. Closure-captured handoff-dir resolution.
+  Filesystem helpers (write timestamped file; list+sort+read).
+
+**Code (edits):**
+- `src/meridian_orchestrator/config.py` — `Settings.pm_handoff_dir:
+  Path` field per Q5-B (default `<data_dir>/pm-handoffs/`).
+- `src/meridian_orchestrator/main.py` — lifespan-time wiring of
+  handoff-dir config via closure pattern.
+- `src/meridian_orchestrator/server.py` — `_register_pm_handoff_tools`
+  helper + invoke from `build_server`.
+- `src/meridian_orchestrator/tools/supervisor.py` — `signal_compaction`
+  permission widening per Q3-A (engineer + pm); supervisor-resolution
+  logic extended.
+- `src/meridian_orchestrator/bridge/pm_supervisor.py` — UNCHANGED per
+  Q1-B Reading Y. Invariant test stays passing.
+
+**Spec amendments (per F9.7.A spec amendment scope):**
+- `bridge/supervisor_base.py:196-197` + `:284-298` docstrings.
+- `bridge/engineer_supervisor.py:23` + `:152-154` docstrings.
+- `docs/kickoff/11-engineer-bridge.md:753` (+ possibly new § PM
+  compaction subsection).
+- `docs/kickoff/06-mcp-tools-phase-one.md` — new tool entries +
+  `signal_compaction` PM-permission row update.
+- `docs/kickoff/02-architecture.md` — small reference.
+- This grounding doc Section 5 framing (line 399-402) — in-place
+  annotation per F8.6.B.
+- F2.1 row 8 framing (line 1108) — amend.
+
+**Yaml extension:**
+- `config/agents/pm.yaml` — system_prompt extension per Q10-A
+  (new "Compaction lifecycle" section ~30-40 lines).
+
+**Convention addition:**
+- `BACKLOG.md` § Conventions — sub-milestone-boundary internal-spec-
+  consistency scan per F9.8.
+
+**Tests (per F9.4 estimate ~17-22 unique / 22-29 collected):**
+- `tests/unit/tools/test_pm_handoff.py` (new) — handler tests.
+- `tests/integration/test_pm_handoff_mcp_wrapper.py` (new) — MCP
+  wrapper integration.
+- `tests/integration/test_pm_compaction_e2e.py` (new) — end-to-end
+  compaction flow.
+- `tests/integration/test_signal_compaction.py` (or wherever existing
+  signal_compaction tests live) — extend with PM-allowed parametrize
+  + supervisor-resolution-to-PMSupervisor case.
+
+**Carry-forward annotations (grounding doc § Carry-forward notes):**
+- "→ commits 8-9: per-iteration MCP write call count" — annotate
+  RESOLVED 2026-05-07 per Q9-A.
+
+**F2.1 surface-as-finding:**
+- Sixth invocation expected at draft. Three-reason framing applies.
+- Per F2.5 unique-function metric: trigger at >28 unique. Estimate
+  17-22 unique under recommendations; ~125% over baseline; under
+  trigger.
+
+**End of Followup-15.**
+
 

@@ -14,6 +14,7 @@ import sys
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import structlog
 
@@ -241,13 +242,18 @@ async def _run_lifespan_body(
                     else None
                 )
 
-            # No get_pm_supervisor closure threaded through serve_mcp at
-            # M5-pm-supervisor-base — no MCP tool consumes a PM
-            # supervisor reference yet (signal_compaction is engineer-
-            # only). M5-continuous-pm-driver adds the closure when a PM-
-            # facing tool wrapper actually needs it. The pm_supervisor
-            # variable above is held in lifespan scope for shutdown
-            # coordination only.
+            # M5-continuous-pm-driver commit 8 (F9.0 Reading Y): PM
+            # supervisor closure ships at compaction-trigger commit
+            # because signal_compaction permission widens from
+            # engineer-only to engineer + pm (per F9.2 Q3 Reading A);
+            # the wrapper resolves to the PM supervisor instance when
+            # the caller is PM. Symmetric with get_engineer_supervisor
+            # — closure resolves at call time so PM supervisor's
+            # post-mcp-ready construction order doesn't break the
+            # build_server-time wiring. PM supervisor stays None when
+            # operator hasn't enabled it via enable_pm_supervisor flag.
+            def get_pm_supervisor() -> PMSupervisor | None:
+                return pm_supervisor
 
             # M5-subscription-routing commit 0.5: seed the agents table
             # from the registry's in-memory snapshot. MUST run before
@@ -284,6 +290,26 @@ async def _run_lifespan_body(
             def get_pm_loop_tick_seconds() -> float:
                 return settings.pm_loop_tick_seconds
 
+            # M5-continuous-pm-driver commit 8: PM compaction handoff-doc
+            # directory. Settings.pm_handoff_dir is `Path | None`; the
+            # closure resolves the default `<data_dir>/pm-handoffs/`
+            # when None. Operator override via
+            # MERIDIAN_ORCH_PM_HANDOFF_DIR env var sets the field.
+            #
+            # Per F9.0 Reading Y disposition (2026-05-07): handoff-doc
+            # reading lives subprocess-side via tools/pm_handoff.py +
+            # pm.yaml, NOT daemon-side _reconstruct_state override.
+            # This closure plumbs the directory path through main.py
+            # lifespan to the MCP wrappers — symmetric with
+            # get_pm_loop_tick_seconds + get_oauth_usage_snapshot
+            # precedents; zero new bridge → tools imports.
+            def get_pm_handoff_dir() -> Path:
+                return (
+                    settings.pm_handoff_dir
+                    if settings.pm_handoff_dir is not None
+                    else settings.data_dir / "pm-handoffs"
+                )
+
             mcp_task = asyncio.create_task(
                 serve_mcp(
                     settings,
@@ -291,10 +317,12 @@ async def _run_lifespan_body(
                     registry=registry,
                     storage=storage,
                     get_engineer_supervisor=get_engineer_supervisor,
+                    get_pm_supervisor=get_pm_supervisor,
                     get_dispatcher=get_dispatcher,
                     get_oauth_usage_snapshot=get_oauth_usage_snapshot,
                     sampler=sampler,
                     get_pm_loop_tick_seconds=get_pm_loop_tick_seconds,
+                    get_pm_handoff_dir=get_pm_handoff_dir,
                 ),
                 name="mcp-server",
             )

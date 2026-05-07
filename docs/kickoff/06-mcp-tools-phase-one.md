@@ -463,6 +463,81 @@ Aggregator: bundles per-iteration state reads into one MCP response. PM's contin
 
 **Not audited** (read-only, called every iteration).
 
+#### `write_pm_handoff`
+
+```python
+class WritePmHandoffInput(BaseModel):
+    content: str  # min_length=1; markdown handoff content per pm.yaml convention
+
+class WritePmHandoffOutput(BaseModel):
+    written_at: datetime
+    path: str
+    content_size: int
+```
+
+Ships at M5-continuous-pm-driver commit 8 alongside `get_most_recent_handoff` + the compaction-lifecycle prompt extension in pm.yaml. PM's continuous-mode loop calls this at conserve-trigger (per-tick `subscription_5h.pace_recommendation == 'conserve'`) BEFORE `signal_compaction`, persisting compaction context for the post-respawn PM subprocess to load via `get_most_recent_handoff`.
+
+**Architectural placement** (per F9.0 Reading Y disposition, 2026-05-07; M5-pm-supervisor-base P-2 Reading B preservation): handoff-doc reading is a subprocess-prompt concern via these MCP tools, NOT daemon-side `_reconstruct_state` override. Substrate filesystem layout is operator-tunable; encapsulating it in tools/ keeps daemon-internal lifecycle code substrate-layout-agnostic.
+
+**Filename convention**: ISO-8601 UTC timestamp with colons replaced by hyphens (Windows-safe), microseconds preserved for uniqueness. Lexical-on-filename sort = chronological sort. Handoff directory resolves via `Settings.pm_handoff_dir` (default `<data_dir>/pm-handoffs/`; env-tunable to `/product/substrate/pm-handoffs/` or any operator-chosen location via `MERIDIAN_ORCH_PM_HANDOFF_DIR`).
+
+**Required-section markdown convention** (F2.3 Q1 Reading C; yaml-driven, not daemon-validated): `current_focus`, `planned_next`, `open_questions`, `recent_decisions_pointer`, `cohort_summary`. Audit details capture `content_size` for operator-side handoff-quality observability; section-presence detection deferred to M6 dashboard scope.
+
+**Allowed for PM only.** Mike's interactive PM session is governed by client-side defaults; doesn't run the compaction lifecycle.
+
+**Audited** as `pm.compaction.handoff_written` with details `{path, filename, content_size, written_at}`. target=path (filesystem path; distinct from dispatch_id-targeted compaction events).
+
+**Filename collision**: refuses to overwrite (raises VALIDATION). Microsecond-resolution collision is effectively impossible in single-PM-process model; collision typically indicates operator-error multi-PM-process scenario warranting investigation.
+
+#### `get_most_recent_handoff`
+
+```python
+class GetMostRecentHandoffOutput(BaseModel):
+    content: str | None
+    written_at: datetime | None
+```
+
+Ships at M5-continuous-pm-driver commit 8. PM's session-start prompt instructs calling this on every spawn (initial start AND post-compaction respawn) to load resumed-context from the prior compaction's handoff doc.
+
+**Cold-start**: when no prior handoff exists (first spawn ever; or operator cleared the handoff directory), both fields return `None`. PM's prompt handles None case as "fresh session; no prior context."
+
+**Output shape per F9.2 Q6-C** (content + minimal metadata): drops path field (low operator-facing value at MCP surface; audit_log records the path on writes) and sections-detected (would require markdown parser surface; deferred per F2.3 Q1 Reading C).
+
+**Filtering**: malformed filenames (operator-placed README, .DS_Store, partial-write .tmp files) are skipped rather than failing the read. Only files matching the Windows-safe ISO-timestamp suffix convention participate in the sort.
+
+**Allowed for PM only.**
+
+**Not audited** — read-on-every-PM-startup volume would be operational noise without diagnostic value. Operator visibility into read patterns deferred to M6 dashboard.
+
+#### `signal_compaction`
+
+```python
+class SignalCompactionInput(BaseModel):
+    iteration_marker: str  # opaque caller-chosen identifier
+    proxy_value: float | None = None  # subscription_5h utilization (0.0-1.0) or None
+
+class SignalCompactionOutput(BaseModel):
+    accepted: bool
+    next_action: Literal["exit_clean"]
+```
+
+Engineer or PM signals an imminent clean exit for compaction. Sets the in-process `_compaction_pending` flag on the resolved supervisor; the watchdog observes the subsequent clean exit, audits `<role>.compaction_completed`, marks the dispatch row `status='compacted'`, and respawns the supervisor fresh (no respawn-cap counter increment — compaction is healthy lifecycle, not failure recovery).
+
+Originally engineer-only at M4c-compaction; **permission widened to engineer + pm at M5-continuous-pm-driver commit 8** per F9.2 Q3 Reading A. The supervisor-level compaction lifecycle is genuinely identical for Engineer and PM at the base layer; role-distinct work happens at handoff-write (PM only, via `write_pm_handoff`) and at the prompt-driven detection trigger.
+
+**Wrapper-layer supervisor resolution by caller role**: engineer → engineer-supervisor; pm → pm-supervisor. Handler is supervisor-instance-agnostic but role-aware for the audit-action namespace.
+
+**Audit action is role-prefixed** per F9.2 Q3-A audit-namespace symmetry: engineer caller writes `engineer.compaction_triggered`; PM caller writes `pm.compaction_triggered`. The watchdog's compaction-completed audit derives action from the supervisor's `_token_role()` — `<role>.compaction_completed` symmetric.
+
+**Allowed for engineer and pm.** Implementer/Tester/other roles rejected at the role gate.
+
+**Validations**:
+1. Caller role is engineer or pm.
+2. The supervisor has an active dispatch row (CONFLICT otherwise).
+3. Caller's resolved agent_id matches the supervisor's bound agent_id (PERMISSION_DENIED otherwise — only the supervisor's own subprocess may signal its compaction).
+
+**Daemon-restart edge case** preserved across both roles: in-process flag lost between signal and exit → exit classified as `dispatch.subprocess_unexpected_exit`. Operator correlates manually via audit log. See `11-engineer-bridge.md` § Engineer compaction (subsection on daemon-restart edge case) — applies symmetrically to PM compaction.
+
 #### `get_utilization_report`
 
 ```python
