@@ -50,56 +50,19 @@ Sketched in `docs/kickoff/12-phase-two-engineering-team.md`.
 
 ## Conventions
 
-Section established 2026-05-05 per M5-continuous-pm-driver F5.6 Decision 4 disposition. Durable conventions that span sub-milestone boundaries live here. Each entry names the convention + reasoning + scope of application + known exception cases (or "no known exceptions yet").
+**Migrated 2026-05-07** to `docs/conventions/00-README.md` per the
+discrete migration trigger named in `docs/kickoff/00-README.md` —
+fired during M5-continuous-pm-driver chain when convention count
+crossed 5+. The conventions doc is the canonical home for durable
+disciplines (sub-milestone closeouts, phase-boundary scans, sub-
+milestone-boundary internal-spec-consistency scans, watch-for-
+pattern thresholds, threshold-of-three same-commit extraction,
+Settings field test colocation, carry-forward routing, code-
+inspection sentinel observability, and others).
 
-### Settings field tests colocate with their consumer, not with config.py
-
-**Rule:** When a `Settings` field has load-bearing semantics (defaults, range-validation, contract invariants), its tests live with the consumer module that enforces the contract — not with `config.py` (which aggregates fields without owning their semantics).
-
-**Reasoning:** `config.py` is a config-aggregation module; individual fields' contracts (e.g., `audit_sample_percentage` defaulting to 0.0 to enforce opt-in semantics, range-validating to [0.0, 1.0] to match `Sampler` constructor's expectation) belong with the consumer that defines and enforces them. Test boundary follows contract boundary, not source-file boundary. Splitting Settings field tests across `tests/unit/test_config.py` and consumer test files would force future-Claude reading either file to chase across to find the full picture; co-locating keeps the contract surface unified.
-
-**Established at:** M5-continuous-pm-driver commit 4 (2026-05-05). `Settings.audit_sample_percentage` field tests live in `tests/unit/audit/test_sampler.py` (default 0.0 + range validation) alongside `Sampler` writer tests, not in a dedicated `test_config.py`.
-
-**Implications for future commits:**
-
-- M5-continuous-pm-driver commit 5 (effort plumbing): if pm.yaml introduces an `effort` field with load-bearing semantics in `PMSupervisor`'s spawn-args, the field's tests colocate with PMSupervisor's tests, not with pm.yaml loader tests.
-- Any future Settings field colocates with its consumer per this rule.
-
-**Known exception cases (for future-Claude evaluating compliance):** None yet. Possible exception shapes:
-
-- **Multiple consumers of the same field** — if a Settings field has two or more consumers with non-overlapping contracts, colocation may not be obvious. Recommendation: place tests with the load-bearing-most consumer; cross-reference from the lighter consumer's test file. Surface as exception to the rule rather than letting the rule erode silently.
-- **Field with no clear single consumer** — if a Settings field's contract is purely structural (e.g., a deprecated alias, a pure pass-through), `tests/unit/test_config.py` may be the right home. Surface as exception with explicit "no consumer-side contract" framing.
-
-If a counter-case surfaces during future commit prep, the disposing-Claude should evaluate and either (a) extend the rule to cover the new shape, or (b) document the case as an exception. Don't let the rule erode silently.
-
-### Internal-spec-consistency scan at sub-milestone close (paired with phase-boundary scan)
-
-**Rule:** Internal-spec-consistency scan runs at **sub-milestone close AND at phase boundary** — paired conventions, neither subsumes the other. Both required.
-
-- **Sub-milestone scope** (narrower; triggers more often): for each architectural concept introduced or modified at this sub-milestone, grep mentions across `docs/kickoff/` + `bridge/*.py` + `tools/*.py` docstrings; flag mentions divergent from the disposition that landed at this sub-milestone. Catches recently-created drift at creation point — cheaper to fix; smaller blast radius.
-- **Phase scope** (broader; triggers less often): full architectural-concept inventory; divergence check across all sources. Catches accumulated drift across sub-milestones.
-
-**Reasoning:** Existing phase-boundary scan catches **spec-vs-implementation drift** (spec says X exists but X doesn't) but does NOT catch **internal-spec-contradiction** (multiple spec sources internally contradict on whether X is implemented or how X works). The two drift categories surface differently — implementation drift surfaces at code-write pressure; internal-spec drift surfaces only when the contradiction becomes load-bearing (e.g., when a downstream commit tries to implement against the contradicted concept). By that point, the drift is older + has more dependent context + costlier to resolve.
-
-Sub-milestone-boundary scan catches recently-created drift at creation point. Phase-boundary scan catches accumulated drift before phase transitions. Both run; neither alone is sufficient.
-
-**Operational shape:** at sub-milestone close, for each architectural concept introduced or modified at this sub-milestone:
-
-1. Grep all `docs/kickoff/` + `bridge/*.py` + `tools/*.py` docstrings + relevant `docs/working/<sub-milestone>-grounding.md` for mentions of the concept.
-2. Produce a "concept → mentions" table — one row per source location.
-3. Read each mention; flag rows where the mention diverges (on mechanism, location, or behavior) from the disposition that landed at this sub-milestone.
-4. Surface flagged rows as a sub-milestone closeout finding; resolve via spec amendments at sub-milestone close OR via a follow-on commit early in the next sub-milestone.
-
-Cheap to run; catches the spec-vs-spec category before next-sub-milestone commit-pressure forces it.
-
-**Established at:** M5-continuous-pm-driver commit 8 prep (2026-05-07; F9.0 / F9.8 surfacing). Worked example: M5-pm-supervisor-base disposition (P-2 Reading B, 2026-05-01) chose subprocess-side handoff-doc reading for `pm_supervisor.py`'s `_reconstruct_state` behavior. Five other spec sources (`bridge/supervisor_base.py:196` + `:284-298`; `bridge/engineer_supervisor.py:23` + `:152-154`; `docs/kickoff/11-engineer-bridge.md:753`) still described the daemon-side override mechanism — unamended. Sub-milestone-boundary scan at M5-pm-supervisor-base close would have surfaced the divergence; instead it stayed latent until M5-continuous-pm-driver commit 8 implementation pressure forced resolution. Resolution shipped at commit 8 atomically with the runtime change per `feedback_spec_amendment_runtime_drift` convention.
-
-**Distinct from `feedback_spec_amendment_runtime_drift`:** the drift-runtime convention covers "when amending spec, also amend runtime files that consume the spec." This convention covers "when sub-milestone closes, scan for spec sources that internally contradict on the concepts introduced or modified at this sub-milestone." Different surface; both required.
-
-**Known exception cases:** None yet. Possible exception shapes:
-
-- **Concept introduced but not yet load-bearing** — a sub-milestone may introduce a concept whose mechanism is genuinely undecided (e.g., placeholder spec text marking the concept as "deferred"). Skip those at sub-milestone scan; they surface naturally at the next sub-milestone that exercises the concept under decision pressure.
-- **Concept whose internal contradiction is intentional** — rare; if a contradiction is deliberate (e.g., "Phase 1 ships X mechanism, Phase 2 will ship Y mechanism, both currently documented"), document the intentionality at the source locations. The scan should still surface the divergence so the disposing-Claude can confirm intentionality vs latent drift.
+This section is left as a pointer for future-Claude reading the
+chain process cold. Future durable conventions land in
+`docs/conventions/00-README.md`, not here.
 
 ## Architectural patterns to review
 
@@ -126,11 +89,11 @@ For Phase 1, blocking MCP is the simplest fit (CC subprocess blocks on its own M
 
 Section established 2026-05-05 per Decision 5 convention (M5-continuous-pm-driver F3.6.D, refined per M5-continuous-pm-driver F5.6.C). Lazy-create on first cross-sub-milestone carry-forward; entries name the destination explicitly + cross-reference detail-prose location. Distinct from `## Deferred` (which is for things to do at unspecified-future-time); this section is for routing notes from one sub-milestone to a specifically-named future sub-milestone.
 
-### → focused-observability sub-milestone (post-M5-flag-flips): audit_sample_log re-evaluator
+### → focused-observability sub-milestone (post-M4d operational use; runtime-data-driven trigger): audit_sample_log re-evaluator
 
 `audit_sample_log` is shipped at M5-continuous-pm-driver commit 4 (migration 0012, `audit/sampler.py`) with the **writer side complete** — `record_sampleable_event` MCP tool selects and persists rows with `re_eval_state='pending'`. The **async re-evaluator** (the handler that processes `pending → in_progress → complete` with `re_eval_finding` text; possibly LLM-driven; loads sampled rows + their source events; produces a re-evaluation finding for the silent-compliance defense) is **out of scope at M5-continuous-pm-driver** per F5.2 Q10 Reading A disposition.
 
-Destination: post-M5-flag-flips focused-observability sub-milestone. The existing observability roadmap entry at `## Three concerns` § Sequencing already names the destination implicitly (Tier 1 surfaces ship as "a focused observability sub-milestone, OR fold into M6 if M5 is running long"); this entry pins the explicit routing for the re-evaluator specifically.
+Destination: post-M4d operational use; **trigger is runtime-data-driven cause** (40-80 hours continuous-mode operation, OR first "I can't explain this" event, OR sub-milestone close review revealing missed pattern). Updated 2026-05-07 per M5-continuous-pm-driver commit 9 prep F10.2 Q6 disposition; supersedes the earlier "post-M5-flag-flips" framing — M5-flag-flips is no longer the trigger because (β) operational-gate observability scoping made the trigger runtime-data-cause-driven rather than schedule-driven. The existing observability roadmap entry at `## Three concerns` § Sequencing names the destination as "a focused observability sub-milestone"; this entry pins the runtime-data-driven trigger condition explicitly.
 
 Scope of the re-evaluator at the destination sub-milestone:
 

@@ -1290,11 +1290,21 @@ on compaction trigger?
 
 **Recommendation: Reading C.** Daemon-side validation (B) is
 heavyweight for a markdown doc that the daemon doesn't otherwise
-parse semantically. The handoff is read by `PMSupervisor._reconstruct_state`
-on respawn — its consumption is "read most-recent file, inject as
-context to spawned PM" (per `bridge/supervisor_base.py:264-272`); it
-doesn't structurally parse sections. Reading-C achieves contract
-discipline via prompt + audit-scan without parser surface.
+parse semantically. The handoff is read by the new PM subprocess
+via the `get_most_recent_handoff` MCP tool (per F9.0 Reading Y
+disposition, 2026-05-07; supersedes the original framing of
+`PMSupervisor._reconstruct_state` daemon-side override). The
+read-side handler returns content + written_at; PM-prompt consumes
+the markdown without structural section parsing. Reading-C achieves
+contract discipline via prompt + audit-scan without parser surface.
+
+[SUPERSEDED 2026-05-07: original Reading C prose described the
+handoff being read by `PMSupervisor._reconstruct_state` on respawn
+per `bridge/supervisor_base.py:264-272`. F9.0 Reading Y disposition
+moved handoff-read subprocess-side via tools/pm_handoff.py MCP
+tools; the F2.3 Q1 Reading C disposition (yaml-convention
+required-section markdown; no daemon-side validation; audit-emit on
+write) still holds — only the consumer location changes.]
 
 ### Q2 — `pm_current_focus` persistence shape
 
@@ -6283,5 +6293,829 @@ After Mike's dispositions Q1-Q10:
   trigger.
 
 **End of Followup-15.**
+
+---
+
+# Followup-16 — commit 9 prep checkpoint (e2e integration tests + drift-scan + sub-milestone-boundary internal-spec-consistency scan + sub-milestone closeout doc)
+
+**Date:** 2026-05-07. **Sub-milestone:** M5-continuous-pm-driver.
+**Commit scope:** F2.1 row 9 — closing commit. Three workstreams (E2E
+integration coverage, two scans, closeout doc) plus one meta-finding
+(convention-doc migration trigger fired during this chain).
+**Prerequisites landed:** commits 1-8 (workflow_id α, ff25497;
+pm_current_focus, b1ad27a; pm_spin_rationale_log, 433cef5;
+audit_sample_log, 1e323ca; effort plumbing, 71d1e86; spec amendment,
+1eeea94; continuous loop driver core, af25497; compaction lifecycle +
+handoff via tools/pm_handoff.py, 68f0967).
+
+**Structural framing.** Commit 9 closes the chain. Three workstreams
+plus one meta-finding:
+
+1. **E2E integration tests** covering full continuous-loop lifecycle.
+   Each cross-path component is unit-and-MCP-wrapper tested in
+   isolation across commits 2-8 (test_pm_loop_mcp_wrapper.py covers
+   loop tools; test_pm_focus_mcp_wrapper.py covers focus tools;
+   test_pm_spin_mcp_wrapper.py covers spin tool; test_audit_sample_mcp_wrapper.py
+   covers sampler; test_pm_handoff_mcp_wrapper.py covers handoff tools;
+   test_pm_compaction_e2e.py covers handoff-write→signal→respawn→handoff-read).
+   What's missing: **the per-tick chained sequence** that exercises
+   multiple consumers in their natural ordering — a tick where PM
+   calls get_loop_state, declares focus, completes prior focus,
+   records spin rationale, records sample event, waits for next tick.
+   And the cross-tick chain over 3-5 ticks that includes a conserve
+   transition triggering the compaction lifecycle.
+
+2. **Drift-scan** per closeout convention (M5-subscription-routing
+   precedent). Spec docs + agent yamls + migration headers + relevant
+   docstrings. Catches what drifted across commits 1-8.
+
+3. **Sub-milestone-boundary internal-spec-consistency scan** — first
+   scheduled invocation per the new convention added at commit 8 F9.8
+   to BACKLOG.md § Conventions. M5-pm-supervisor-base + commit 8 was
+   the worked example (handoff-mechanism contradiction across 5+ spec
+   sources, latent through commits 1-7); this is the convention's
+   first runtime exercise. Operational shape: grep architectural-
+   concept mentions for concepts introduced or modified at this
+   sub-milestone; group by concept; flag divergent framings.
+
+4. **Sub-milestone closeout doc** at `docs/closeouts/M5-continuous-pm-driver.md`
+   per docs/kickoff/00-README.md § Sub-milestone closeouts convention.
+   The Discipline-pattern observations section will be substantial
+   per Mike's prep instructions; warrants chapter-level organization
+   (Q1 below).
+
+**Meta-finding (F10.0): convention-doc migration trigger fired.**
+`docs/kickoff/00-README.md:152-171` says: "when a fifth durable
+discipline convention lands, lift the convention sections out of
+this README into a dedicated `docs/conventions/00-README.md` (or
+`docs/closeouts/00-README.md` — naming dispositioned at migration
+time)." Pre-chain count was 4. During M5-continuous-pm-driver chain,
+at least three new conventions landed in BACKLOG.md § Conventions:
+
+- Decision 4 colocation rule (commit 4) — "Settings field tests
+  colocate with their consumer."
+- Decision 5 carry-forward routing (commits 3-4) — "scope-determines-
+  location for carry-forward notes between commits / sub-milestones /
+  phases" (this exists in BACKLOG.md but as part of carry-forward
+  section rather than § Conventions explicitly; semantically
+  convention-shaped).
+- F9.8 sub-milestone-boundary internal-spec-consistency scan (commit 8) —
+  "internal-spec-consistency scan runs at sub-milestone close AND at
+  phase boundary; paired conventions."
+
+Plus closeout-staging notes captured in F2.5:
+- F8.6.B carry-forward annotation discipline (commit 7 prep) — "annotate
+  in-place preserving the original reasoning chain."
+- Code-inspection sentinel observability convention (commit 7 draft) —
+  "Mode 1 vs Mode 2 categorization with (b)-revisit trigger."
+- F4.5.2 threshold-of-three reframe (commit 3 prep) — "trigger-to-
+  evaluate, not mandate-to-extract."
+
+**Trigger fired count: 5+ depending on what reaches the bar.** Q2
+below disposes the migration timing. Surfaced as load-bearing F10.0
+because the migration is a precedent-setting decision and the discrete
+trigger named in 00-README.md has fired during this chain.
+
+**Active carry-forward state at this prep:**
+
+Same-sub-milestone (grounding doc § Carry-forward notes):
+- "→ commit 7: cadence-volume + sampler-trigger MCP volume" — RESOLVED
+  2026-05-06 at commit 7 prep (F8.2 Q2-B 60s baseline holds).
+- "→ commits 8-9: per-iteration MCP write call count" — RESOLVED
+  2026-05-07 at commit 8 prep (F9.2 Q9-A; compaction once-per-cycle
+  event; average write count effectively unchanged).
+
+Both same-sub-milestone carry-forwards close at commit 9 in
+"resolved-during-chain" state. No new same-sub-milestone carry-forwards
+expected from commit 9 (closing commit).
+
+Cross-sub-milestone (BACKLOG.md § Carry-forward to future sub-milestones):
+- "→ focused-observability sub-milestone (post-M5-flag-flips):
+  audit_sample_log re-evaluator" — landed at commit 4 (F5.6.C).
+
+Q6 below evaluates whether commit 9 surfaces additional cross-sub-
+milestone carry-forwards.
+
+**Active watch-for-pattern that may trip at this commit:**
+
+1. **F2.1 surface-as-finding rule.** Sixth invocation at commit 8
+   landed at 200% (28/14, exactly at trigger threshold but per
+   ">200%" rule did not fire). Commit 9's F2.1 estimate is +20.
+   Trigger at >40 unique. E2E integration test scope is the
+   load-bearing variable: a 5-scenario suite at granularity-of-
+   commit-7 (15-19 unique each) is unrealistic — these are scenario
+   tests, not handler-shape tests. Realistic count is 5-15 unique.
+   Trajectory observation: **commits 2-4 storage-layer overshoot
+   pattern** (50%, 37%, 110% over) does NOT predict commit 9's
+   shape because commit 9 isn't storage-layer; **commits 5/7 plumbing
+   undershoot pattern** (-22% / TBD-7) is the closer analog. Expect
+   commit 9 to land 50-100% of estimate. Surface as F2.1 trajectory
+   observation at diff checkpoint regardless.
+
+2. **Watch-for-pattern entries** (BACKLOG.md and F3.3/F4.3/F5.3/etc.):
+   - `read_current_X` rowid-DESC helper at 2 (commit 8 confirmed).
+   - `bridge/` → `tools/` cross-layer imports at 2 (commit 8 confirmed
+     no new imports).
+   - Production-code-surface-for-testability at 2 (commit 8 confirmed).
+   - Closure-captured callable for tools/-layer config: now 5
+     instances (graduated from watch to convention per F9.3).
+   - Closed-enum sentinel: 9+ instances (graduated per F2.5).
+
+   Commit 9 is closeout work; doesn't introduce new code patterns
+   that would trip these watches. All confirmed-no-trip at commit 8;
+   confirmed-no-trip at commit 9 by inspection of the workstream
+   shape (E2E tests, drift-scan, closeout doc).
+
+3. **Bidirectional-discipline pattern.** Six invocations through
+   commit 8 across four direction-shapes (substance reversal /
+   framing-precedent-application / prep-instruction-error / hybrid /
+   spec-text-consensus-vs-reconsidered-disposition). Closing commit
+   may surface a seventh during drift-scan or internal-spec-consistency
+   scan — these are review-mindset workstreams that historically
+   surface review-mindset findings. Expect 0-2 invocations.
+
+4. **Convention-establishment cadence.** This chain established 3-6
+   new durable conventions (depending on count). Compared to
+   M5-subscription-routing's 0-1, the cadence is ~5x. Surface as
+   discipline-pattern observation in the closeout (Q1 chapter
+   organization recommendation).
+
+---
+
+## F10.0 — convention-doc migration trigger (load-bearing meta-finding)
+
+**Surfaced before F10.1 touch points** because the migration is a
+precedent-setting decision that shapes commit 9's scope.
+
+### The trigger
+
+`docs/kickoff/00-README.md:167-171` (verbatim):
+
+> **Migration trigger:** when a fifth durable discipline convention
+> lands, lift the convention sections out of this README into a
+> dedicated `docs/conventions/00-README.md` (or
+> `docs/closeouts/00-README.md` — naming dispositioned at migration
+> time). Discrete trigger, not a vibes call. Until the trigger fires,
+> these sections stay co-located here.
+
+The discrete trigger has fired during this chain. The current count
+in 00-README.md (line 152) is 4; this chain added enough conventions
+to reach 5+ by any reasonable counting standard.
+
+### Convention inventory (as of commit 8)
+
+Pre-chain (per 00-README.md:152-165):
+
+1. Sub-milestone closeout artifact (M5-subscription-routing close, 2026-05-02).
+2. Phase-boundary acceptance-criteria-coverage scan (2026-05-03).
+3. Watch-for-pattern (mid-M5 BACKLOG entries with explicit thresholds).
+4. Threshold-of-three same-commit extraction (M5-subscription-routing commit 2 UTC-coercion precedent).
+
+Added in this chain (definitive):
+
+5. Settings field tests colocate with consumers (Decision 4, commit 4 — BACKLOG.md § Conventions).
+6. Internal-spec-consistency scan at sub-milestone close (F9.8, commit 8 — BACKLOG.md § Conventions).
+
+Added in this chain (closeout-staging; not yet promoted to BACKLOG.md § Conventions):
+
+7. Decision 5 carry-forward routing (commits 3-4) — currently in BACKLOG.md but as a carry-forward header note rather than convention entry. Convention-shaped semantically.
+8. Carry-forward annotation discipline (F8.6.B, commit 7 prep) — currently only in F2.5 closeout-staging.
+9. Code-inspection sentinel observability (commit 7 draft, F2.5) — Mode 1 vs Mode 2 categorization + (b)-revisit trigger. Currently only in F2.5 closeout-staging.
+10. Threshold-of-three reframed as trigger-to-evaluate, not mandate-to-extract (F4.5.2, commit 3 prep) — refines #4 above; currently only in F2.5 closeout-staging.
+
+**Conservative count** (BACKLOG.md § Conventions only): 6 (4 pre-chain + Decision 4 + F9.8). Trigger fired.
+
+**Liberal count** (including closeout-staging): 10. Trigger fired with margin.
+
+### Migration timing options (Q2 below)
+
+The trigger naming itself doesn't disposition WHEN to migrate — only
+WHETHER. Options:
+
+- **Reading A — migrate at commit 9.** Closing commit is the natural
+  boundary; the closeout doc would reference the new convention doc
+  rather than 00-README.md. Adds non-trivial scope to commit 9
+  (extract sections, create new doc, update cross-references in
+  00-README.md + BACKLOG.md). Tests not affected. Spec amendment
+  in scope.
+- **Reading B — defer to next sub-milestone.** Migration is hygiene
+  work that doesn't fit naturally in commit 9's three-workstream
+  shape. Surface as BACKLOG entry; address at first hygiene-touchpoint
+  in M5-flag-flips or later. Risk: convention authors at intermediate
+  sub-milestones add to the wrong location until migration lands.
+- **Reading C — migrate at commit 9 BUT scope-narrowed.** Create the
+  new doc + move the four pre-chain conventions; leave the chain's
+  6+ added conventions where they are (BACKLOG.md § Conventions and
+  F2.5 closeout-staging). Operator-decides during follow-up whether
+  to consolidate further. Lower scope; preserves "where conventions
+  currently live" reading-discipline.
+- **Reading D — migrate at commit 9 with full consolidation.**
+  Reading A's scope plus actively promoting the closeout-staging
+  conventions (#7-10 in inventory above) to the new doc. Highest
+  scope; cleanest end-state.
+
+**Recommendation: Reading B (defer).** Argument: commit 9's three-
+workstream shape (E2E tests + scans + closeout doc) is already large.
+Migration is genuine hygiene work that benefits from focused attention,
+not a piggyback on closing-commit scope. The risk under Reading B
+(convention authors add to wrong location at intermediate sub-
+milestones) is low: closeout-staging is a known interim location;
+authors during M5-flag-flips would naturally consolidate at next
+hygiene cycle.
+
+If Mike disposes Reading A or D: Q1 chapter organization for the
+closeout's Discipline-pattern observations section becomes more
+load-bearing because the closeout would also reference the migrated
+convention doc — chapter structure should align with convention
+groupings.
+
+If Mike disposes Reading C: clean partial migration; closeout doc
+references the new convention doc for the four-pre-chain conventions
++ references BACKLOG.md and F2.5 for the chain-added conventions.
+
+### Discipline pattern in the trigger itself
+
+Even if the migration defers, surface this in the closeout's
+Discipline-pattern observations chapter: **"convention-establishment
+cadence at architecturally-decisive sub-milestones is ~5x baseline
+sub-milestone cadence."** The migration trigger was set at 4
+conventions assuming linear accumulation; this chain proved the
+accumulation is non-linear. Future sub-milestones with similar
+density (M5-flag-flips? M6 dashboard?) may want pre-migration scoping.
+
+---
+
+## F10.1 — touch points (per recommended dispositions)
+
+| File | Status | Touch shape |
+|---|---|---|
+| `tests/integration/test_continuous_loop_e2e.py` | NEW | Per-tick chained sequence + cross-tick chain over 3-5 ticks + conserve transition triggering compaction. Q3 below disposes the test-shape granularity (single mega-test / 2-3 focused / 5+ scenario tests). |
+| `docs/closeouts/M5-continuous-pm-driver.md` | NEW | Sub-milestone closeout per 00-README.md convention. Q1 below disposes the Discipline-pattern observations chapter organization. |
+| `docs/working/M5-continuous-pm-driver-grounding.md` | EDIT | Followup-17 (this prep's closeout-feedback cycle, when it lands). Carry-forward annotations RESOLVED for both same-sub-milestone entries. F10 dispositions captured. |
+| `BACKLOG.md` | EDIT | Drift-scan + internal-spec-consistency-scan findings (if any) routed forward. Possibly a new convention entry if Q2 disposes Reading C / D. Possibly Q6 cross-sub-milestone carry-forwards. |
+| `docs/kickoff/00-README.md` | EDIT (conditional on Q2) | Convention count update; if migration lands at commit 9 (Q2 Reading A/C/D), section moves out + cross-reference added. |
+| `docs/conventions/00-README.md` | NEW (conditional on Q2-A/C/D) | Migrated convention sections per Q2 disposition. Naming TBD per migration spec. |
+| Various spec/yaml files | EDIT (conditional on drift-scan findings) | Drift-scan typically surfaces 0-3 docstring milestone-attribution slips + 0-2 yaml-allowlist drifts. M5-subscription-routing close found 2 (allowlist + docstring). |
+| Various spec files | EDIT (conditional on internal-spec-consistency scan) | The convention's first invocation; scope per the operational shape in BACKLOG.md § Conventions. |
+
+---
+
+## F10.2 — open questions (Q1-Q7)
+
+### Q1 — Closeout's Discipline-pattern observations chapter organization (precedent-setting)
+
+The Discipline-pattern observations section will be substantial — 14+
+patterns from grounding doc closeout-staging notes. M5-subscription-
+routing precedent uses a flat bulleted list (4 items). Scaling that
+shape to 14+ items breaks readability.
+
+- **Reading A — flat list (M5-subscription-routing precedent).** Each
+  pattern as a top-level bullet under § Discipline-pattern observations.
+  Simple; precedent-conforming; readable at 4 patterns; brittle at 14+.
+- **Reading B — chapter-level organization** (Mike's prep-instruction
+  recommendation). Group patterns into thematic chapters within the
+  Discipline-pattern observations section. Candidate chapter
+  groupings:
+  - **Review-process patterns**: bidirectional-contradiction discipline,
+    verification-first at architecturally-consequential dispositions,
+    explicit review at chain close, prep-instruction precision.
+  - **Test/code-conventions**: closed-enum sentinel graduation,
+    code-inspection sentinel observability, Decision 4 colocation,
+    contract tests fail informatively.
+  - **Pattern-threshold management**: threshold-of-three reframe,
+    closure-captured-callable graduation, closed-enum graduation,
+    watch-for-pattern resolution shapes.
+  - **Carry-forward and convention discipline**: Decision 5 routing,
+    F8.6.B annotation discipline, sub-milestone-boundary internal-
+    spec-consistency scan, F2.1 surface-as-finding rule, accept-with-
+    revisit-trigger pattern.
+  - **F2.1 trajectory observations**: per-commit overshoot/undershoot
+    correlated with commit shape; unique-function metric clarification.
+- **Reading C — separate file**. Move discipline-pattern observations
+  to `docs/working/M5-continuous-pm-driver-discipline-patterns.md` as
+  a standalone artifact; closeout doc has a brief summary section
+  pointing at it. Highest extraction; full content stays organized
+  but findability across chains may suffer (closeout-readers expect
+  the patterns inside the closeout).
+
+**Recommendation: Reading B (chapter-level).** Reading A's flat
+shape genuinely doesn't scale — at 14+ items the section becomes a
+wall of bullets that's harder to read than M5-subscription-routing's
+4-item shape. Reading C extracts too aggressively; the patterns
+belong with the chain that established them. Reading B's chapter-
+level groupings are the natural compromise: structure that admits
+volume without splitting findability.
+
+The candidate chapter groupings above are suggestions; final
+groupings should emerge during draft. Surface chapter list as a
+"Closeout structure preview" at the top of the Discipline-pattern
+section so future-Claude reading the closeout cold sees the
+organization-shape before the content.
+
+If Mike disposes Reading A: shorten the patterns to one-line
+summaries; defer detailed prose to the grounding doc cross-references.
+
+If Mike disposes Reading C: closeout's Discipline-pattern section
+becomes a TOC-shape pointing at the standalone file; standalone
+file uses Reading B chapter organization.
+
+### Q2 — Convention-doc migration timing (per F10.0)
+
+See F10.0 for full readings + recommendation.
+
+**Recommendation: Reading B (defer to next sub-milestone).**
+
+### Q3 — E2E test scope and granularity
+
+What does the E2E integration test suite at commit 9 actually
+exercise?
+
+- **Reading A — single mega-test** that exercises the full chain in
+  one async test function. Setup PM supervisor → simulate 5-10 ticks
+  with snapshot transitions → assert all cross-path state at end.
+  Lowest function count; hardest to debug when failures land mid-chain.
+- **Reading B — 2-3 focused scenario tests.** Split by scenario
+  archetype: (a) per-tick chained sequence at a single tick, (b)
+  cross-tick chain over 3-5 ticks with focus completion + supersede,
+  (c) conserve transition triggering compaction lifecycle. Each test
+  exercises an end-to-end slice; failures localize to scenario.
+- **Reading C — 5+ scenario tests.** Each scenario archetype above
+  plus: (d) cold-start (no prior handoff), (e) post-compaction
+  respawn reading prior handoff, (f) Mike-presence interaction (paused
+  iteration with mike_presence rationale), (g) anti-flapping
+  discipline (post-compaction within-window doesn't re-compact).
+  Highest function count; cleanest scenario isolation; most
+  fixture-setup overhead.
+
+**Recommendation: Reading B (2-3 focused scenario tests).** Reading A
+is operationally fragile (test failures land in the middle of a long
+chain; debugging requires mental reconstruction of where state
+diverged). Reading C is over-scoped — scenarios (d)-(f) are already
+covered by existing per-component MCP wrapper tests:
+- Cold-start handoff: test_pm_token_get_most_recent_handoff_cold_start_returns_none
+- Post-compaction respawn: test_pm_compaction_e2e (commit 8)
+- Mike-presence: test_pm_loop covers `mike_presence` rationale_tag
+  via current_pm_mode field on subscription_5h_state
+- Anti-flapping: PM-prompt-judgment territory (Q9-from-commit-7
+  rationale); not a daemon-testable behavior at this layer
+
+The cross-path that's NOT yet covered is the per-tick chained
+sequence and the conserve-transition compaction trigger. Reading B
+covers both with reasonable granularity:
+- E2E test 1: per-tick chained sequence (single tick, full
+  consumer chain).
+- E2E test 2: cross-tick chain (3 ticks, focus state evolution).
+- E2E test 3: conserve transition (snapshot flips, compaction
+  triggered, full lifecycle through respawn).
+
+Estimated unique test count: ~3 unique scenarios × ~3-5 unique
+assertions per scenario at the test-function granularity = ~3-5
+unique tests under Reading B. Conservative compared to F2.1's +20
+estimate; surface as F2.1 trajectory observation.
+
+### Q4 — Sub-milestone-boundary internal-spec-consistency scan execution shape
+
+The convention is new; commit 9 is its first invocation. Execution
+shape:
+
+- **Reading A — execute in commit 9.** Run the scan; surface findings
+  in the closeout's Drift-detection scan section (alongside the
+  existing convention's findings); fix any flagged divergences in
+  the same commit.
+- **Reading B — defer to a dedicated commit.** Closing commit's
+  three-workstream shape is already large; scan adds non-trivial
+  scope. Defer to a hygiene commit at start of M5-flag-flips.
+- **Reading C — execute in commit 9 with reduced scope.** Run the
+  scan but limit to architectural concepts introduced or modified
+  at commit 7 (continuous loop driver) and commit 8 (compaction
+  lifecycle) — the most recent + highest-density. Skip earlier
+  commits' concepts since they've already had downstream-pressure
+  to surface drift.
+
+**Recommendation: Reading A (execute in commit 9).** The convention
+was added at commit 8 specifically to catch sub-milestone-internal
+drift at sub-milestone close; deferring its first invocation past
+the close defeats the convention's purpose. Reading C's reduced
+scope misses the point — earlier commits' concepts may have drifted
+silently exactly because they haven't had downstream pressure (the
+M5-pm-supervisor-base + commit 8 worked example shows this).
+
+Operational shape per BACKLOG.md § Conventions entry: for each
+architectural concept introduced or modified during commits 1-8,
+grep mentions across `docs/kickoff/` + `bridge/*.py` + `tools/*.py`
+docstrings + relevant grounding doc sections; produce a "concept →
+mentions" table; flag mentions divergent from the disposition that
+landed.
+
+Concept inventory for the scan (preliminary; refine at draft):
+- `workflow_id` denormalization (commit 1)
+- `pm_current_focus` table + completion-validation contract (commit 2)
+- `pm_spin_rationale_log` (commit 3)
+- `audit_sample_log` + sampling percentage (commit 4)
+- Effort plumbing yaml field (commit 5)
+- Spec amendment (Opus 4.7 effort + thinking) (commit 6)
+- Continuous loop driver (commit 7)
+- Compaction lifecycle / handoff / signal_compaction widening (commit 8)
+
+Concept-by-concept grep + group + flag is the work product. Findings
+land in the closeout's Drift-detection scan section under a new
+sub-section "Sub-milestone-boundary internal-spec-consistency scan
+(first invocation)."
+
+### Q5 — Closeout doc length expectations
+
+M5-subscription-routing closeout: 150 lines / 12 sections. M5-
+continuous-pm-driver chain is 2-3x larger by commit count and
+~3-5x larger by decision density. Soft length targets:
+
+- **Reading A — proportional scaling**: ~300-450 lines. Simple
+  proportional argument from precedent's 150 / 6 commits = 25
+  lines/commit baseline; 9 commits × 25 = 225, scaled up for
+  decision density to 300-450.
+- **Reading B — content-driven, no soft target**: write what the
+  content needs; review for compression after draft. Avoid
+  pre-committing to length that may force omissions.
+- **Reading C — explicit length cap**: 500 lines. Forces
+  compression discipline; if content overflows, extract
+  Discipline-pattern observations to standalone (Q1 Reading C
+  fallback).
+
+**Recommendation: Reading B (content-driven, no soft target).**
+Closeout is the "if I read this chain cold six months from now"
+artifact per 00-README.md. Length should serve readability.
+M5-subscription-routing's 150 lines was right for that chain;
+M5-continuous-pm-driver's right length is whatever the content
+needs given Q1 chapter-level organization.
+
+Surface at draft: if length exceeds ~700 lines, evaluate
+compression vs Q1 Reading C extraction. Don't pre-commit to a
+length cap at prep time.
+
+### Q6 — Cross-sub-milestone carry-forwards (BACKLOG.md § Carry-forward to future sub-milestones)
+
+Existing entry: audit_sample_log re-evaluator → focused-observability
+sub-milestone (commit 4 / F5.6.C).
+
+Does commit 9 surface additional cross-sub-milestone carry-forwards?
+
+- **Reading A — none expected**. Commits 1-8 each surfaced their own
+  carry-forwards at prep time; closing commit doesn't introduce new
+  scope that would generate carry-forwards.
+- **Reading B — internal-spec-consistency scan may surface some**.
+  If the scan flags concept-divergences that aren't fixable in
+  commit 9 scope (e.g., cross-cutting spec drift that touches
+  M-level documentation), those become cross-sub-milestone carry-
+  forwards.
+- **Reading C — convention-doc migration deferral creates one** (if
+  Q2 disposes Reading B). Add a BACKLOG entry routing the migration
+  to next sub-milestone.
+
+**Recommendation: Reading B + Reading C composite.** The internal-
+spec-consistency scan may or may not surface carry-forwards (depends
+on findings); always-possible-but-not-pre-determinable. The
+convention-doc migration deferral (Q2-B) deterministically generates
+one carry-forward.
+
+Surface during draft: if the scan flags any concept that needs
+cross-sub-milestone resolution, add to BACKLOG.md § Carry-forward
+to future sub-milestones with explicit destination + reasoning.
+
+### Q7 — Convention-establishment precedent in the closeout
+
+The convention-establishment cadence at this chain (~5x baseline) is
+itself a discipline-pattern observation. Should the closeout pin
+this cadence as a precedent for evaluating future sub-milestones?
+
+- **Reading A — yes, pin as expected pattern at architectural
+  density**. Closeout includes a section: "Convention-establishment
+  cadence correlates with architectural decision density; sub-
+  milestones at M5-continuous-pm-driver-style density should expect
+  5+ new conventions, not the M5-subscription-routing baseline of
+  0-1." Future-Claude reads this and pre-scopes convention-doc work
+  accordingly.
+- **Reading B — observe, don't pin**. Pin the observation but not
+  the pattern; one chain's data isn't enough to justify a precedent.
+  M6 dashboard work may have similar density (or may not); pinning
+  prematurely risks miscalibration.
+- **Reading C — don't surface**. Convention-establishment cadence
+  is meta-discipline-not-substantive-discipline; the closeout's
+  Discipline-pattern observations should focus on substantive
+  patterns (review process, contract tests, etc.) rather than
+  meta-observations about pattern frequency.
+
+**Recommendation: Reading B (observe, don't pin yet).** One chain's
+~5x cadence is a single data point. Surface it explicitly so future-
+Claude has the data; don't pre-commit to a pattern that needs
+2-3 chains' worth of data to validate.
+
+The framing for the closeout: "Convention-establishment cadence
+during this chain was 5+ conventions across 8 commits, vs M5-
+subscription-routing's 0-1 across 6 commits. Whether this is
+cadence-correlated-with-architectural-density (commit-shape-
+dependent) or M5-continuous-pm-driver-specific (one-off chain
+shape) needs more chains' worth of data. Pre-scoping suggestion:
+at sub-milestones with similar architectural density (multiple
+load-bearing dispositions; multiple new spec amendments; high
+prep-checkpoint decision count), pre-allocate scope for convention
+establishment + migration evaluation."
+
+---
+
+## F10.3 — watch-for-pattern check
+
+| Pattern | Status pre-commit | Commit 9 instance | Disposition |
+|---|---|---|---|
+| Closed-enum CHECK + sentinel | Graduated to convention (9+ instances) | +0 expected; closeout work doesn't introduce new closed-enum surfaces. | No threshold concern. |
+| `read_current_X` rowid-DESC helper | 2 (commit 8 confirmed) | +0 expected. Filesystem-by-timestamp pattern (commit 8) at instance 1 of NEW pattern; no further work at commit 9. | No trip. |
+| `bridge/` → `tools/` cross-layer imports | 2 | +0 expected. Closeout work is docs + tests + scans; no new bridge code. | No trip. |
+| Production-code-surface-for-testability | 2 | +0 expected. | No trip. |
+| Closure-captured callable | 5 (graduated per F9.3) | +0; pattern is now established convention. | No threshold concern. |
+| Code-inspection sentinel | 2 (Q4 + Q9 from commit 7) | +0 expected. Closeout work doesn't introduce new sentinels. | Confirmed no Mode 1 / Mode 2 fires through commit 8; commit 9 inspection-shape unchanged. |
+| Audit-action `pm.<surface>.<verb>` namespace | 7 (post-commit-8: 5 prior + handoff_written + 2 compaction prefix) | +0 expected. | No expansion concern. |
+| F2.1 surface-as-finding rule | 6 invocations + 1 NOT-FIRED clarification | Likely +1 at commit 9 draft. F2.1 estimate +20; expected actual 5-15 unique under Reading B. Trajectory observation: closeout commits undershoot estimates because they're verification + docs work, not net-new code. | Surface at diff checkpoint. |
+| Bidirectional-discipline | 6 invocations + 4 direction-shapes | Possible +0 to +2 at commit 9 (drift-scan + internal-spec-consistency scan are review-mindset workstreams that historically surface review findings). | Surface in closeout if invocations land. |
+| Convention-establishment cadence | NEW observation at this chain (5+ vs M5-subscription-routing baseline 0-1) | +0 conventions expected at commit 9; the work is closing existing conventions, not establishing new ones. | Q7 disposes whether to pin as precedent. |
+
+---
+
+## F10.4 — test-target estimate
+
+F2.1 estimate: +20. Working breakdown under recommended dispositions
+(Q1-B, Q2-B, Q3-B, Q4-A, Q5-B, Q6-B+C, Q7-B):
+
+| Layer | Count |
+|---|---|
+| E2E test 1: per-tick chained sequence (full consumer chain in one tick) | 1-2 |
+| E2E test 2: cross-tick chain (3 ticks; focus state evolution; supersede + complete + new declare) | 1-2 |
+| E2E test 3: conserve transition (snapshot flips → compaction → respawn) | 1-2 |
+| Drift-scan fix tests (if any drift surfaces) | 0-2 |
+| Internal-spec-consistency scan fix tests (if any divergence surfaces) | 0-2 |
+| Closeout doc test surface | 0 (no new tests) |
+| **Total under recommendations** | **3-10 unique** |
+
+**vs F2.1 estimate of +20 unique:** 3-10 / 20 = 15-50%. **Material
+undershoot.** F2.1's +20 estimate likely anticipated higher E2E
+volume (perhaps Reading C-style 5+ scenario tests + drift fixes).
+Recommendation rationale: scenarios (d)-(f) named in Q3 Reading C
+are already covered by existing per-component tests; net-new
+scenario coverage at commit 9 is 3 scenarios.
+
+**F2.1 surface-as-finding rule trigger evaluation:** divergence is
+~50-85% under estimate (not over). Per F2.5 unique-function metric,
+trigger fires at >200% OVER. Under-estimate divergence does NOT
+trigger re-prep but warrants F2.1 trajectory observation.
+
+**Trajectory observation across chain (per F2.5 trajectory framing):**
+
+| Commit | Unique actual | F2.1 estimate | Divergence |
+|---|---|---|---|
+| 2 | ~21 | ~14 | +50% |
+| 3 | ~11 | ~8 | +37% |
+| 4 | ~21 | ~10 | +110% |
+| 5 | 7 | ~9 | -22% |
+| 6 | 0 (docs) | 0 | n/a |
+| 7 | TBD (estimated 17 actual; needs verification) | 18 | ~-5% |
+| 8 | 28 | 14 | +100% |
+| 9 (projected) | 3-10 | 20 | -50% to -85% |
+
+**Pattern observation across the chain:**
+- Storage-layer commits (2, 3, 4) consistently overshoot F2.1
+  estimates due to parametrize blow-ups, default-populates, and
+  sentinel mirror tests.
+- Plumbing/integration commits (5, 7) track close to estimates.
+- Spec-amendment commit (6) has 0 tests by design.
+- Architectural-keystone commit (8) overshoots due to multi-tool
+  test surface + spec amendment test surface.
+- Closing commit (9 projected) undershoots because the work shape
+  is verification + docs, not net-new code.
+
+**F2.1 estimates are honest as estimates** (per F2.1's own
+disclaimer: "Test counts are targets, not budgets"). Trajectory
+shape across commit-shapes is now well-established. Future sub-
+milestone preps should use commit-shape-aware estimation rather
+than uniform per-commit numbers.
+
+---
+
+## F10.5 — anticipated pushbacks
+
+Five weak points likely to surface at review:
+
+1. **Q2 Reading B (defer migration) leaves convention-doc location
+   ambiguous through M5-flag-flips.** Reviewing-Claude may push back:
+   "If trigger has fired, executing the migration AT commit 9 is the
+   discrete-trigger discipline; deferring is convention drift."
+   Counter-argument: commit 9's three-workstream scope is already
+   closing-commit-large; migration is hygiene work that benefits
+   from focused attention. The discrete-trigger discipline says
+   "do the migration when 5 conventions land," not "do the migration
+   in the same commit that crosses the threshold." Reading A or D
+   acceptable if Mike values trigger-fire-discipline over scope
+   management.
+
+2. **Q3 Reading B 3-test scope may miss real cross-path defects.**
+   Per memory `feedback_integration_defects_need_production_shape_tests`,
+   defects only surface when independently-evolved code paths
+   actually integrate. Reading B's 3 scenarios cover common paths;
+   Reading C's 5+ scenarios cover edge-cases that may produce real
+   defects. Reading B's case rests on existing per-component tests
+   covering scenarios (d)-(f) — but per-component tests don't
+   integrate them with the loop. If reviewing-Claude pushes back:
+   "scenario (d) cold-start needs integration coverage; existing
+   test_pm_token_get_most_recent_handoff_cold_start_returns_none
+   tests the handler in isolation, not in a continuous-loop
+   context," that's defensible. Reading C lands.
+
+3. **Q4 internal-spec-consistency scan first invocation may surface
+   findings that complicate commit 9 scope.** The convention is
+   designed to catch drift early; first invocation may catch a
+   non-trivial divergence (analogous to the M5-pm-supervisor-base +
+   commit 8 worked example). If a finding lands that requires
+   spec amendments across multiple files, commit 9 scope grows.
+   Mitigation: surface findings as drift-scan-style sub-section in
+   closeout; fix in same commit if mechanical (yaml allowlists,
+   docstring slips); BACKLOG if structural.
+
+4. **Q1 Reading B chapter-level organization is precedent-setting.**
+   M5-subscription-routing precedent uses flat list; switching to
+   chapter-level at this closeout means future closeouts inherit
+   the question of "which shape?" Reviewing-Claude may push back:
+   "Stick with flat list for precedent stability; if 14 patterns
+   is too many, pre-prune which deserve closeout-level treatment vs
+   F2.5 closeout-staging-only." Counter: 14+ patterns is genuinely
+   too many for a flat list; pruning to fit a precedent shape is
+   tail-wagging-dog. Reading B is the right shape; precedent updates
+   to "flat list at small N; chapters at N >= ~7."
+
+5. **F2.1 trajectory observation across the chain is itself worth
+   formalizing as a discipline-pattern.** Per the Q7 Reading B
+   recommendation (observe, don't pin), the cadence-vs-density
+   observation is one data point. The F2.1 trajectory across
+   commit-shapes is now 8 data points (commits 2-9 projected) — a
+   real pattern. Closeout's discipline-pattern observations should
+   include "F2.1 estimates are commit-shape-correlated, not
+   uniform: storage-layer overshoots, plumbing tracks, docs is
+   zero, architectural-keystone overshoots, closing commit
+   undershoots." Future preps use shape-aware estimation.
+
+---
+
+## F10.6 — what lands at the diff checkpoint
+
+After Mike disposition Q1-Q7 + the five anticipated-pushback items
+above:
+
+**Code (new files):**
+- `tests/integration/test_continuous_loop_e2e.py` — 3 scenario tests
+  per Q3 Reading B (per-tick chain + cross-tick chain + conserve
+  transition). Or 5+ tests per Reading C if disposed.
+
+**Docs (new files):**
+- `docs/closeouts/M5-continuous-pm-driver.md` — sub-milestone
+  closeout per 00-README.md convention; chapter-level Discipline-
+  pattern observations per Q1 Reading B.
+
+**Docs (edits):**
+- `docs/working/M5-continuous-pm-driver-grounding.md` — Followup-17
+  feedback cycle on this prep when it lands; carry-forward annotations
+  RESOLVED for both same-sub-milestone entries; F10 dispositions
+  captured.
+- `BACKLOG.md` — drift-scan + internal-spec-consistency-scan
+  findings if any; new cross-sub-milestone carry-forwards per Q6
+  (convention-doc migration if Q2-B; any scan-surfaced items).
+- Various spec/yaml/migration files — drift-scan fixes (typically
+  0-3 mechanical updates).
+
+**Conditional on Q2 disposition:**
+- Q2-A or D: `docs/conventions/00-README.md` (or
+  `docs/closeouts/00-README.md`) NEW — migrated convention sections.
+  `docs/kickoff/00-README.md` — extracted sections + cross-reference.
+- Q2-B (recommended): no migration this commit; BACKLOG entry routes
+  forward.
+- Q2-C: partial migration; closeout cross-references both old and
+  new locations.
+
+**Tests per F10.4 estimate (~3-10 unique).** F2.1 trajectory
+observation surfaced at diff checkpoint per unique-function metric;
+trajectory is undershoot, not overshoot — does NOT fire trigger.
+Surface as F2.1 finding for the closeout's discipline-pattern
+chapter on test-shape patterns.
+
+**Discipline-pattern observations** in closeout (chapter-level per
+Q1 Reading B) covering at minimum:
+- Review-process patterns
+- Test/code-conventions
+- Pattern-threshold management
+- Carry-forward and convention discipline
+- F2.1 trajectory observations across commit-shapes
+
+**Both same-sub-milestone carry-forwards (cadence-volume + per-iteration
+write count) RESOLVED.**
+
+**Cross-sub-milestone carry-forwards updated** per Q6 disposition.
+
+**Internal-spec-consistency scan first invocation findings** in
+closeout's Drift-detection scan section under sub-section "Sub-
+milestone-boundary internal-spec-consistency scan (first invocation,
+M5-continuous-pm-driver close, 2026-05-07)."
+
+**Convention-establishment cadence observation** captured per Q7
+Reading B (observe, don't pin yet).
+
+**Final commit closes the chain.** Sub-milestone closes; remaining
+M5 work is M5-flag-flips + M5-acceptance.
+
+**End of Followup-16.**
+
+---
+
+# Followup-17 — F10 disposition feedback + commit 9 outcomes
+
+**Date:** 2026-05-07. Captures Mike's dispositions on F10.0 + Q1-Q7 + format refinements + commit-9 verification asks. Closing follow-up of the M5-continuous-pm-driver chain.
+
+## F10.7 — accepts noted (F10.0 / Q1-Q7)
+
+| Disposition | Resolution |
+|---|---|
+| F10.0 / Q2 | **Reading A reversed** (Code's Q2 Reading B → Mike's Reading A): execute migration NOW. Trigger fired during chain; deferring undermines the discrete-trigger discipline. Migration scope was bounded; executed at commit 9. |
+| Q1 | **Reading B accepted with refinement**: F2.1 trajectory promoted to standalone chapter (8+ data points; well-grounded). Final 5 chapters: review-process discipline / test-code conventions / pattern-threshold management / carry-forward and convention discipline / F2.1 trajectory + commit-shape correlation framework. |
+| Q3 | **Reading B accepted with verification ask**: 3 focused scenario tests (per-tick chain + cross-tick chain + conserve transition). Mike directed reading test_pm_compaction_e2e.py body before drafting — done; existing E2E covers the handoff-write→signal→respawn→handoff-read cycle in isolation; new E2E adds the per-tick chained sequence + cross-tick + conserve transition that per-component tests don't exercise together. |
+| Q4 | **Reading A accepted**: execute scan in commit 9. Did so; first invocation surfaced no findings beyond the F2.3 Q1 stale prose finding caught by the standard drift-scan. Convention-validation outcome: when commit-N atomic amendment per `feedback_spec_amendment_runtime_drift` does the heavy lifting, the boundary scan finds little. Future sub-milestones with less-disciplined amendment will exercise the scan more strenuously. |
+| Q5 | **Reading B accepted**: content-driven length. Closeout landed at 288 lines (vs M5-subscription-routing's 150). Substantial; appropriate for chain density. |
+| Q6 | **Reading B + C composite accepted with destination update**: scan-surfaced (none beyond drift-scan finding) + Q2-A migration eliminates the convention-doc deferral as a carry-forward source + audit_sample_log re-evaluator destination updated 2026-05-07 to "post-M4d operational use; runtime-data-driven trigger." |
+| Q7 | **Reading B accepted**: observe convention-establishment cadence as single data point; don't pin yet. F2.1 trajectory has 8+ data points and is pin-able as discipline-pattern observation. Closeout chapter 5 + chapter 4 distinguish well-grounded vs observed-not-pinned. |
+| Format refinements | All accepted: timestamps compress to elapsed-approximate + harness cross-reference; tool-call breakdown stays; quality signals primary; compaction-signals fold into quality-signals unless compaction actually fires. |
+| Commit-7 actual count verification | **Verified before propagating** per Mike's instruction: 16 unique / 24 collected (12 in test_pm_loop.py + 4 in test_pm_loop_mcp_wrapper.py = 16 unique; 8 parametrize blow-ups). vs F2.1 +18 estimate = **-11% under** (not -5% as my Followup-16 prep estimated). Trajectory table in closeout uses 16 / -11%. |
+
+## F10.7.A — Q2 Reading A migration: bounded structure decision
+
+Mike's Reading A came with a conditional fallback: "If the migration's structure decision (what the new conventions doc looks like) takes more than 30 minutes to disposition during commit 9 prep, defer per Reading B."
+
+Structure decision was bounded. The new doc lifts:
+
+- 4 pre-chain conventions from kickoff/00-README.md (sub-milestone closeout artifact; phase-boundary acceptance-criteria-coverage scan; watch-for-pattern; threshold-of-three same-commit extraction).
+- 5 conventions added during this chain (sub-milestone-boundary internal-spec-consistency scan; Settings field test colocation; carry-forward note routing; carry-forward annotation discipline; code-inspection sentinel observability).
+- 1 observation-not-yet-pinned (convention-establishment cadence; single data point).
+
+Numbering structure is sequential 1-9 + observation footer. No drama in structure decision; well under the 30-min budget.
+
+`docs/conventions/00-README.md` created; `docs/kickoff/00-README.md` updated with pointer paragraph; `BACKLOG.md` § Conventions section reduced to pointer; closeout doc cross-references the new conventions doc.
+
+## F10.7.B — Drift-scan + sub-milestone-boundary internal-spec-consistency scan outcomes
+
+**Standard drift-scan**: 2 findings, both fixed at commit 9:
+
+1. `docs/working/M5-continuous-pm-driver-grounding.md:1293` stale Reading X reference in F2.3 Q1 prose (pre-Reading-Y disposition). Fixed in-place with `[SUPERSEDED 2026-05-07]` annotation per Convention 8.
+2. `BACKLOG.md` cross-sub-milestone carry-forward destination stale ("post-M5-flag-flips"); updated to runtime-data-driven trigger per Q6.
+
+**Sub-milestone-boundary internal-spec-consistency scan** (first invocation): no findings beyond the drift-scan's F2.3 Q1 catch. Convention-validation outcome captured in closeout § Sub-milestone-boundary internal-spec-consistency scan (first invocation).
+
+## F10.7.C — Test count outcomes vs F2.1 estimate
+
+F2.1 commit-9 estimate was +20. Actual: 3 unique tests. Divergence: -85% under estimate.
+
+Trajectory across chain (all 9 commits now well-grounded):
+
+- Storage-layer commits (2, 4, 8): +79% / +110% / +107% over estimate
+- Plumbing/wiring commits (1, 5, 7): +13% / -22% / -11% (track close)
+- Docs-only commit (6): 0 by design
+- Closing commit (9): -85% under (verification + docs work)
+
+F2.1 surface-as-finding rule trigger NEVER FIRED across 9 commits (none exceeded 200% over estimate). Rule is working as designed: catch divergence as observation, not enforce per-commit budget. Closeout chapter 5 captures the framework for forward use.
+
+## F10.7.D — Both same-sub-milestone carry-forwards RESOLVED
+
+- "→ commit 7: cadence-volume + sampler-trigger MCP volume" — RESOLVED 2026-05-06 at commit 7 prep (F8.2 Q2-B 60s baseline holds with margin).
+- "→ commits 8-9: per-iteration MCP write call count" — RESOLVED 2026-05-07 at commit 8 prep (compaction once-per-cycle event; average per-tick write count effectively unchanged).
+
+No new same-sub-milestone carry-forwards from commit 9 (closing commit).
+
+## F10.7.E — Bidirectional-discipline summary across chain
+
+Six invocations across four direction-shapes during this chain:
+
+1. Substance reversal (F1.1, F5.6.B)
+2. Framing-precedent-application (F6.5.1 / F6.6.B)
+3. Prep-instruction error (F7.5.1, F8.6.A hybrid)
+4. Spec-text-consensus vs reconsidered-disposition tension (F9.0)
+
+Pattern operating across both review-roles + the timing axis. Closeout chapter 1 captures the framework. Future preps inherit higher-quality bidirectional-discipline awareness.
+
+## F10.7.F — Final commit shape
+
+Commit 9 ships:
+
+- 1 new test file (`tests/integration/test_continuous_loop_e2e.py`) — 3 scenario tests.
+- 1 new closeout doc (`docs/closeouts/M5-continuous-pm-driver.md`) — 288 lines; chapter-level Discipline-pattern observations.
+- 1 new conventions doc (`docs/conventions/00-README.md`) — 9 conventions + observation footer; migrated from kickoff/00-README.md.
+- 2 doc edits: `docs/kickoff/00-README.md` (extracted convention sections; pointer paragraph); `BACKLOG.md` § Conventions (reduced to pointer); `BACKLOG.md` cross-sub-milestone carry-forward destination updated.
+- 1 grounding-doc fix: F2.3 Q1 prose Reading X supersession annotation.
+- 1 grounding-doc append: this Followup-17 disposition capture.
+
+Commit 9 closes the M5-continuous-pm-driver chain.
+
+**End of Followup-17.**
+
+**End of M5-continuous-pm-driver grounding doc.** Future-Claude reading this doc cold for archive purposes finds the canonical retrospective at `docs/closeouts/M5-continuous-pm-driver.md`; finds durable conventions at `docs/conventions/00-README.md`; finds active cross-sub-milestone carry-forwards at `BACKLOG.md` § Carry-forward to future sub-milestones.
 
 
