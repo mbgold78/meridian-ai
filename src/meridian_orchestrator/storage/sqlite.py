@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator, Iterable, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +15,20 @@ import structlog
 logger = structlog.get_logger(__name__)
 
 
+# Module-level ContextVar for per-asyncio-task transaction reentrancy
+# tracking. Replaces the M1-shipped instance-level boolean ``_in_txn``
+# which leaked across concurrent MCP requests on the shared SqliteStorage
+# instance — Codex finding 2 from M5-subscription-routing round 1,
+# addressed at M5-flag-flips F2 contextvars fix (2026-05-07).
+#
+# Module-level (not instance-level) per Python docs guidance: "Context
+# Variables should be created at the top module level." Phase 1 storage
+# is a singleton in production; multi-instance scenarios are theoretical.
+# ``default=False`` ensures every fresh asyncio task sees "not in
+# transaction" initially, matching the M1 boolean's default.
+_IN_TXN: ContextVar[bool] = ContextVar("storage._in_txn", default=False)
+
+
 class SqliteStorage:
     """Async SQLite storage with row-as-dict semantics.
 
@@ -20,12 +36,22 @@ class SqliteStorage:
     ``transaction()`` context manager wraps a ``BEGIN``/``COMMIT`` block; nested
     calls share the outermost transaction's lifecycle (no SAVEPOINT support in
     Phase 1 — that's tracked in BACKLOG.md).
+
+    **Concurrent transaction safety** (M5-flag-flips F2): per-task
+    reentrancy state is tracked via the module-level ``_IN_TXN``
+    ContextVar; the BEGIN/COMMIT envelope on the single shared aiosqlite
+    connection is serialized via ``self._txn_lock`` (asyncio.Lock).
+    Without the Lock, concurrent tasks would issue overlapping BEGINs on
+    the same connection and trigger SQLite "cannot start transaction
+    within a transaction" errors. Lock acquisition MUST precede the
+    ContextVar set so a task waiting on the Lock observes accurate
+    reentrancy state during its wait window.
     """
 
     def __init__(self, db_path: Path) -> None:
         self._db_path = db_path
         self._conn: aiosqlite.Connection | None = None
-        self._in_txn = False
+        self._txn_lock: asyncio.Lock = asyncio.Lock()
 
     async def connect(self) -> None:
         """Open the connection. Idempotent."""
@@ -85,18 +111,39 @@ class SqliteStorage:
 
     @asynccontextmanager
     async def _transaction(self) -> AsyncIterator[None]:
-        if self._in_txn:
+        # Reentrancy: per-task ContextVar means concurrent tasks see
+        # independent state; nested calls within a single task share the
+        # outermost envelope. This early-return path preserves the
+        # existing reentrancy contract (helpers like
+        # ``bridge.activity.record_oauth_pm_auto_flip`` and
+        # ``record_api_call`` rely on inner transactions being no-ops
+        # when wrapped by an outer envelope).
+        if _IN_TXN.get():
             yield
             return
         conn = self._require_conn()
-        self._in_txn = True
-        await conn.execute("BEGIN")
-        try:
-            yield
-        except Exception:
-            await conn.execute("ROLLBACK")
-            raise
-        else:
-            await conn.execute("COMMIT")
-        finally:
-            self._in_txn = False
+        # Ordering rationale (M5-flag-flips F2 contextvars fix, 2026-05-07):
+        # Lock acquisition MUST precede the ContextVar set. Setting
+        # _IN_TXN before lock acquisition would mark the task as "in
+        # transaction" while it is still waiting on the connection-
+        # envelope lock — semantically incorrect (no BEGIN issued yet)
+        # and could mis-route a nested invocation arriving during the
+        # wait window. Acquire envelope-serialization first; mark
+        # transaction state second; issue BEGIN third. Reset the
+        # ContextVar in finally so it clears even if BEGIN itself
+        # raises (latent bug in the M1 boolean shape: BEGIN-fail left
+        # ``_in_txn=True`` permanently because the finally clause did
+        # not include the BEGIN call).
+        async with self._txn_lock:
+            token = _IN_TXN.set(True)
+            try:
+                await conn.execute("BEGIN")
+                try:
+                    yield
+                except Exception:
+                    await conn.execute("ROLLBACK")
+                    raise
+                else:
+                    await conn.execute("COMMIT")
+            finally:
+                _IN_TXN.reset(token)
