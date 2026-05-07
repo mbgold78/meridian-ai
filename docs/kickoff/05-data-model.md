@@ -48,7 +48,15 @@ CREATE TABLE tasks (
     description TEXT NOT NULL,
     priority INTEGER NOT NULL DEFAULT 2,
     complexity INTEGER NOT NULL DEFAULT 3,
-    status TEXT NOT NULL DEFAULT 'pending',
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN (
+        'pending', 'claimed', 'in_progress',
+        'completed', 'failed', 'declined', 'cancelled'
+    )),                                        -- CHECK added 0013 at M4d
+    task_type TEXT CHECK (task_type IN (       -- added 0013 at M4d
+        'planning', 'dispatching', 'monitoring', 'review',
+        'investigation', 'synthesis', 'execution', 'revision',
+        'uncategorized'
+    )),
     blocking_human INTEGER NOT NULL DEFAULT 0,
     estimated_tokens INTEGER,                  -- PM-set, used for window-aware planning (added 0002 at M4)
     actual_tokens INTEGER,                     -- Engineer-set on completion (added 0002 at M4)
@@ -181,6 +189,29 @@ pending  ─→  claimed  ─→  in_progress  ─→  completed
 `declined` is a sub-agent's first-class upward action. It is **not** `failed`. The audit log distinguishes them.
 
 `cancelled` is set by the submitter (or Mike) to withdraw a task before claim/completion.
+
+### `tasks.task_type`
+
+Cohort key describing the **work-shape** (cognitive operation) of the task. Closed nine-value enum enforced via DB CHECK constraint (migration 0013) and Python `storage.models.TaskType` Literal — defense-in-depth alongside the closed-enum sentinel pattern (graduated to convention at M5-continuous-pm-driver).
+
+**Coordination shape** (managing-other-work; correlates with PM role):
+- `planning` — deciding what should happen
+- `dispatching` — handing work to other agents
+- `monitoring` — tracking in-flight work, status checks
+- `review` — evaluating completed work
+
+**Production shape** (doing-the-work; correlates with Engineer/Implementer/Tester roles):
+- `investigation` — understanding something, diagnosis, exploration
+- `synthesis` — combining inputs into outputs (analysis, summary, design)
+- `execution` — concrete deliverable production (code, doc, artifact)
+- `revision` — modifying existing artifact
+
+**Fallback:**
+- `uncategorized` — explicit unknown
+
+The taxonomy is **product-agnostic infrastructure**. `tasks.task_type` describes work-**shape** (cognitive operation), not work-**domain** (product/area). Per-product work_domain (e.g., `code_implementation`, `substrate_review`) lives in the per-product context — currently free-text in `tasks.notes` or operator-supplied details, with a future per-product taxonomy planned (`BACKLOG.md` § Future architectural work § Per-product work_domain taxonomy). Triggered when orchestrator runs against second product or when cohort coherence problems surface.
+
+**Population protocol** (γ per BACKLOG resolution): operator threads `task_type` at `submit_task` time. Sub-tasks may be re-tagged at submit OR inherit via the dispatch chain. `record_api_call` derives the cohort `task_type` from the chain root via the same recursive CTE used for `workflow_id` α-denormalization (M4d commit 7 extends the SELECT). Nullable on legacy rows + on tasks submitted without explicit type; SQLite's `column IN (...)` CHECK semantics treat NULL as TRUE (no IS NULL OR clause needed).
 
 ### `tasks.priority`
 
@@ -427,6 +458,7 @@ Phase 1 migration plan:
 | `0010_pm_current_focus.sql` | M5-continuous-pm-driver | `pm_current_focus` table + `idx_pm_focus_declared_at` per `BACKLOG.md` § Observability roadmap (narration tier 1, M5-continuous-pm-driver scope) |
 | `0011_pm_spin_rationale_log.sql` | M5-continuous-pm-driver | `pm_spin_rationale_log` table + `idx_pm_spin_iteration_timestamp` per `BACKLOG.md` § Observability roadmap (fitness tier 1, M5-continuous-pm-driver scope) |
 | `0012_audit_sample_log.sql` | M5-continuous-pm-driver | `audit_sample_log` table + `idx_audit_sample_state_sampled_at` per `BACKLOG.md` § Observability roadmap (silent-compliance defenses, M5-continuous-pm-driver scope) |
+| `0013_tasks_task_type_and_status_check.sql` | M4d-task-management-surface | `tasks.task_type` column with closed nine-value CHECK (work-shape taxonomy per Q1, 2026-05-07) + CHECK on `tasks.status` mirroring 0008 `dispatches.status` precedent. Table rewrite per SQLite ADD CONSTRAINT limitation; greenfield (no production rows pre-M4d submit_task) so DROP/RENAME is safe. Indexes recreated post-rename. |
 
 No `bucket` column ships in `api_usage`. The premium-first cost model superseded by the subscription-first architecture (Experiment 4, 2026-05-01) drops per-call bucket attribution from the schema in favor of query-time derivation from `model` plus the daemon's polled `/api/oauth/usage` snapshot. See `project_subscription_first_architecture` memory.
 

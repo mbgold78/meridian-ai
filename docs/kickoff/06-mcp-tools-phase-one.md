@@ -45,6 +45,16 @@ class SubmitTaskOutput(BaseModel):
 
 If `parent_task_id` is set, caller must own the parent task (must be `claimed_by` the caller) **or** caller must be the role that submitted the parent. Sub-task submissions during dispatch are the canonical use of this.
 
+**`task_type` semantics** (per Q1 disposition at M4d-task-management-surface, 2026-05-07): describes work-**shape** (cognitive operation), NOT work-**domain** (product/area). Closed-enum nine-value taxonomy enforced at the DB layer via `0013_tasks_task_type_and_status_check.sql` CHECK constraint and at the Python layer via `storage.models.TaskType` Literal:
+
+- **Coordination shape** (managing-other-work; correlates with PM role): `planning`, `dispatching`, `monitoring`, `review`.
+- **Production shape** (doing-the-work; correlates with Engineer/Implementer/Tester roles): `investigation`, `synthesis`, `execution`, `revision`.
+- **Fallback**: `uncategorized` for explicit-unknown tagging.
+
+Cohort queries gain discriminability across both axes (work-shape × `agent_role`). Population semantics are γ-protocol per BACKLOG resolution: operator threads `task_type` at `submit_task` time; sub-tasks may be re-tagged at submit (operator-supplied per call) or inherit via the dispatch chain. `record_api_call` derives `task_type` from the chain root via the existing `workflow_id` α-denormalization recursive CTE (M4d commit 7 extends the SELECT to also resolve `task_type`).
+
+The taxonomy is **product-agnostic infrastructure**: Meridian Orchestrator is product-agnostic; `tasks.task_type` lives in the data model used by every product the orchestrator runs. Per-product work_domain (e.g., `code_implementation`, `substrate_review`) is BACKLOG work — currently lives in the per-product context (free-text `details_json` on operator-supplied surfaces; future per-product enum at company instantiation). See `BACKLOG.md` § Future architectural work § Per-product work_domain taxonomy.
+
 **Audited.** Action: `task.submit`.
 
 #### `get_queue`

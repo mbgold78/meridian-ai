@@ -23,11 +23,12 @@ from meridian_orchestrator.storage.sqlite import SqliteStorage
 #   0010_pm_current_focus.sql                 (M5-continuous-pm-driver commit 2)
 #   0011_pm_spin_rationale_log.sql             (M5-continuous-pm-driver commit 3)
 #   0012_audit_sample_log.sql                  (M5-continuous-pm-driver commit 4)
+#   0013_tasks_task_type_and_status_check.sql  (M4d-task-management-surface commit 1)
 # Reservation gap remaining: 0004 reserved for inbound_messages +
 # outbound_messages (Telegram notifications); milestone-attribution
 # pending resolution between data-model.md (M6) and the M5 sub-milestone
 # breakdown memory (M5-telegram-foundation).
-EXPECTED_VERSIONS = [1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12]
+EXPECTED_VERSIONS = [1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13]
 
 
 @pytest_asyncio.fixture
@@ -864,3 +865,248 @@ async def test_audit_sample_sampled_at_default_populates(
     assert row is not None
     assert row["sampled_at"] is not None
     assert len(row["sampled_at"]) >= 19
+
+
+async def test_tasks_columns_match_spec_after_0013(
+    storage: SqliteStorage,
+) -> None:
+    """0013_tasks_task_type_and_status_check.sql rewrites the tasks
+    table preserving all columns from 0001 + 0002 and adding
+    task_type. Column inventory must match 05-data-model.md § tasks
+    DDL; rewrite preserves indexes via post-RENAME CREATE INDEX.
+    """
+    await run_migrations(storage)
+    cols = await storage.fetch_all("PRAGMA table_info(tasks)")
+    by_name = {c["name"]: c for c in cols}
+
+    expected_names = {
+        "id",
+        "company_id",
+        "project_id",
+        "parent_task_id",
+        "agent_role",
+        "description",
+        "priority",
+        "complexity",
+        "status",
+        "task_type",
+        "blocking_human",
+        "estimated_tokens",
+        "actual_tokens",
+        "submitted_by",
+        "claimed_by",
+        "claimed_at",
+        "completed_at",
+        "notes",
+        "created_at",
+    }
+    assert set(by_name.keys()) == expected_names, (
+        f"tasks columns drift: got {set(by_name.keys())!r}, "
+        f"expected {expected_names!r}. Schema must match "
+        "05-data-model.md § tasks (post-0013)."
+    )
+
+    # task_type is nullable per the migration (NULL = unknown / not yet
+    # tagged); status is NOT NULL with default 'pending' per 0001.
+    assert by_name["task_type"]["notnull"] == 0
+    assert by_name["status"]["notnull"] == 1
+    assert by_name["status"]["dflt_value"] == "'pending'"
+
+    # Indexes recreated post-RENAME.
+    indexes = await storage.fetch_all(
+        "SELECT name FROM sqlite_master "
+        "WHERE type='index' AND tbl_name='tasks' "
+        "AND name NOT LIKE 'sqlite_autoindex%'"
+    )
+    index_names = {r["name"] for r in indexes}
+    assert {"idx_tasks_status_priority", "idx_tasks_agent_role",
+            "idx_tasks_parent"}.issubset(index_names), (
+        f"tasks indexes drift after 0013 rewrite: got {index_names!r}"
+    )
+
+
+async def test_tasks_task_type_check_constraint_accepts_all_spec_values(
+    storage: SqliteStorage,
+) -> None:
+    """The task_type column's CHECK enforces the spec'd 9-value
+    closed-enum work-shape taxonomy (Q1 disposition at
+    M4d-task-management-surface, 2026-05-07): four coordination-shape
+    values + four production-shape values + uncategorized fallback.
+    Defense-in-depth alongside the storage.models.TaskType Literal —
+    Python types catch typos at edit time, the CHECK catches the same
+    class of bug from manual SQL or future external integrations.
+
+    Sentinel test: every spec'd value passes the CHECK; bogus values
+    reject (covered by the negative-path companion test). Failure here
+    means the migration's CHECK list drifted from the TaskType Literal.
+    """
+    await run_migrations(storage)
+    # Seed a real company + project to satisfy NOT NULL FKs.
+    await storage.execute(
+        "INSERT INTO companies (id, name) VALUES ('co-tt', 'co')"
+    )
+    await storage.execute(
+        "INSERT INTO projects (id, company_id, name) "
+        "VALUES ('proj-tt', 'co-tt', 'p')"
+    )
+
+    spec_values = [
+        # Coordination shape.
+        "planning", "dispatching", "monitoring", "review",
+        # Production shape.
+        "investigation", "synthesis", "execution", "revision",
+        # Fallback.
+        "uncategorized",
+    ]
+    for i, tt in enumerate(spec_values):
+        await storage.execute(
+            "INSERT INTO tasks "
+            "(id, company_id, project_id, agent_role, description, "
+            "task_type) VALUES (?, ?, ?, ?, ?, ?)",
+            (f"task-tt-{i}", "co-tt", "proj-tt", "engineer", "desc", tt),
+        )
+
+    rows = await storage.fetch_all(
+        "SELECT task_type FROM tasks WHERE id LIKE 'task-tt-%' ORDER BY id"
+    )
+    assert {r["task_type"] for r in rows} == set(spec_values)
+
+
+async def test_tasks_task_type_check_rejects_invalid_value(
+    storage: SqliteStorage,
+) -> None:
+    """A task_type value not in the spec'd closed enum must fail the
+    CHECK constraint. Symmetric to the positive-walk companion test."""
+    await run_migrations(storage)
+    await storage.execute(
+        "INSERT INTO companies (id, name) VALUES ('co-tt-bogus', 'co')"
+    )
+    await storage.execute(
+        "INSERT INTO projects (id, company_id, name) "
+        "VALUES ('proj-tt-bogus', 'co-tt-bogus', 'p')"
+    )
+
+    with pytest.raises(Exception, match=r"(?i)check"):
+        await storage.execute(
+            "INSERT INTO tasks "
+            "(id, company_id, project_id, agent_role, description, "
+            "task_type) VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                "task-tt-bogus",
+                "co-tt-bogus",
+                "proj-tt-bogus",
+                "engineer",
+                "desc",
+                "not-a-real-work-shape",
+            ),
+        )
+
+
+async def test_tasks_task_type_accepts_null(
+    storage: SqliteStorage,
+) -> None:
+    """task_type is nullable; INSERTs without the column (or with
+    explicit NULL) must satisfy the CHECK. SQLite's CHECK semantics
+    treat NULL as TRUE for the column-IN-(...) form, so NULL passes
+    without an explicit IS NULL OR clause."""
+    await run_migrations(storage)
+    await storage.execute(
+        "INSERT INTO companies (id, name) VALUES ('co-tt-null', 'co')"
+    )
+    await storage.execute(
+        "INSERT INTO projects (id, company_id, name) "
+        "VALUES ('proj-tt-null', 'co-tt-null', 'p')"
+    )
+
+    # Implicit NULL (column omitted from INSERT).
+    await storage.execute(
+        "INSERT INTO tasks "
+        "(id, company_id, project_id, agent_role, description) "
+        "VALUES ('task-tt-null', 'co-tt-null', 'proj-tt-null', "
+        "'engineer', 'desc')"
+    )
+    # Explicit NULL.
+    await storage.execute(
+        "INSERT INTO tasks "
+        "(id, company_id, project_id, agent_role, description, "
+        "task_type) VALUES ('task-tt-explicit-null', 'co-tt-null', "
+        "'proj-tt-null', 'engineer', 'desc', NULL)"
+    )
+
+    rows = await storage.fetch_all(
+        "SELECT task_type FROM tasks WHERE id LIKE 'task-tt-%null%'"
+    )
+    assert all(r["task_type"] is None for r in rows)
+
+
+async def test_tasks_status_check_constraint_accepts_all_spec_values(
+    storage: SqliteStorage,
+) -> None:
+    """The status column's CHECK enforces the seven-value state-machine
+    enum that the application layer (storage.models.TaskStatus Literal)
+    has enforced since M1. Migration 0013 adds DB-layer enforcement
+    via table rewrite per 0008_dispatches_status_check.sql precedent.
+    Defense-in-depth — Python types catch typos at edit time, the
+    CHECK catches the same class of bug from manual SQL.
+
+    Sentinel test: every spec'd value passes the CHECK; bogus values
+    reject (covered by the negative-path companion test). Failure here
+    means the migration's CHECK list drifted from the TaskStatus
+    Literal.
+    """
+    await run_migrations(storage)
+    await storage.execute(
+        "INSERT INTO companies (id, name) VALUES ('co-st', 'co')"
+    )
+    await storage.execute(
+        "INSERT INTO projects (id, company_id, name) "
+        "VALUES ('proj-st', 'co-st', 'p')"
+    )
+
+    spec_values = [
+        "pending", "claimed", "in_progress",
+        "completed", "failed", "declined", "cancelled",
+    ]
+    for i, st in enumerate(spec_values):
+        await storage.execute(
+            "INSERT INTO tasks "
+            "(id, company_id, project_id, agent_role, description, "
+            "status) VALUES (?, ?, ?, ?, ?, ?)",
+            (f"task-st-{i}", "co-st", "proj-st", "engineer", "desc", st),
+        )
+
+    rows = await storage.fetch_all(
+        "SELECT status FROM tasks WHERE id LIKE 'task-st-%' ORDER BY id"
+    )
+    assert {r["status"] for r in rows} == set(spec_values)
+
+
+async def test_tasks_status_check_rejects_invalid_value(
+    storage: SqliteStorage,
+) -> None:
+    """A status value not in the spec'd state-machine enum must fail
+    the CHECK constraint. Symmetric to the positive-walk companion
+    test."""
+    await run_migrations(storage)
+    await storage.execute(
+        "INSERT INTO companies (id, name) VALUES ('co-st-bogus', 'co')"
+    )
+    await storage.execute(
+        "INSERT INTO projects (id, company_id, name) "
+        "VALUES ('proj-st-bogus', 'co-st-bogus', 'p')"
+    )
+
+    with pytest.raises(Exception, match=r"(?i)check"):
+        await storage.execute(
+            "INSERT INTO tasks "
+            "(id, company_id, project_id, agent_role, description, "
+            "status) VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                "task-st-bogus",
+                "co-st-bogus",
+                "proj-st-bogus",
+                "engineer",
+                "desc",
+                "not-a-real-status",
+            ),
+        )

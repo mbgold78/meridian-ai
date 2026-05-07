@@ -21,6 +21,22 @@ TaskStatus = Literal[
     "cancelled",
 ]
 
+TaskType = Literal[
+    # Coordination shape (managing-other-work; correlates with PM role).
+    "planning",
+    "dispatching",
+    "monitoring",
+    "review",
+    # Production shape (doing-the-work; correlates with Engineer/
+    # Implementer/Tester roles).
+    "investigation",
+    "synthesis",
+    "execution",
+    "revision",
+    # Fallback for explicit-unknown tagging.
+    "uncategorized",
+]
+
 
 class Company(BaseModel):
     id: str
@@ -58,7 +74,10 @@ class Task(BaseModel):
     priority: int = 2
     complexity: int = 3
     status: TaskStatus = "pending"
+    task_type: TaskType | None = None
     blocking_human: int = 0
+    estimated_tokens: int | None = None
+    actual_tokens: int | None = None
     submitted_by: str | None = None
     claimed_by: str | None = None
     claimed_at: str | None = None
