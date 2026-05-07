@@ -584,6 +584,223 @@ async def claim_task(
     return ClaimTaskOutput(task=Task(**dict(updated)))
 
 
+# ----- update_task_status -------------------------------------------------
+
+# State-machine transition matrix per docs/kickoff/05-data-model.md:170-178.
+# Maps each from-status to the set of allowed to-statuses. Terminal statuses
+# (completed/failed/declined/cancelled) have empty sets — no outgoing
+# transitions. Closed-enum sentinel pattern test walks the full Cartesian
+# (7 from-states x 6 to-states from UpdateTaskStatusInput.status Literal =
+# 42 pairs) per CQ3 Reading A disposition (M4d-task-management-surface
+# commit 5, 2026-05-07): single parametrized sentinel mirrors the established
+# closed-enum sentinel convention; matrix is one invariant.
+_ALLOWED_TRANSITIONS: dict[TaskStatus, set[TaskStatus]] = {
+    "pending": {"claimed", "cancelled"},
+    "claimed": {"in_progress", "declined", "cancelled"},
+    "in_progress": {"completed", "failed", "cancelled"},
+    "completed": set(),
+    "failed": set(),
+    "declined": set(),
+    "cancelled": set(),
+}
+
+
+def _check_can_update_task_status(
+    *,
+    task: dict[str, Any],
+    caller_agent_id: str,
+    caller_role: str,
+    target_status: str,
+) -> None:
+    """Two-clause OR hierarchy gate for ``update_task_status`` per
+    ``06-mcp-tools-phase-one.md:81`` ("caller must be ``claimed_by``
+    the task **or** caller must be the role that submitted it (the
+    latter only for ``cancelled``)").
+
+    - **Clause 1** (always applies): ``task.claimed_by ==
+      caller_agent_id``. Strict agent-identity check.
+    - **Clause 2** (conditional on ``target_status == "cancelled"``):
+      ``caller_role`` equals the role that submitted the task.
+      Resolved via ``task["submitter_role"]`` (from JOIN to agents
+      when ``submitted_by`` is a UUID) OR via
+      ``HUMAN_LITERAL_ROLE_MAP`` (when ``submitted_by`` is a Phase 1
+      literal like ``"human:mike"``).
+
+    Helper takes the task row dict already SELECTed by the handler;
+    does NOT do its own SELECT (CQ5 Reading A — permission-check-
+    returns-data watch stays at 1 instance; commit 3's
+    ``_check_can_submit_task_parent_ownership`` had specific
+    motivation [avoiding redundant SELECT for inheritance derivation]
+    that doesn't apply here).
+
+    NOTE on submitter-role resolution: Clause 2's resolution logic
+    (JOIN-or-HUMAN_LITERAL_ROLE_MAP-fallback + caller_role equality)
+    is structurally identical to
+    ``_check_can_submit_task_parent_ownership`` clause 2 (commit 3).
+    Two-instance count for cross-tool helper extraction; tracked at
+    BACKLOG.md § watch-for-pattern (submitter-role resolution shared
+    logic across tools entry). If a third instance surfaces in any
+    future commit (set_task_priority, get_subtasks, get_queue, or
+    post-M4d work), extract to ``_resolve_submitter_role(storage,
+    task_id)`` at that commit and refactor both prior call sites in
+    the same commit. Threshold-of-three discipline per F4.5.2 reframe
+    (Convention 4 in docs/conventions/00-README.md).
+    """
+    # Clause 1: agent-identity ownership.
+    if task["claimed_by"] == caller_agent_id:
+        return
+
+    # Clause 2: role-level submitter authority — only applies for
+    # cancelled (per spec line 81 conditional clause).
+    if target_status == "cancelled":
+        submitter_role = task["submitter_role"]
+        if submitter_role is None:
+            submitter_role = HUMAN_LITERAL_ROLE_MAP.get(
+                task["submitted_by"]
+            )
+        if submitter_role == caller_role:
+            return
+
+    raise OrchestratorPermissionError(
+        f"caller {caller_agent_id!r} (role={caller_role!r}) cannot "
+        f"update status of task to {target_status!r} (clauses: "
+        f"claimed_by={task['claimed_by']!r}, "
+        f"submitter_role={task.get('submitter_role')!r}; clause 2 "
+        "applies only when target_status='cancelled')"
+    )
+
+
+async def update_task_status(
+    *,
+    storage: Storage,
+    request: UpdateTaskStatusInput,
+    caller_agent_id: str,
+    caller_role: str,
+) -> UpdateTaskStatusOutput:
+    """Agent or operator updates a task's status.
+
+    **Hierarchy gate** (per spec line 81 + CQ5): caller must be
+    ``claimed_by`` the task OR (if target is ``cancelled``) caller's
+    role must equal the role that submitted the task. Two-clause OR
+    with conditional second clause.
+
+    **State-machine validation** (per spec line 83 + CQ3 Reading A):
+    ``target_status`` must be in ``_ALLOWED_TRANSITIONS[current_status]``;
+    otherwise raises ``ConflictError``. Matrix encoded per
+    ``05-data-model.md`` § ``tasks.status``; sentinel test walks the
+    full 42-pair Cartesian.
+
+    **Atomic UPDATE** (per CQ4 + third instance of two-query pattern
+    per CQ2 Reading B with renewed deferral basis): conditional UPDATE
+    with ``WHERE id=? AND status=?`` provides race protection on the
+    starting state — concurrent transitions are mutually exclusive.
+    SELECT-verify after UPDATE confirms the transition succeeded for
+    THIS caller's target state.
+
+    **Atomicity** (per CQ4): full ``storage.transaction()`` wrap
+    covering precursor SELECT + UPDATE + SELECT-verify + audit.
+
+    **Audit** (per CQ6 Reading A): action ``task.status_change``,
+    target=``task_id``, details capture ``{task_id, from_status,
+    to_status, notes}`` — minimal forensic surface symmetric with
+    ``task.submit`` and ``task.claim``. Forensic queries can JOIN to
+    tasks table for full row state.
+
+    Raises :class:`NotFoundError` when ``task_id`` doesn't resolve;
+    :class:`OrchestratorPermissionError` on hierarchy mismatch;
+    :class:`ConflictError` on invalid transition OR concurrent state
+    change OR starting-from-non-expected state.
+    """
+    # Precursor SELECT with JOIN to agents for clause 2 submitter-role
+    # resolution. Same JOIN shape as
+    # _check_can_submit_task_parent_ownership (commit 3); see
+    # _check_can_update_task_status docstring for cross-tool extraction
+    # tracking.
+    row = await storage.fetch_one(
+        "SELECT t.id, t.status, t.claimed_by, t.submitted_by, "
+        "a.role AS submitter_role "
+        "FROM tasks t LEFT JOIN agents a ON a.id = t.submitted_by "
+        "WHERE t.id = ?",
+        (request.task_id,),
+    )
+    if row is None:
+        raise NotFoundError(f"task_id={request.task_id!r} not found")
+
+    task = dict(row)
+    current_status: TaskStatus = task["status"]
+
+    # Hierarchy gate (in-memory; cheap; pre-transaction).
+    _check_can_update_task_status(
+        task=task,
+        caller_agent_id=caller_agent_id,
+        caller_role=caller_role,
+        target_status=request.status,
+    )
+
+    # State-machine validation (in-memory; cheap; pre-transaction).
+    allowed = _ALLOWED_TRANSITIONS.get(current_status, set())
+    if request.status not in allowed:
+        raise ConflictError(
+            f"task_id={request.task_id!r} invalid transition: "
+            f"{current_status!r} -> {request.status!r} "
+            f"(allowed from {current_status!r}: "
+            f"{sorted(allowed) if allowed else '(terminal)'})"
+        )
+
+    async with storage.transaction():
+        # Atomic conditional UPDATE. WHERE status=? provides race
+        # protection on starting state — concurrent transitions are
+        # mutually exclusive.
+        await storage.execute(
+            "UPDATE tasks SET status = ?, "
+            "notes = COALESCE(?, notes), "
+            "completed_at = CASE WHEN ? IN "
+            "('completed', 'failed', 'declined', 'cancelled') "
+            "THEN datetime('now') ELSE completed_at END "
+            "WHERE id = ? AND status = ?",
+            (
+                request.status,
+                request.notes,
+                request.status,
+                request.task_id,
+                current_status,
+            ),
+        )
+        # SELECT-verify: status = ? predicate confirms the UPDATE
+        # matched (distinguishes from concurrent state change between
+        # our precursor SELECT and the UPDATE). Third instance of the
+        # two-query atomic-update pattern; deferred per CQ2 Reading B
+        # renewed-deferral basis (BACKLOG.md § Storage rowcount-API
+        # entry; trigger updated to fourth-instance-with-non-cosmetic-
+        # motivation).
+        updated = await storage.fetch_one(
+            "SELECT * FROM tasks WHERE id = ? AND status = ?",
+            (request.task_id, request.status),
+        )
+        if updated is None:
+            raise ConflictError(
+                f"task_id={request.task_id!r} status update failed: "
+                f"task is not in expected starting state "
+                f"{current_status!r} (concurrent state change "
+                "between precursor SELECT and UPDATE)"
+            )
+
+        await write_audit(
+            storage,
+            actor=caller_agent_id,
+            action="task.status_change",
+            target=request.task_id,
+            details={
+                "task_id": request.task_id,
+                "from_status": current_status,
+                "to_status": request.status,
+                "notes": request.notes,
+            },
+        )
+
+    return UpdateTaskStatusOutput(task=Task(**dict(updated)))
+
+
 __all__ = [
     "HUMAN_LITERAL_ROLE_MAP",
     "HUMAN_MIKE_LITERAL",
@@ -601,4 +818,5 @@ __all__ = [
     "UpdateTaskStatusOutput",
     "claim_task",
     "submit_task",
+    "update_task_status",
 ]

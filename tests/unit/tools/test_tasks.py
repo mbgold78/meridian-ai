@@ -55,10 +55,12 @@ from meridian_orchestrator.tools.tasks import (
     _check_can_claim,
     _check_can_submit_task,
     _check_can_submit_task_parent_ownership,
+    _check_can_update_task_status,
     _derive_company_project_for_caller,
     _require_role,
     claim_task,
     submit_task,
+    update_task_status,
 )
 
 
@@ -882,3 +884,247 @@ async def test_claim_task_role_mismatch_raises_permission_error(
         "SELECT id FROM audit_log WHERE action = 'task.claim'"
     )
     assert audits == []
+
+
+# ---------------------------------------------------------------------------
+# Commit 5 tests: update_task_status state machine + helper + handler
+# ---------------------------------------------------------------------------
+
+
+# ----- _check_can_update_task_status (two-clause OR; cancelled-conditional)
+
+
+@pytest.mark.parametrize(
+    (
+        "scenario",
+        "claimed_by",
+        "submitted_by",
+        "submitter_role",
+        "caller_agent_id",
+        "caller_role",
+        "target_status",
+        "expected_pass",
+    ),
+    [
+        # Clause 1 (claimed_by match) passes for any target_status.
+        (
+            "clause_1_claimed_by_match_for_completed",
+            "agent-eng-a", "agent-pm", "pm",
+            "agent-eng-a", "engineer", "completed", True,
+        ),
+        (
+            "clause_1_claimed_by_match_for_cancelled",
+            "agent-eng-a", "agent-pm", "pm",
+            "agent-eng-a", "engineer", "cancelled", True,
+        ),
+        # Clause 2 (cancelled + role match via UUID submitter) passes.
+        (
+            "clause_2_cancelled_role_match_uuid",
+            "agent-eng-a", "agent-pm", "pm",
+            "agent-pm", "pm", "cancelled", True,
+        ),
+        # Clause 2 (cancelled + role match via human:mike literal) passes.
+        (
+            "clause_2_cancelled_role_match_human_mike",
+            "agent-eng-a", HUMAN_MIKE_LITERAL, None,
+            "agent-pm", "pm", "cancelled", True,
+        ),
+        # Clause 2 only applies for cancelled — non-cancelled with
+        # role-match-but-not-claimed-by rejects.
+        (
+            "clause_2_does_not_apply_for_non_cancelled",
+            "agent-eng-a", "agent-pm", "pm",
+            "agent-pm", "pm", "completed", False,
+        ),
+        # Neither clause matches — rejects.
+        (
+            "neither_clause_matches",
+            "agent-eng-a", "agent-pm", "pm",
+            "agent-impl", "implementer", "cancelled", False,
+        ),
+    ],
+)
+def test_check_can_update_task_status_two_clause_or(
+    scenario: str,
+    claimed_by: str,
+    submitted_by: str,
+    submitter_role: str | None,
+    caller_agent_id: str,
+    caller_role: str,
+    target_status: str,
+    expected_pass: bool,
+) -> None:
+    """``_check_can_update_task_status`` enforces two-clause OR per
+    ``06-mcp-tools-phase-one.md:81``: clause 1 (claimed_by match,
+    always applies) OR clause 2 (caller_role == submitter_role, only
+    for target_status='cancelled'). Clause 2 submitter-role
+    resolution structurally identical to
+    ``_check_can_submit_task_parent_ownership`` clause 2 (commit 3);
+    cross-tool extraction tracked at BACKLOG.md per CQ1 deferral.
+
+    Walks the matrix: clause-1-pass / clause-2-pass-via-UUID /
+    clause-2-pass-via-human:mike / clause-2-non-cancelled-rejects /
+    neither-clause-matches."""
+    task = {
+        "claimed_by": claimed_by,
+        "submitted_by": submitted_by,
+        "submitter_role": submitter_role,
+    }
+    if expected_pass:
+        _check_can_update_task_status(
+            task=task,
+            caller_agent_id=caller_agent_id,
+            caller_role=caller_role,
+            target_status=target_status,
+        )
+    else:
+        with pytest.raises(OrchestratorPermissionError, match="cannot"):
+            _check_can_update_task_status(
+                task=task,
+                caller_agent_id=caller_agent_id,
+                caller_role=caller_role,
+                target_status=target_status,
+            )
+
+
+# ----- update_task_status state-machine matrix sentinel (CQ3 Reading A) ----
+
+
+def _state_machine_cases() -> list[tuple[str, str, bool]]:
+    """Generate the full Cartesian (from_status, to_status, allowed)
+    matrix per _ALLOWED_TRANSITIONS. 7 from-states x 6 to-states from
+    the UpdateTaskStatusInput.status Literal = 42 cases."""
+    from meridian_orchestrator.tools.tasks import _ALLOWED_TRANSITIONS
+
+    from_states = list(_ALLOWED_TRANSITIONS.keys())
+    to_states = [
+        "claimed",
+        "in_progress",
+        "completed",
+        "failed",
+        "declined",
+        "cancelled",
+    ]
+
+    cases: list[tuple[str, str, bool]] = []
+    for from_status in from_states:
+        for to_status in to_states:
+            allowed = to_status in _ALLOWED_TRANSITIONS[from_status]
+            cases.append((from_status, to_status, allowed))
+    return cases
+
+
+@pytest.mark.parametrize(
+    ("from_status", "to_status", "allowed"), _state_machine_cases()
+)
+async def test_update_task_status_state_machine_matrix(
+    storage: SqliteStorage,
+    from_status: str,
+    to_status: str,
+    allowed: bool,
+) -> None:
+    """Full-cartesian state-machine sentinel per CQ3 Reading A: walks
+    42 (from_status, to_status) pairs (7 from-states x 6 to-states from
+    UpdateTaskStatusInput.status Literal). Allowed transitions
+    succeed; disallowed transitions raise ConflictError. Sentinel test
+    pins the matrix invariant in ``_ALLOWED_TRANSITIONS``; future
+    refactor of the matrix or transitions catches at this test before
+    silent-fail in production.
+
+    Caller is claimed_by the task to bypass the hierarchy gate cleanly
+    (clause 1 always passes); the matrix is the load-bearing invariant
+    being tested."""
+    task_id = f"t-sm-{from_status}-{to_status}"
+    await storage.execute(
+        "INSERT INTO tasks (id, company_id, project_id, agent_role, "
+        "description, status, claimed_by) VALUES "
+        "(?, 'co1', 'proj1', 'engineer', 'matrix-test', ?, "
+        "'agent-eng-a')",
+        (task_id, from_status),
+    )
+
+    request = UpdateTaskStatusInput(
+        task_id=task_id,
+        status=to_status,  # type: ignore[arg-type]
+    )
+
+    if allowed:
+        out = await update_task_status(
+            storage=storage,
+            request=request,
+            caller_agent_id="agent-eng-a",
+            caller_role="engineer",
+        )
+        assert out.task.status == to_status
+    else:
+        with pytest.raises(ConflictError, match="invalid transition"):
+            await update_task_status(
+                storage=storage,
+                request=request,
+                caller_agent_id="agent-eng-a",
+                caller_role="engineer",
+            )
+
+
+# ----- update_task_status handler (happy path + audit + edge cases) -------
+
+
+async def test_update_task_status_happy_path_writes_audit_with_from_to(
+    storage: SqliteStorage,
+) -> None:
+    """Engineer (claimed_by) updates claimed -> in_progress. Audit row
+    written with action='task.status_change', details_json captures
+    from_status / to_status / notes per CQ6 Reading A minimal-audit
+    shape."""
+    import json
+
+    await storage.execute(
+        "INSERT INTO tasks (id, company_id, project_id, agent_role, "
+        "description, status, claimed_by) VALUES "
+        "('t-update-1', 'co1', 'proj1', 'engineer', 'happy', "
+        "'claimed', 'agent-eng-a')"
+    )
+
+    out = await update_task_status(
+        storage=storage,
+        request=UpdateTaskStatusInput(
+            task_id="t-update-1",
+            status="in_progress",
+            notes="starting work",
+        ),
+        caller_agent_id="agent-eng-a",
+        caller_role="engineer",
+    )
+
+    assert out.task.status == "in_progress"
+    assert out.task.notes == "starting work"
+
+    audits = await storage.fetch_all(
+        "SELECT actor, action, target, details_json FROM audit_log "
+        "WHERE action = 'task.status_change'"
+    )
+    assert len(audits) == 1
+    assert audits[0]["actor"] == "agent-eng-a"
+    assert audits[0]["target"] == "t-update-1"
+    details = json.loads(audits[0]["details_json"])
+    assert details["from_status"] == "claimed"
+    assert details["to_status"] == "in_progress"
+    assert details["notes"] == "starting work"
+
+
+async def test_update_task_status_not_found_raises_not_found(
+    storage: SqliteStorage,
+) -> None:
+    """task_id that doesn't resolve raises NotFoundError. Precursor
+    SELECT catches missing-task before hierarchy / state-machine
+    checks or transaction; CONFLICT is reserved for hierarchy /
+    transition failures."""
+    with pytest.raises(NotFoundError, match="not found"):
+        await update_task_status(
+            storage=storage,
+            request=UpdateTaskStatusInput(
+                task_id="t-bogus", status="completed"
+            ),
+            caller_agent_id="agent-eng-a",
+            caller_role="engineer",
+        )

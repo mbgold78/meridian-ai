@@ -164,8 +164,11 @@ from meridian_orchestrator.tools.tasks import (
     ClaimTaskOutput,
     SubmitTaskInput,
     SubmitTaskOutput,
+    UpdateTaskStatusInput,
+    UpdateTaskStatusOutput,
     claim_task,
     submit_task,
+    update_task_status,
 )
 
 logger = structlog.get_logger(__name__)
@@ -1693,6 +1696,41 @@ def _register_task_tools(
         return await claim_task(
             storage=storage,
             request=ClaimTaskInput(task_id=task_id),
+            caller_agent_id=agent_id,
+            caller_role=caller_role,
+        )
+
+    @mcp.tool(
+        name="update_task_status",
+        description=(
+            "Update a task's status. Hierarchy gate (two-clause OR): "
+            "caller must be claimed_by the task OR (only for "
+            "target='cancelled') caller's role must equal the role "
+            "that submitted the task. State-machine validation per "
+            "05-data-model.md tasks.status: invalid transitions "
+            "(e.g., 'completed' -> 'claimed' or any transition out of "
+            "a terminal state) raise CONFLICT. Atomic conditional "
+            "UPDATE with race protection on starting state. Audited "
+            "as task.status_change with from/to states."
+        ),
+    )
+    async def _update_task_status(
+        task_id: str,
+        status: str,
+        notes: str | None = None,
+    ) -> UpdateTaskStatusOutput:
+        agent_id = _resolve_agent_id()
+        await _observe_caller(storage, token_store, "update_task_status")
+        caller_role = _resolve_caller_role_via_token()
+        resolver = PermissionResolver(registry.configs_by_role())
+        resolver.require_tool(caller_role, "update_task_status")  # type: ignore[arg-type]
+        return await update_task_status(
+            storage=storage,
+            request=UpdateTaskStatusInput(
+                task_id=task_id,
+                status=status,  # type: ignore[arg-type]  # Pydantic Literal validates at construction
+                notes=notes,
+            ),
             caller_agent_id=agent_id,
             caller_role=caller_role,
         )
