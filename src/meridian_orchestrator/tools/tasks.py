@@ -697,8 +697,16 @@ async def update_task_status(
     SELECT-verify after UPDATE confirms the transition succeeded for
     THIS caller's target state.
 
-    **Atomicity** (per CQ4): full ``storage.transaction()`` wrap
-    covering precursor SELECT + UPDATE + SELECT-verify + audit.
+    **Atomicity** (per CQ4 + F5 codex post-close correction):
+    transaction covers UPDATE + SELECT-verify + audit. Precursor SELECT,
+    hierarchy gate, and state-machine validation run OUTSIDE the
+    transaction (cheap pure-Python checks; no race-window because
+    UPDATE's ``WHERE status=?`` clause provides race protection on the
+    starting state — concurrent transitions are mutually exclusive at
+    the SQL layer regardless of when the precursor SELECT ran).
+    Correctness intact via WHERE-clause race protection; the
+    transaction scope reflects what's atomically committed (state
+    write + audit), not what's read.
 
     **Audit** (per CQ6 Reading A): action ``task.status_change``,
     target=``task_id``, details capture ``{task_id, from_status,

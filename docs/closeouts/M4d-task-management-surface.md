@@ -24,7 +24,7 @@ Nine substantive commits + commit-0 chore + commit 8.5 hygiene fix. Test count t
 | 7 | `d48b632` | set_task_priority + cohort coverage activation (cross-module) | 8 | 10 | -20% |
 | 8 | `0ed3621` | chain-level e2e tests + M4d-acceptance-demo-criteria.md | 3 | 4 | -25% |
 | 8.5 | `e9c2ab5` | F1 audit-vs-api_usage divergence fix + T1 paired tests | 0 (in-place additions) | 0 | n/a |
-| 9 | (this) | closeout doc + drift-scan + sub-milestone-boundary scan + spec amendments + α demo execution | TBD | TBD | n/a |
+| 9 | `6b5ba1b` | closeout doc + drift-scan + sub-milestone-boundary scan + spec amendments + α demo execution | 0 | n/a | n/a |
 
 **Trajectory pattern** (validated across 8 data points; chapter 5 below): unique-fn count correlates with commit-shape sub-category, not commit number. Hypothesis B (read-side per-tool baseline materially lower than write-side) empirically confirmed at commit 6.
 
@@ -87,7 +87,7 @@ Watch entries at chain start were 6 (carried from M5-continuous-pm-driver close)
 
 ## Codex finding status
 
-**Full codex review at commit 8 close** (commits 0-8 reviewed). Findings ingested:
+**Pre-close fresh-eyes Agent review at commit 8 caught F1 / A1 / A2 / A3 / D1 / D2 / T2 / Q1.** External Codex post-close review ran on 2026-05-07 against commits 0-9 plus 8.5; findings route through this amendment / BACKLOG (post-close findings: F1 permission graph leakage [P1] → standalone fix-commit; F2 denied-tools-mutate-caller-activity [P1] → standalone fix-commit; F3 set_task_priority audit from_priority race → BACKLOG; F4 ancestor gate inclusive-self → CQ1 commit 9 closeout disposition Reading A spec amendment per Mike-decision routing; F5 atomicity docstring → corrected at this amendment commit; F6 closeout review framing → this revised passage; F7 closeout table TBD → updated; F8 α-demo claim refined). Findings ingested:
 
 - **F1 (CRITICAL)** — `record_api_call` audit details wrote `request.task_type` instead of `resolved_task_type`. Audit and api_usage diverged on every server-derived task_type case. **Fixed at commit 8.5** (`e9c2ab5`); paired T1 audit-vs-api_usage parity assertions added across 3 task_type α tests.
 - **A1** (`get_subtasks` visibility filter "claimed_by" vs spec "own chain") — **resolved at commit 9 closeout drift-scan** per CQ1 Reading A: spec amended to "own claimed (Phase 1 simplification)" with Phase 2 BACKLOG generalization entry.
@@ -238,6 +238,8 @@ One pattern; carries the closing-stage lesson of M4d's review process.
 
 **Both reviewers required.** Single-reviewer (whether disposition-trail or fresh-eyes alone) leaves the other class of bugs latent. M4d's commit 8 codex review pause was the operational instance of dual-reviewer discipline; F1 surfaced; commit 8.5 corrected. Future sub-milestones: codex review at commit 8 close (pre-closeout) is the M4d-codified discipline.
 
+**Refinement (post-close codex review, 2026-05-07)**: Codex post-close review caught F1 (permission graph leakage) and F2 (observation-before-allowlist) — **both spec violations** — that neither Code's disposition-trail review nor Code's internal Agent fresh-eyes review caught at the pre-close gate. Empirical validation that **external fresh-eyes catches what internal fresh-eyes misses**. Internal Agent dispatch (run within Code's session against same disposition state) and external codex (run separately by operator against committed state) are different review classes; both should run at major boundaries. Updated discipline: dual-reviewer at commit 8 close (internal Agent) PLUS post-close external codex review before sub-milestone fully closes; F1+F2 catches at post-close are routed via amendment/fix-commit cycle (this commit + workstreams 1+2).
+
 ## Chapter 5 — F2.1 trajectory and sub-category framework formalization
 
 The F2.1 surface-as-finding rule is now well-grounded across **8 data points** (commits 1-8). Sub-category framework empirically supported.
@@ -306,7 +308,7 @@ Per `docs/working/M4d-acceptance-demo-criteria.md` (commit 8 deliverable). Demo 
 **M4d closes α-verified.** β is operational-use-event rather than M4d-correctness-verification; gate semantics differ. Three reasons for the routing:
 
 1. β depends on Mike's interactive session with real subprocess spawns + real substrate commits — substantial operational session, not quick verification. Forcing same-day-before-commit-9 would couple M4d closeout to operational timing artificially.
-2. α-verified state is clean closeout point; M4 acceptance bar (line 132 load-bearing demo) met end-to-end via production MCP path. β verifies operational USE itself, not M4d correctness.
+2. α-verified state is clean closeout point: six task tools MCP-path verified; cohort α (workflow_id + task_type) verified via record_api_call handler-integration tests at `tests/integration/test_record_api_call.py` (NOT via MCP wrapper for `record_api_call`'s α path; the α gate exercises the recursive CTE walk through the handler interface). β verifies operational USE itself with substrate complexity, not M4d correctness.
 3. β scoped under M5-flag-flips (activates operational mode via `MERIDIAN_ORCH_ENABLE_ENGINEER_SUPERVISOR=true` flip) or M5-acceptance (validates operational mode end-to-end with real work) reflects gate semantics correctly.
 
 Rejected alternatives at commit 9 disposition:

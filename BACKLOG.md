@@ -177,6 +177,21 @@ Per-product work_**domain** (e.g., `code_implementation`, `substrate_review`, `c
 
 **Cost**: ~5 LOC; extend existing test or add parallel `test_task_type_alpha_cycle_defense_returns_none`.
 
+### set_task_priority audit from_priority race-condition under concurrent writes
+
+`tools/tasks.py:set_task_priority` reads `from_priority` from the `_check_can_set_priority` helper return BEFORE entering the transaction; the helper SELECT happens outside transaction scope. Under concurrent set_task_priority calls (T1 reads priority=3; T2 reads priority=3; T1 UPDATE priority=1; T2 UPDATE priority=2), T2's audit `from_priority=3` is stale — actual prior state at T2's UPDATE was 1 (T1's result), not 3. F3 from codex post-close review at M4d commit 9 close.
+
+**Trigger**: first instance where audit `from_priority` discrepancy causes operational confusion OR Phase 2 introduces multi-operator priority-change scenarios where the race window matters operationally.
+
+**Fix options**:
+- (1) `UPDATE ... RETURNING old_priority` (SQLite 3.35+ supports RETURNING) — single-query atomic from-state capture
+- (2) Write-lock-with-retry (`BEGIN IMMEDIATE` + retry on conflict) — heavier; pessimistic
+- (3) Predicate-with-conflict-path (`UPDATE ... WHERE id=? AND priority=?` for caller-supplied expected from-state) — caller-provides-prior-state shape
+
+**Cost**: ~20-35 LOC plus concurrency test exercising the race window.
+
+**Cross-reference**: `tools/tasks.py:set_task_priority`; `_check_can_set_priority` helper return shape includes `priority` field handler reuses.
+
 ### Replace `assert updated is not None` with explicit ConflictError raise in set_task_priority
 
 `tools/tasks.py:set_task_priority` uses `assert updated is not None` after the UPDATE+SELECT pattern. Asserts strip with `python -O`; if a row is deleted concurrently between gate-check and SELECT (rare), the assert disappears in optimized builds and `Task(**dict(updated))` raises `TypeError` on None. Q1 from codex review at M4d commit 8 close.
