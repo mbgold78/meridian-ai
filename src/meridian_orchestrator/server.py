@@ -1584,9 +1584,9 @@ def _register_agent_tools(
         role: str | None = None, status: str | None = None
     ) -> ListAgentsOutput:
         caller_role = _resolve_caller_role(registry)
-        await _observe_caller(storage, token_store,"list_agents")
         resolver = PermissionResolver(registry.configs_by_role())
         resolver.require_tool(caller_role, "list_agents")  # type: ignore[arg-type]
+        await _observe_caller(storage, token_store,"list_agents")
         return list_agents(registry, ListAgentsInput(role=role, status=status))
 
     @mcp.tool(
@@ -1595,9 +1595,9 @@ def _register_agent_tools(
     )
     async def _get_agent_config(agent_id: str) -> GetAgentConfigOutput:
         caller_role = _resolve_caller_role(registry)
-        await _observe_caller(storage, token_store,"get_agent_config")
         resolver = PermissionResolver(registry.configs_by_role())
         resolver.require_tool(caller_role, "get_agent_config")  # type: ignore[arg-type]
+        await _observe_caller(storage, token_store,"get_agent_config")
         result = get_agent_config(registry, GetAgentConfigInput(agent_id=agent_id))
         if result is None:
             raise NotFoundError(f"agent_id={agent_id!r} not found")
@@ -1609,9 +1609,9 @@ def _register_agent_tools(
     )
     async def _get_org_chart() -> GetOrgChartOutput:
         caller_role = _resolve_caller_role(registry)
-        await _observe_caller(storage, token_store,"get_org_chart")
         resolver = PermissionResolver(registry.configs_by_role())
         resolver.require_tool(caller_role, "get_org_chart")  # type: ignore[arg-type]
+        await _observe_caller(storage, token_store,"get_org_chart")
         return get_org_chart(registry, GetOrgChartInput())
 
 
@@ -1662,11 +1662,11 @@ def _register_task_tools(
         task_type: str | None = None,
     ) -> SubmitTaskOutput:
         agent_id = _resolve_agent_id()
-        await _observe_caller(storage, token_store, "submit_task")
         caller_role = _resolve_caller_role_via_token()
         caller_source = _resolve_caller_source(token_store)
         resolver = PermissionResolver(registry.configs_by_role())
         resolver.require_tool(caller_role, "submit_task")  # type: ignore[arg-type]
+        await _observe_caller(storage, token_store, "submit_task")
         request = SubmitTaskInput(
             agent_role=agent_role,
             description=description,
@@ -1698,10 +1698,10 @@ def _register_task_tools(
     )
     async def _claim_task(task_id: str) -> ClaimTaskOutput:
         agent_id = _resolve_agent_id()
-        await _observe_caller(storage, token_store, "claim_task")
         caller_role = _resolve_caller_role_via_token()
         resolver = PermissionResolver(registry.configs_by_role())
         resolver.require_tool(caller_role, "claim_task")  # type: ignore[arg-type]
+        await _observe_caller(storage, token_store, "claim_task")
         return await claim_task(
             storage=storage,
             request=ClaimTaskInput(task_id=task_id),
@@ -1729,10 +1729,10 @@ def _register_task_tools(
         notes: str | None = None,
     ) -> UpdateTaskStatusOutput:
         agent_id = _resolve_agent_id()
-        await _observe_caller(storage, token_store, "update_task_status")
         caller_role = _resolve_caller_role_via_token()
         resolver = PermissionResolver(registry.configs_by_role())
         resolver.require_tool(caller_role, "update_task_status")  # type: ignore[arg-type]
+        await _observe_caller(storage, token_store, "update_task_status")
         return await update_task_status(
             storage=storage,
             request=UpdateTaskStatusInput(
@@ -1766,10 +1766,10 @@ def _register_task_tools(
         offset: int = 0,
     ) -> GetQueueOutput:
         agent_id = _resolve_agent_id()
-        await _observe_caller(storage, token_store, "get_queue")
         caller_role = _resolve_caller_role_via_token()
         resolver = PermissionResolver(registry.configs_by_role())
         resolver.require_tool(caller_role, "get_queue")  # type: ignore[arg-type]
+        await _observe_caller(storage, token_store, "get_queue")
         return await get_queue(
             storage=storage,
             permissions=resolver,
@@ -1799,10 +1799,10 @@ def _register_task_tools(
         parent_task_id: str,
     ) -> GetSubtasksOutput:
         agent_id = _resolve_agent_id()
-        await _observe_caller(storage, token_store, "get_subtasks")
         caller_role = _resolve_caller_role_via_token()
         resolver = PermissionResolver(registry.configs_by_role())
         resolver.require_tool(caller_role, "get_subtasks")  # type: ignore[arg-type]
+        await _observe_caller(storage, token_store, "get_subtasks")
         return await get_subtasks(
             storage=storage,
             permissions=resolver,
@@ -1828,10 +1828,10 @@ def _register_task_tools(
         priority: int,
     ) -> SetTaskPriorityOutput:
         agent_id = _resolve_agent_id()
-        await _observe_caller(storage, token_store, "set_task_priority")
         caller_role = _resolve_caller_role_via_token()
         resolver = PermissionResolver(registry.configs_by_role())
         resolver.require_tool(caller_role, "set_task_priority")  # type: ignore[arg-type]
+        await _observe_caller(storage, token_store, "set_task_priority")
         return await set_task_priority(
             storage=storage,
             permissions=resolver,
