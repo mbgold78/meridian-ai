@@ -160,8 +160,11 @@ from meridian_orchestrator.tools.supervisor import (
     signal_compaction,
 )
 from meridian_orchestrator.tools.tasks import (
+    ClaimTaskInput,
+    ClaimTaskOutput,
     SubmitTaskInput,
     SubmitTaskOutput,
+    claim_task,
     submit_task,
 )
 
@@ -1667,6 +1670,31 @@ def _register_task_tools(
             caller_agent_id=agent_id,
             caller_role=caller_role,
             caller_source=caller_source,
+        )
+
+    @mcp.tool(
+        name="claim_task",
+        description=(
+            "Claim a pending task from the queue. Hierarchy gate: "
+            "caller's role must equal task.agent_role exactly (sibling-"
+            "role claims rejected even within the same dispatch chain). "
+            "Atomic conditional UPDATE provides race protection — "
+            "concurrent claims are mutually exclusive; failed claims "
+            "raise CONFLICT (already claimed OR starting-from-non-"
+            "pending state). Audited as task.claim."
+        ),
+    )
+    async def _claim_task(task_id: str) -> ClaimTaskOutput:
+        agent_id = _resolve_agent_id()
+        await _observe_caller(storage, token_store, "claim_task")
+        caller_role = _resolve_caller_role_via_token()
+        resolver = PermissionResolver(registry.configs_by_role())
+        resolver.require_tool(caller_role, "claim_task")  # type: ignore[arg-type]
+        return await claim_task(
+            storage=storage,
+            request=ClaimTaskInput(task_id=task_id),
+            caller_agent_id=agent_id,
+            caller_role=caller_role,
         )
 
 

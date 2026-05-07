@@ -47,14 +47,17 @@ from meridian_orchestrator.storage.sqlite import SqliteStorage
 from meridian_orchestrator.tools.tasks import (
     HUMAN_LITERAL_ROLE_MAP,
     HUMAN_MIKE_LITERAL,
+    ClaimTaskInput,
     GetQueueInput,
     SetTaskPriorityInput,
     SubmitTaskInput,
     UpdateTaskStatusInput,
+    _check_can_claim,
     _check_can_submit_task,
     _check_can_submit_task_parent_ownership,
     _derive_company_project_for_caller,
     _require_role,
+    claim_task,
     submit_task,
 )
 
@@ -699,3 +702,183 @@ def test_human_literal_role_map_phase_1_shape() -> None:
     Phase 1 simplification; Phase 2 generalization tracked in BACKLOG."""
     assert HUMAN_MIKE_LITERAL == "human:mike"
     assert HUMAN_LITERAL_ROLE_MAP == {"human:mike": "pm"}
+
+
+# ---------------------------------------------------------------------------
+# Commit 4 tests: claim_task handler + _check_can_claim helper
+# ---------------------------------------------------------------------------
+
+
+# ----- _check_can_claim (strict role equality; no DB; no PermissionResolver)
+
+
+@pytest.mark.parametrize(
+    ("caller_role", "target_agent_role", "should_pass"),
+    [
+        ("engineer", "engineer", True),
+        ("implementer", "implementer", True),
+        ("tester", "tester", True),
+        ("pm", "pm", True),
+        # Sibling-role rejection (spec line 111 anti-example):
+        ("implementer", "tester", False),
+        ("tester", "implementer", False),
+        # Inverse-hierarchy rejection:
+        ("engineer", "pm", False),
+        ("pm", "engineer", False),
+        # Cross-tier rejection:
+        ("pm", "implementer", False),
+    ],
+)
+def test_check_can_claim_strict_role_equality(
+    caller_role: str, target_agent_role: str, should_pass: bool
+) -> None:
+    """``_check_can_claim`` enforces strict ``caller_role ==
+    target_agent_role`` per ``06-mcp-tools-phase-one.md:111``. NOT a
+    hierarchy walk; sibling-role claims rejected even within the same
+    dispatch chain (Implementer cannot claim Tester tasks). Walks the
+    role x role matrix to confirm equality semantic."""
+    if should_pass:
+        _check_can_claim(
+            caller_role=caller_role, target_agent_role=target_agent_role
+        )
+    else:
+        with pytest.raises(
+            OrchestratorPermissionError, match="strict role equality"
+        ):
+            _check_can_claim(
+                caller_role=caller_role,
+                target_agent_role=target_agent_role,
+            )
+
+
+# ----- claim_task handler -------------------------------------------------
+
+
+async def _seed_pending_task(
+    storage: SqliteStorage,
+    *,
+    task_id: str,
+    agent_role: str = "engineer",
+    submitted_by: str = "agent-pm",
+) -> None:
+    await storage.execute(
+        "INSERT INTO tasks (id, company_id, project_id, agent_role, "
+        "description, submitted_by, status) VALUES "
+        "(?, 'co1', 'proj1', ?, 'pending task', ?, 'pending')",
+        (task_id, agent_role, submitted_by),
+    )
+
+
+async def test_claim_task_pending_to_claimed_happy_path(
+    storage: SqliteStorage,
+) -> None:
+    """Engineer claims an engineer-targeted pending task. Atomic UPDATE
+    flips status pending → claimed; SELECT-verify returns the row;
+    audit row written with action='task.claim'."""
+    await _seed_pending_task(storage, task_id="t-claim-1")
+
+    out = await claim_task(
+        storage=storage,
+        request=ClaimTaskInput(task_id="t-claim-1"),
+        caller_agent_id="agent-eng-a",
+        caller_role="engineer",
+    )
+
+    assert out.task.id == "t-claim-1"
+    assert out.task.status == "claimed"
+    assert out.task.claimed_by == "agent-eng-a"
+    assert out.task.claimed_at is not None
+
+    audits = await storage.fetch_all(
+        "SELECT actor, action, target FROM audit_log "
+        "WHERE action = 'task.claim'"
+    )
+    assert len(audits) == 1
+    assert audits[0]["actor"] == "agent-eng-a"
+    assert audits[0]["target"] == "t-claim-1"
+
+
+async def test_claim_task_starting_from_claimed_state_raises_conflict(
+    storage: SqliteStorage,
+) -> None:
+    """Conditional UPDATE's WHERE status='pending' clause matches 0
+    rows when the task is already in 'claimed' state. SELECT-verify
+    returns None (status != 'pending' OR claimed_by != caller); raises
+    CONFLICT. Mechanically equivalent to the race-condition-via-
+    SELECT-verify-failure scenario; test exercises the
+    starting-from-non-pending-state pathway."""
+    await storage.execute(
+        "INSERT INTO tasks (id, company_id, project_id, agent_role, "
+        "description, claimed_by, claimed_at, status) VALUES "
+        "('t-already-claimed', 'co1', 'proj1', 'engineer', "
+        "'pre-claimed', 'agent-eng-b', datetime('now'), 'claimed')"
+    )
+
+    with pytest.raises(ConflictError, match="not in pending state"):
+        await claim_task(
+            storage=storage,
+            request=ClaimTaskInput(task_id="t-already-claimed"),
+            caller_agent_id="agent-eng-a",
+            caller_role="engineer",
+        )
+
+    # Audit was rolled back; original claimed_by preserved.
+    row = await storage.fetch_one(
+        "SELECT claimed_by FROM tasks WHERE id = 't-already-claimed'"
+    )
+    assert row is not None
+    assert row["claimed_by"] == "agent-eng-b"
+    audits = await storage.fetch_all(
+        "SELECT id FROM audit_log WHERE action = 'task.claim'"
+    )
+    assert audits == []
+
+
+async def test_claim_task_not_found_raises_not_found(
+    storage: SqliteStorage,
+) -> None:
+    """task_id that doesn't resolve raises NotFoundError. The
+    pre-transaction SELECT for hierarchy check catches missing-task
+    before the conditional UPDATE; CONFLICT is reserved for
+    state-mismatch failures."""
+    with pytest.raises(NotFoundError, match="not found"):
+        await claim_task(
+            storage=storage,
+            request=ClaimTaskInput(task_id="t-bogus"),
+            caller_agent_id="agent-eng-a",
+            caller_role="engineer",
+        )
+
+
+async def test_claim_task_role_mismatch_raises_permission_error(
+    storage: SqliteStorage,
+) -> None:
+    """Implementer attempting to claim a Tester-targeted task fails
+    the strict-equality hierarchy gate per spec line 111. The check
+    runs after task lookup but before transaction; no UPDATE
+    attempted; no audit row."""
+    await _seed_pending_task(
+        storage, task_id="t-tester", agent_role="tester"
+    )
+
+    with pytest.raises(
+        OrchestratorPermissionError, match="strict role equality"
+    ):
+        await claim_task(
+            storage=storage,
+            request=ClaimTaskInput(task_id="t-tester"),
+            caller_agent_id="agent-impl",
+            caller_role="implementer",
+        )
+
+    # Task remains pending; no audit row.
+    row = await storage.fetch_one(
+        "SELECT status, claimed_by FROM tasks WHERE id = 't-tester'"
+    )
+    assert row is not None
+    assert row["status"] == "pending"
+    assert row["claimed_by"] is None
+    audits = await storage.fetch_all(
+        "SELECT id FROM audit_log WHERE action = 'task.claim'"
+    )
+    assert audits == []

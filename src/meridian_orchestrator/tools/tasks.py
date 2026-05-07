@@ -457,6 +457,133 @@ async def submit_task(
     return SubmitTaskOutput(task=task)
 
 
+# ----- claim_task ---------------------------------------------------------
+
+
+def _check_can_claim(
+    *, caller_role: str, target_agent_role: str
+) -> None:
+    """Strict role-equality gate for ``claim_task`` per
+    ``06-mcp-tools-phase-one.md:111`` ("caller's role must equal
+    ``task.agent_role``. Implementer cannot claim Tester tasks even if
+    both report to the same Engineer.").
+
+    NOT a hierarchy walk; strict ``==``. Distinct from
+    ``submit_task``'s ``manages_directly`` (one-hop adjacency query)
+    and from ``get_subtasks``'s ``is_ancestor`` (transitive subtree
+    query). Per-tool hierarchy-gate semantic diversity is by design;
+    tracked in ``BACKLOG.md`` § watch-for-pattern (per-tool
+    hierarchy-gate semantic diversity entry).
+
+    No ``PermissionResolver`` dependency: the check has no graph
+    operations to delegate. Pre-staging a method like
+    ``PermissionResolver.is_same_role`` would create a false
+    abstraction (the three "primitives" share input shape but not
+    semantics — graph reachability vs graph adjacency vs Python ``==``
+    don't constitute a coherent family per CQ1 disposition,
+    M4d-task-management-surface commit 4, 2026-05-07).
+    """
+    if caller_role != target_agent_role:
+        raise OrchestratorPermissionError(
+            f"caller role {caller_role!r} cannot claim task with "
+            f"agent_role={target_agent_role!r} (strict role equality "
+            "required per 06-mcp-tools-phase-one.md:111; sibling-role "
+            "claims rejected even within the same dispatch chain)"
+        )
+
+
+async def claim_task(
+    *,
+    storage: Storage,
+    request: ClaimTaskInput,
+    caller_agent_id: str,
+    caller_role: str,
+) -> ClaimTaskOutput:
+    """Agent claims a task from the queue.
+
+    **Hierarchy gate** (per spec line 111): strict ``caller_role ==
+    task.agent_role``. No graph walk; sibling-role claims rejected
+    even within the same dispatch chain (Implementer cannot claim
+    Tester tasks).
+
+    **Atomic claim** (per spec line 109 + CQ2 disposition): conditional
+    UPDATE with ``WHERE status = 'pending'`` provides race protection
+    at the SQL level. ``Storage.execute`` returns ``None`` (no
+    rowcount via the current Storage interface; BACKLOG entry tracks
+    rowcount-API extension when third instance of two-query
+    atomic-update pattern surfaces). SELECT-verify after UPDATE
+    confirms the claim succeeded for THIS caller — distinguishes
+    a successful claim from a concurrent claim by another caller
+    OR a non-pending starting state (both observe as "UPDATE matched
+    0 rows"; both raise CONFLICT).
+
+    **Atomicity** (per CQ4): full ``storage.transaction()`` wrap
+    covering UPDATE + SELECT-verify + audit write. Failure
+    mid-handler rolls back all writes plus the audit row.
+
+    **Audit** (per CQ5 minimal-audit-for-minimal-input): action
+    ``task.claim``, target=``task_id``, details=``{task_id,
+    claimed_by}``. Symmetric with ``task.submit``'s full-input
+    capture; the input is single-field so the audit details are
+    correspondingly minimal.
+
+    Raises :class:`NotFoundError` when ``task_id`` doesn't resolve;
+    raises :class:`OrchestratorPermissionError` on hierarchy
+    mismatch; raises :class:`ConflictError` when the conditional
+    UPDATE fails (concurrent claim OR starting-from-non-pending state).
+    """
+    # Read task's agent_role for hierarchy check (cheap; pre-transaction).
+    row = await storage.fetch_one(
+        "SELECT agent_role FROM tasks WHERE id = ?",
+        (request.task_id,),
+    )
+    if row is None:
+        raise NotFoundError(f"task_id={request.task_id!r} not found")
+
+    _check_can_claim(
+        caller_role=caller_role, target_agent_role=row["agent_role"]
+    )
+
+    async with storage.transaction():
+        # Atomic conditional claim. WHERE status='pending' is the race
+        # protection clause — concurrent claims are mutually exclusive
+        # at the SQL level.
+        await storage.execute(
+            "UPDATE tasks SET claimed_by = ?, "
+            "claimed_at = datetime('now'), status = 'claimed' "
+            "WHERE id = ? AND status = 'pending'",
+            (caller_agent_id, request.task_id),
+        )
+        # SELECT-verify: claimed_by = ? predicate confirms THIS caller
+        # claimed (distinguishes from concurrent claim by another caller);
+        # status = 'claimed' predicate confirms the UPDATE matched
+        # (distinguishes from starting-from-non-pending state).
+        updated = await storage.fetch_one(
+            "SELECT * FROM tasks WHERE id = ? AND claimed_by = ? "
+            "AND status = 'claimed'",
+            (request.task_id, caller_agent_id),
+        )
+        if updated is None:
+            raise ConflictError(
+                f"task_id={request.task_id!r} claim failed: task is "
+                "not in pending state (already claimed by another "
+                "caller, terminal, or status changed)"
+            )
+
+        await write_audit(
+            storage,
+            actor=caller_agent_id,
+            action="task.claim",
+            target=request.task_id,
+            details={
+                "task_id": request.task_id,
+                "claimed_by": caller_agent_id,
+            },
+        )
+
+    return ClaimTaskOutput(task=Task(**dict(updated)))
+
+
 __all__ = [
     "HUMAN_LITERAL_ROLE_MAP",
     "HUMAN_MIKE_LITERAL",
@@ -472,5 +599,6 @@ __all__ = [
     "SubmitTaskOutput",
     "UpdateTaskStatusInput",
     "UpdateTaskStatusOutput",
+    "claim_task",
     "submit_task",
 ]
