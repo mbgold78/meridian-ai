@@ -36,6 +36,7 @@ class SubmitTaskInput(BaseModel):
     priority: int = 2         # 1..5
     complexity: int = 3       # 1..5
     parent_task_id: str | None = None  # if this is a sub-task
+    task_type: TaskType | None = None  # work-shape cohort key (M4d)
 
 class SubmitTaskOutput(BaseModel):
     task: Task
@@ -889,7 +890,7 @@ class GetAuditLogOutput(BaseModel):
 | update_task_status | yes | yes (own/sub) | yes (own/sub) | own only | own only |
 | set_task_priority | yes | yes | yes | no | no |
 | claim_task | no | yes | yes | yes | yes |
-| get_subtasks | yes | yes | yes | own chain | own chain |
+| get_subtasks | yes | yes | yes | own claimed (Phase 1 simplification) | own claimed (Phase 1 simplification) |
 | record_api_call | n/a | yes | yes | yes | yes |
 | get_token_usage | yes | subtree | subtree | own | own |
 | get_burn_rate | yes | yes | yes | no | no |

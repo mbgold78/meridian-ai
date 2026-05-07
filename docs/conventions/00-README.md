@@ -473,3 +473,66 @@ evaluation.
 work + M5-flag-flips will provide additional data points. Pin as a
 convention if cadence-vs-density correlation holds across 2-3 more
 chains.
+
+---
+
+## 10. Python docstrings use ASCII for ambiguous Unicode (RUF002)
+
+**Rule:** Python docstrings use ASCII for ambiguous Unicode (Greek
+letters such as `α`, `β`; multiplication sign `×`; etc.) per ruff
+RUF002. Markdown, SQL, and code comments retain Unicode.
+
+**Reasoning:** cousin to closed-enum sentinel pattern (Convention 4
+trail). Both prevent silent style drift. Ruff catches the issue at
+lint time; convention pre-empts re-discovery at every commit. Python
+docstrings are tooling-introspected in ways markdown/SQL aren't,
+making the ASCII vs Unicode distinction load-bearing for tooling
+compatibility.
+
+**Established at:** M4d-task-management-surface commits 2 (α→alpha
+in tasks.py docstring) and 4 (×→x in test_tasks.py docstring).
+Promoted at M4d commit 9 closeout per CQ2 disposition.
+
+**Known exceptions:** none — Python docstrings unambiguously use
+ASCII; markdown / SQL / code comments unambiguously retain Unicode.
+
+---
+
+## 11. Programmatic-Cartesian matrix sentinels
+
+**Rule:** parametrized matrix sentinels generate Cartesian
+programmatically from a source-of-truth dict + input domain, NOT
+from hardcoded pair lists.
+
+**Reasoning:** structural robustness against silent coverage gaps.
+Cousin to closed-enum sentinel pattern (Convention 4 trail) — both
+assert the test against the source-of-truth structure (dict / Literal
+/ CHECK constraint), so future refactors that touch the source are
+caught automatically.
+
+**Worked example:** state-machine matrix at `update_task_status` in
+M4d commit 5. `_state_machine_cases()` (in `tests/unit/tools/test_tasks.py`)
+generates the 42 `(from, to)` pairs from `_ALLOWED_TRANSITIONS` dict
+(in `tools/tasks.py`) + the `UpdateTaskStatusInput.status` Literal
+input domain. The sentinel test (`test_update_task_status_state_machine_matrix`)
+walks the generated cases. A future refactor of the dict OR the
+Literal triggers the sentinel before silent drift lands.
+
+**Operational shape:** at the test site, write a `def _matrix_cases()
+-> list[tuple[...]]` helper that imports the source-of-truth dict
+and the input domain (Literal / set), iterates the Cartesian, and
+returns the `(input1, input2, expected)` tuples. Decorate the test
+with `@pytest.mark.parametrize` over the helper's return value. The
+test asserts behavior matches `expected` derived from the dict.
+
+**Established at:** M4d-task-management-surface commit 5 first
+instance shipping. Promoted at M4d commit 9 closeout per CQ2
+disposition (single-instance promotion rationale: cheap; cousin to
+established convention; pre-emptive codification saves future-Code
+re-discovery).
+
+**Known exceptions:** none yet. Possible exception shape: matrices
+where the source-of-truth structure is itself dynamic (e.g.,
+operator-supplied at company instantiation); programmatic Cartesian
+would need to read the dynamic source. Surface as exception when
+encountered.

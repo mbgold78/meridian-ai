@@ -51,7 +51,7 @@ Sketched in `docs/kickoff/12-phase-two-engineering-team.md`.
 - Add `idx_pm_focus_bound_workflow` index on `pm_current_focus.bound_workflow_id` when workflow-cohort queries against `pm_current_focus` become hot. Deferred at M5-continuous-pm-driver commit 2 prep (F3.6 Q5 disposition, 2026-05-04): the loop's at-most-once-per-tick `read_current_focus` lookup is well within sequential-scan bounds even at 1000+ row counts; workflow-cohort surfaces against `pm_current_focus` are not load-bearing pre-M5-flag-flips, and the workflow_id-on-`api_usage` index from migration 0009 is the load-bearing surface for cost-cohort queries (api_usage rows outnumber pm_current_focus rows by 100x+). Trigger to revisit: a real workflow-cohort query against `pm_current_focus` (e.g., "all foci bound to workflow X with their completion findings") shows up in operator-side ad-hoc SQL or as a typed output field on a future `get_focus_history` MCP tool. Touchpoint: `storage/sql/0010_pm_current_focus.sql` (new index would land in a follow-up migration).
 - Add cohort indexes (`source_event_kind`, individually or in combination with `re_eval_state`) on `audit_sample_log` when sample-cohort queries become hot. Deferred at M5-continuous-pm-driver commit 4 prep (F5.2 Q5 disposition mirror of commit 2's pattern, 2026-05-05): commit 4 ships single composite index on `(re_eval_state, sampled_at)` supporting the future async re-evaluator's pending-row scan and operator-side time-window queries; row counts at default-disabled config (audit_sample_percentage=0.0) and even at low non-zero percentages stay well within sequential-scan bounds for cohort filters. Trigger to revisit: real workload at non-zero sampling percentage shows operators querying by source_event_kind repeatedly via ad-hoc SQL or via a future typed output on operator-facing observability surfaces. Touchpoint: `storage/sql/0012_audit_sample_log.sql` (new index would land in a follow-up migration).
 - **Partial roster operation** (M5-subscription-routing commit 0.5): if a YAML's `reports_to` names a role whose token is missing from the keyring, that parent isn't in the registry's in-memory snapshot and `agents.seed_into_storage` sets `reports_to=NULL` for the dependent row rather than raising. `AgentRegistry.initial_load` already logs the unseeded-role warning; the seed reflects the partial roster faithfully in SQL. Behavior is deliberate, not silent failure — a future operator inspecting the agents table mid-roster (e.g., engineer YAML present but engineer token not yet issued) sees `implementer.reports_to=NULL` and `tester.reports_to=NULL`; that's the documented partial-roster shape. The next daemon restart with full keyring tokens issues the same UPSERT path and resolves `reports_to` to the parent's UUID. Touchpoint: `agents/registry.py:seed_into_storage`.
-- Resolve `api_usage.workflow_id` population protocol at M5-continuous-pm-driver. M5-subscription-routing commit 1 ships the column nullable + the `idx_api_usage_workflow` index but defers semantics. Three plausible meanings, frame the choice as a prep-checkpoint disposition before drafting the continuous-pm-driver:
+- **RESOLVED at M5-continuous-pm-driver commit 1 (2026-05-03):** `api_usage.workflow_id` population protocol resolved as **α-denormalization** (server-derived from chain root via recursive CTE in `tools/budget.py:_resolve_chain_root_cohort_keys_from_dispatch`; renamed at M4d commit 7 for symmetric task_type extension). Resolution precedence Reading B — server-derived wins; caller-supplied falls through; conflict logs `record_api_call.workflow_id_conflict` structlog WARNING. Per F1.1 / D1.1 disposition. Spec home: `docs/kickoff/06-mcp-tools-phase-one.md` § record_api_call. M4d commit 7 shipped symmetric `task_type` α-denormalization extension (commit 8.5 fixed the audit-vs-api_usage divergence at line 580). Entry kept (not deleted) as audit lineage — future watch-for-pattern entries reading this trail see how the discipline cycles from deferred → resolved → symmetric-extended. Marked RESOLVED at M4d commit 9 closeout per Decision 4 commit 1 carry-forward. Original three-protocol framing preserved below for historical context:
   - (α) `parent_task_id` chain root — derivable via JOIN through `tasks.parent_task_id`. Denormalization is redundant; argument for shipping it is cohort-query speed without recursive CTE. Lowest design surface; highest data quality (always populated wherever a task chain exists).
   - (β) operator-initiated correlation ID — a new tool (`begin_workflow` / `current_workflow_id` MCP wrapper, or env-var threading at PM-continuous spawn time) mints and propagates a workflow_id. Highest discipline; requires net-new infrastructure.
   - (γ) free-text agent self-tag — agents annotate at will. Lowest discipline; highest noise; risk of `workflow_id` becoming a synonym for `notes` and the cohort dimension collapsing.
@@ -154,6 +154,38 @@ Per-product work_**domain** (e.g., `code_implementation`, `substrate_review`, `c
 **Spec home**: `docs/kickoff/05-data-model.md` § future per-product work_domain section (created when the work lands).
 
 **Cross-reference**: `docs/kickoff/06-mcp-tools-phase-one.md` § `submit_task` describes the work-shape vs work-domain split; M4d's `task_type` is the work-shape side.
+
+### get_subtasks own-chain visibility (Phase 2 generalization)
+
+`get_subtasks` at M4d ships visibility-filter as `claimed_by = caller_agent_id` for implementer/tester per CQ1 commit 9 Reading A disposition. Spec amended at line 880 to "own claimed (Phase 1 simplification)". Phase 1 single-implementer-per-task scenarios make the distinction operationally invisible.
+
+**Phase 2 generalization shape**: implementer/tester see all subtasks under the parent that are in their dispatch chain — caller is in parent chain (raise-gate) AND any subtask under that parent is visible to caller. SQL filter shifts from `claimed_by = caller_agent_id` to a chain-walk filter (CTE through `parent_task_id` to identify all chain-root descendants visible to caller).
+
+**Trigger**: Phase 2 multi-implementer-per-task scenario surfaces a case where caller is in parent chain but not directly claimed by any visible subtask (e.g., Implementer A's dispatch spawns Tester B + Tester C; Implementer A queries get_subtasks(parent) and would expect to see B + C even though A doesn't claim either).
+
+**Spec home**: `docs/kickoff/06-mcp-tools-phase-one.md` line 880 + § get_subtasks. Amend to "own chain (full chain visibility)" and update implementation accordingly.
+
+**Cross-reference**: `tools/tasks.py:get_subtasks` (current implementation; visibility-filter at the role-scope clause).
+
+### Add cycle defense symmetric assertion for task_type α-denormalization
+
+`tests/integration/test_record_api_call.py:test_workflow_id_alpha_cycle_defense_returns_none` verifies workflow_id returns None on chain overflow (cycle defense). Symmetric assertion for task_type would assert task_type also returns None on the same overflow case. T2 from codex review at M4d commit 8 close.
+
+**Trigger**: cycle-defense behavior change for either field requires symmetric assertion landing.
+
+**Cross-reference**: `tools/budget.py:_resolve_chain_root_cohort_keys_from_dispatch` returns `ChainRootCohortKeys(None, None)` on chain overflow; existing test only asserts workflow_id field.
+
+**Cost**: ~5 LOC; extend existing test or add parallel `test_task_type_alpha_cycle_defense_returns_none`.
+
+### Replace `assert updated is not None` with explicit ConflictError raise in set_task_priority
+
+`tools/tasks.py:set_task_priority` uses `assert updated is not None` after the UPDATE+SELECT pattern. Asserts strip with `python -O`; if a row is deleted concurrently between gate-check and SELECT (rare), the assert disappears in optimized builds and `Task(**dict(updated))` raises `TypeError` on None. Q1 from codex review at M4d commit 8 close.
+
+**Trigger**: when delete_task tool ships (Phase 2) OR production deployment via launchd/systemd lands at M7.
+
+**Cross-reference**: `tools/tasks.py:set_task_priority` near the `await write_audit(...)` call.
+
+**Cost**: 3-line change; replace assert with `if updated is None: raise ConflictError(...)`.
 
 ### Generalize HUMAN_LITERAL_ROLE_MAP to pattern-based human-prefix resolution
 
