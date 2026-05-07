@@ -1,23 +1,25 @@
-"""Direct schema tests for ``tools.tasks`` module skeleton.
+"""Direct tests for ``tools.tasks``.
 
-M4d-task-management-surface commit 2 ships the Pydantic schema surface
-for the six task-management MCP tools + the flat-allowlist
-``_require_role`` helper. This file exercises the schemas and helper
-in isolation; handler tests land at commits 3-7 in this same file as
-each handler ships.
+M4d-task-management-surface ships the six task-management MCP tools
+across commits 2-7. This file exercises the module's schemas, helpers,
+and handlers in isolation. Coverage grows commit-by-commit as handlers
+land:
 
-Coverage at commit 2 (per CQ-series dispositions, 2026-05-07):
-
-- 3 schema smokes (non-trivial schemas with defaults / typed unions).
-- 3 schema boundary validation tests (Pydantic Field constraints +
-  Literal membership at API boundary).
-- 1 ``_require_role`` test (positive + negative paths).
+- **Commit 2 (skeleton)**: schema smokes + boundary validation +
+  ``_require_role`` flat-allowlist helper.
+- **Commit 3 (submit_task)**: ``_check_can_submit_task`` hierarchy +
+  Q9 self-submit gate; ``_check_can_submit_task_parent_ownership``
+  two-clause OR; ``_derive_company_project_for_caller`` Phase 1
+  single-project sentinel; ``submit_task`` happy path + edge cases
+  (``submitted_by`` for OAuth/static; audit ``details_json`` includes
+  ``caller_source``; atomicity rollback).
+- Commits 4-7 will add handler tests for claim_task, update_task_status,
+  get_queue, get_subtasks, set_task_priority.
 
 Output models (``SubmitTaskOutput``, ``ClaimTaskOutput``, etc.) are
-not tested at this commit per CQ5: each is a ``task: Task`` wrapper;
-coverage is redundant with
-``tests/unit/storage/test_models.py:test_task_with_all_m4d_fields``
-from commit 1.
+not tested directly per CQ5: each is a ``task: Task`` wrapper; coverage
+is redundant with
+``tests/unit/storage/test_models.py:test_task_with_all_m4d_fields``.
 
 Trivial input schemas (``ClaimTaskInput``, ``GetSubtasksInput``) are
 not smoke-tested per the same scope-cap discipline — Pydantic
@@ -26,16 +28,34 @@ structural validation suffices for single-string-field models.
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from pathlib import Path
+
 import pytest
+import pytest_asyncio
 from pydantic import ValidationError
 
+from meridian_orchestrator.agents.config import AgentConfig
+from meridian_orchestrator.agents.permissions import PermissionResolver
+from meridian_orchestrator.errors import (
+    ConflictError,
+    NotFoundError,
+)
 from meridian_orchestrator.errors import PermissionError as OrchestratorPermissionError
+from meridian_orchestrator.storage.migrations import run_migrations
+from meridian_orchestrator.storage.sqlite import SqliteStorage
 from meridian_orchestrator.tools.tasks import (
+    HUMAN_LITERAL_ROLE_MAP,
+    HUMAN_MIKE_LITERAL,
     GetQueueInput,
     SetTaskPriorityInput,
     SubmitTaskInput,
     UpdateTaskStatusInput,
+    _check_can_submit_task,
+    _check_can_submit_task_parent_ownership,
+    _derive_company_project_for_caller,
     _require_role,
+    submit_task,
 )
 
 
@@ -174,3 +194,508 @@ def test_require_role_allows_listed_rejects_unlisted() -> None:
     # Empty allowlist rejects everything.
     with pytest.raises(OrchestratorPermissionError):
         _require_role("pm")
+
+
+# ---------------------------------------------------------------------------
+# Commit 3 tests: submit_task handler + helpers + Q9 (A) caller-distinction
+# ---------------------------------------------------------------------------
+
+
+def _agent_config(
+    role: str, manages: list[str] | None = None
+) -> AgentConfig:
+    """Minimal AgentConfig for PermissionResolver construction.
+
+    Mirrors tests/unit/agents/test_permissions.py:_agent shape.
+    """
+    return AgentConfig(
+        role=role,  # type: ignore[arg-type]
+        display_name=role.upper(),
+        reports_to=None if role == "pm" else "pm",  # type: ignore[arg-type]
+        manages=manages or [],  # type: ignore[arg-type]
+        system_prompt="x",
+        mcp_tools_allowed=["submit_task"],
+        effort="high",
+    )
+
+
+def _submit_task_resolver() -> PermissionResolver:
+    """PermissionResolver with the canonical Phase 1 hierarchy:
+    PM → Engineer → {Implementer, Tester}."""
+    return PermissionResolver(
+        {
+            "pm": _agent_config("pm", manages=["engineer"]),
+            "engineer": _agent_config(
+                "engineer", manages=["implementer", "tester"]
+            ),
+            "implementer": _agent_config("implementer"),
+            "tester": _agent_config("tester"),
+        }
+    )
+
+
+@pytest_asyncio.fixture
+async def storage(tmp_path: Path) -> AsyncIterator[SqliteStorage]:
+    """Storage fixture with seeded company + project + agents.
+
+    Mirrors tests/integration/test_pm_focus_mcp_wrapper.py shape but
+    seeds three agent rows (pm, engineer, implementer) to satisfy
+    ``_check_can_submit_task_parent_ownership``'s LEFT JOIN to agents.
+    """
+    s = SqliteStorage(tmp_path / "data" / "orchestrator.db")
+    await s.connect()
+    await run_migrations(s)
+    await s.execute(
+        "INSERT INTO companies (id, name) VALUES ('co1', 'Meridian AI')"
+    )
+    await s.execute(
+        "INSERT INTO projects (id, company_id, name) VALUES "
+        "('proj1', 'co1', 'Substrate Product')"
+    )
+    for agent_id, role in (
+        ("agent-pm", "pm"),
+        ("agent-eng-a", "engineer"),
+        ("agent-eng-b", "engineer"),  # second PM-A-dies-PM-B-resumes test
+        ("agent-impl", "implementer"),
+    ):
+        await s.execute(
+            "INSERT INTO agents (id, company_id, role, config_path) "
+            "VALUES (?, 'co1', ?, '/dev/null')",
+            (agent_id, role),
+        )
+    yield s
+    await s.close()
+
+
+# ----- _check_can_submit_task (hierarchy + Q9; pure-Python; no DB) ---------
+
+
+def test_check_can_submit_task_direct_managee_passes() -> None:
+    """PM submitting for engineer passes both gates: Q9 not triggered
+    (target != caller) and hierarchy via manages_directly (engineer is
+    in PM's direct manages list per 06-mcp-tools-phase-one.md:44)."""
+    resolver = _submit_task_resolver()
+    _check_can_submit_task(
+        caller_role="pm",
+        target_role="engineer",
+        caller_source="static",
+        permissions=resolver,
+    )
+
+
+def test_check_can_submit_task_non_direct_managee_rejects() -> None:
+    """PM submitting for implementer is a hierarchy bypass per spec
+    line 44: "PM **cannot** submit a task with agent_role='implementer'
+    — that's a hierarchy bypass." The gate uses manages_directly
+    (NOT is_descendant); engineer is the direct manager of implementer.
+    Transitive reads (PM→Engineer→Implementer) are spec-explicit
+    bypasses."""
+    resolver = _submit_task_resolver()
+    with pytest.raises(
+        OrchestratorPermissionError, match="hierarchy bypass"
+    ):
+        _check_can_submit_task(
+            caller_role="pm",
+            target_role="implementer",
+            caller_source="static",
+            permissions=resolver,
+        )
+
+
+def test_check_can_submit_task_self_target_static_rejects() -> None:
+    """PM-as-agent (caller_source='static') self-submit rejects per Q9.
+    PMSupervisor subprocess holds a static token; should not enqueue
+    work for itself (continuous loop is the actor; submit_task is for
+    delegating-down-the-hierarchy work). Q9 runs first; never reaches
+    hierarchy gate."""
+    resolver = _submit_task_resolver()
+    with pytest.raises(OrchestratorPermissionError, match="self-submit"):
+        _check_can_submit_task(
+            caller_role="pm",
+            target_role="pm",
+            caller_source="static",
+            permissions=resolver,
+        )
+
+
+def test_check_can_submit_task_self_target_oauth_passes() -> None:
+    """Mike-via-OAuth (caller_source='oauth') self-submit allowed per
+    Q9 (A). Mike's MCP requests carry role:pm in the access token's
+    scope per hierarchy invariant 1; submitting a PM-role task is a
+    legitimate operator action. Q9 short-circuits to pass; hierarchy
+    gate (which would otherwise reject self via manages_directly==False)
+    is bypassed."""
+    resolver = _submit_task_resolver()
+    _check_can_submit_task(
+        caller_role="pm",
+        target_role="pm",
+        caller_source="oauth",
+        permissions=resolver,
+    )
+
+
+def test_check_can_submit_task_inverse_hierarchy_rejects() -> None:
+    """Engineer trying to submit for PM is an inverse-hierarchy bypass.
+    manages_directly("engineer", "pm") returns False (engineer doesn't
+    manage PM; PM manages engineer); hierarchy gate raises."""
+    resolver = _submit_task_resolver()
+    with pytest.raises(
+        OrchestratorPermissionError, match="hierarchy bypass"
+    ):
+        _check_can_submit_task(
+            caller_role="engineer",
+            target_role="pm",
+            caller_source="static",
+            permissions=resolver,
+        )
+
+
+# ----- _check_can_submit_task_parent_ownership (clauses 1 + 2; DB) ---------
+
+
+async def _seed_parent_task(
+    storage: SqliteStorage,
+    *,
+    task_id: str,
+    submitted_by: str,
+    claimed_by: str | None = None,
+) -> None:
+    await storage.execute(
+        "INSERT INTO tasks (id, company_id, project_id, agent_role, "
+        "description, submitted_by, claimed_by) "
+        "VALUES (?, 'co1', 'proj1', 'engineer', 'parent', ?, ?)",
+        (task_id, submitted_by, claimed_by),
+    )
+
+
+async def test_parent_ownership_clause_1_claimed_by_matches(
+    storage: SqliteStorage,
+) -> None:
+    """Clause 1 (agent-identity ownership): caller_agent_id matches
+    parent.claimed_by. Returns parent row dict for company/project
+    inheritance."""
+    await _seed_parent_task(
+        storage, task_id="parent-c1", submitted_by="agent-pm",
+        claimed_by="agent-eng-a",
+    )
+    parent = await _check_can_submit_task_parent_ownership(
+        storage=storage,
+        parent_task_id="parent-c1",
+        caller_agent_id="agent-eng-a",
+        caller_role="engineer",
+    )
+    assert parent["id"] == "parent-c1"
+    assert parent["company_id"] == "co1"
+    assert parent["project_id"] == "proj1"
+
+
+async def test_parent_ownership_clause_2_role_via_agent_uuid(
+    storage: SqliteStorage,
+) -> None:
+    """Clause 2 (role-level authority): submitter's role resolved via
+    JOIN to agents. PM-A-dies-PM-B-resumes: engineer-A submits parent;
+    engineer-B (different agent UUID; same role) submits subtask;
+    clause 1 fails (claimed_by mismatch), clause 2 passes (both have
+    role=engineer)."""
+    await _seed_parent_task(
+        storage, task_id="parent-c2",
+        submitted_by="agent-eng-a",
+        claimed_by=None,
+    )
+    parent = await _check_can_submit_task_parent_ownership(
+        storage=storage,
+        parent_task_id="parent-c2",
+        caller_agent_id="agent-eng-b",
+        caller_role="engineer",
+    )
+    assert parent["submitter_role"] == "engineer"
+
+
+async def test_parent_ownership_clause_2_role_via_human_mike_literal(
+    storage: SqliteStorage,
+) -> None:
+    """Clause 2 with HUMAN_LITERAL_ROLE_MAP resolution: parent submitted
+    by Mike (submitted_by='human:mike' literal); JOIN to agents returns
+    NULL for submitter_role; HUMAN_LITERAL_ROLE_MAP maps the literal to
+    'pm' per CQ10 Reading A. PM-as-agent caller passes clause 2."""
+    await _seed_parent_task(
+        storage, task_id="parent-c2-mike",
+        submitted_by=HUMAN_MIKE_LITERAL,
+        claimed_by=None,
+    )
+    parent = await _check_can_submit_task_parent_ownership(
+        storage=storage,
+        parent_task_id="parent-c2-mike",
+        caller_agent_id="agent-pm",
+        caller_role="pm",
+    )
+    assert parent["submitted_by"] == HUMAN_MIKE_LITERAL
+
+
+async def test_parent_ownership_neither_clause_matches_rejects(
+    storage: SqliteStorage,
+) -> None:
+    """Neither clause matches: caller is not claimed_by parent (clause
+    1 fails) and caller_role doesn't match submitter's role (clause 2
+    fails). Raises PermissionError with diagnostic detail."""
+    await _seed_parent_task(
+        storage, task_id="parent-fail",
+        submitted_by="agent-pm",
+        claimed_by="agent-eng-a",
+    )
+    with pytest.raises(OrchestratorPermissionError, match="does not own"):
+        await _check_can_submit_task_parent_ownership(
+            storage=storage,
+            parent_task_id="parent-fail",
+            caller_agent_id="agent-impl",
+            caller_role="implementer",
+        )
+
+
+# ----- _derive_company_project_for_caller (Phase 1 sentinel) ---------------
+
+
+async def test_derive_company_project_phase_1_single_project_passes(
+    storage: SqliteStorage,
+) -> None:
+    """Phase 1 single-company-single-project happy path: caller's
+    company_id resolved from agents table; the single project under
+    that company resolved by FK lookup."""
+    company_id, project_id = await _derive_company_project_for_caller(
+        storage=storage, caller_agent_id="agent-pm"
+    )
+    assert company_id == "co1"
+    assert project_id == "proj1"
+
+
+async def test_derive_company_project_multi_project_sentinel_rejects(
+    storage: SqliteStorage,
+) -> None:
+    """Phase 1 single-project assumption pinned by runtime sentinel
+    (CQ2 refinement). When a second project lands under the same
+    company, raise ConflictError rather than silent-first-row-pick.
+    Forces the architectural shift to update submit_task derivation
+    when Phase 2 multi-project introduces."""
+    await storage.execute(
+        "INSERT INTO projects (id, company_id, name) VALUES "
+        "('proj2', 'co1', 'Second Product')"
+    )
+    with pytest.raises(ConflictError, match="multiple projects"):
+        await _derive_company_project_for_caller(
+            storage=storage, caller_agent_id="agent-pm"
+        )
+
+
+# ----- submit_task handler -------------------------------------------------
+
+
+async def test_submit_task_root_happy_path(
+    storage: SqliteStorage,
+) -> None:
+    """PM submits a root engineer-targeted task. Verifies: tasks row
+    written with caller-supplied fields; submitted_by=caller_agent_id
+    (CQ3 static path); audit row written with action='task.submit'."""
+    request = SubmitTaskInput(
+        agent_role="engineer",
+        description="ship feature X",
+        priority=1,
+        complexity=4,
+    )
+    out = await submit_task(
+        storage=storage,
+        permissions=_submit_task_resolver(),
+        request=request,
+        caller_agent_id="agent-pm",
+        caller_role="pm",
+        caller_source="static",
+    )
+
+    assert out.task.agent_role == "engineer"
+    assert out.task.description == "ship feature X"
+    assert out.task.priority == 1
+    assert out.task.complexity == 4
+    assert out.task.submitted_by == "agent-pm"
+    assert out.task.task_type is None
+    assert out.task.status == "pending"
+
+    rows = await storage.fetch_all("SELECT id, submitted_by FROM tasks")
+    assert len(rows) == 1
+    assert rows[0]["submitted_by"] == "agent-pm"
+
+    audits = await storage.fetch_all(
+        "SELECT actor, action, target FROM audit_log"
+    )
+    assert len(audits) == 1
+    assert audits[0]["action"] == "task.submit"
+    assert audits[0]["actor"] == "agent-pm"
+    assert audits[0]["target"] == out.task.id
+
+
+async def test_submit_task_subtask_inherits_company_project(
+    storage: SqliteStorage,
+) -> None:
+    """Subtask path: parent_task_id set; ownership clause 1 passes
+    (engineer-A claimed parent); subtask inherits parent's
+    company_id/project_id without re-derivation."""
+    # Engineer-A claims a PM-submitted parent task.
+    await storage.execute(
+        "INSERT INTO tasks (id, company_id, project_id, agent_role, "
+        "description, submitted_by, claimed_by, status) VALUES "
+        "('root-1', 'co1', 'proj1', 'engineer', 'parent', 'agent-pm', "
+        "'agent-eng-a', 'claimed')"
+    )
+
+    request = SubmitTaskInput(
+        agent_role="implementer",
+        description="implement subtask",
+        parent_task_id="root-1",
+    )
+    out = await submit_task(
+        storage=storage,
+        permissions=_submit_task_resolver(),
+        request=request,
+        caller_agent_id="agent-eng-a",
+        caller_role="engineer",
+        caller_source="static",
+    )
+
+    assert out.task.parent_task_id == "root-1"
+    assert out.task.company_id == "co1"
+    assert out.task.project_id == "proj1"
+    assert out.task.agent_role == "implementer"
+
+
+async def test_submit_task_with_task_type_populates_column(
+    storage: SqliteStorage,
+) -> None:
+    """task_type field round-trips through the INSERT and is preserved
+    on the returned Task model. Verifies the M4d task_type cohort key
+    flows from input through storage to output."""
+    request = SubmitTaskInput(
+        agent_role="engineer",
+        description="plan a thing",
+        task_type="planning",
+    )
+    out = await submit_task(
+        storage=storage,
+        permissions=_submit_task_resolver(),
+        request=request,
+        caller_agent_id="agent-pm",
+        caller_role="pm",
+        caller_source="static",
+    )
+    assert out.task.task_type == "planning"
+
+
+async def test_submit_task_oauth_caller_submitted_by_human_mike_literal(
+    storage: SqliteStorage,
+) -> None:
+    """CQ3 Reading A oauth path: caller_source='oauth' →
+    submitted_by='human:mike' literal (per 05-data-model.md:209-216
+    convention). First operational use of the OAuth-vs-static
+    distinction at the data layer."""
+    request = SubmitTaskInput(
+        agent_role="engineer",
+        description="Mike submits via OAuth",
+    )
+    out = await submit_task(
+        storage=storage,
+        permissions=_submit_task_resolver(),
+        request=request,
+        caller_agent_id="agent-pm",  # Mike's OAuth token binds to PM agent
+        caller_role="pm",
+        caller_source="oauth",
+    )
+    assert out.task.submitted_by == HUMAN_MIKE_LITERAL
+
+
+async def test_submit_task_audit_details_includes_caller_source(
+    storage: SqliteStorage,
+) -> None:
+    """CQ3 belt-and-suspenders: audit details_json includes
+    submitted_by AND caller_source so forensic queries can correlate
+    OAuth-vs-static origin without TokenRecord lookup. Both static
+    and oauth paths surface in audit log."""
+    import json
+
+    # Static caller.
+    await submit_task(
+        storage=storage,
+        permissions=_submit_task_resolver(),
+        request=SubmitTaskInput(
+            agent_role="engineer", description="static call"
+        ),
+        caller_agent_id="agent-pm",
+        caller_role="pm",
+        caller_source="static",
+    )
+    # OAuth caller.
+    await submit_task(
+        storage=storage,
+        permissions=_submit_task_resolver(),
+        request=SubmitTaskInput(
+            agent_role="engineer", description="oauth call"
+        ),
+        caller_agent_id="agent-pm",
+        caller_role="pm",
+        caller_source="oauth",
+    )
+
+    audit_rows = await storage.fetch_all(
+        "SELECT details_json FROM audit_log "
+        "WHERE action = 'task.submit' ORDER BY rowid"
+    )
+    assert len(audit_rows) == 2
+    static_details = json.loads(audit_rows[0]["details_json"])
+    oauth_details = json.loads(audit_rows[1]["details_json"])
+
+    assert static_details["caller_source"] == "static"
+    assert static_details["submitted_by"] == "agent-pm"
+    assert oauth_details["caller_source"] == "oauth"
+    assert oauth_details["submitted_by"] == HUMAN_MIKE_LITERAL
+
+
+async def test_submit_task_atomicity_failure_rolls_back(
+    storage: SqliteStorage,
+) -> None:
+    """Atomicity (CQ6): full-transaction wrap. Subtask submission with
+    a non-existent parent_task_id raises NotFoundError mid-transaction;
+    no tasks row, no audit row. Failure must leave zero residual
+    state."""
+    pre_task_count = (await storage.fetch_one(
+        "SELECT COUNT(*) AS c FROM tasks"
+    ))["c"]
+    pre_audit_count = (await storage.fetch_one(
+        "SELECT COUNT(*) AS c FROM audit_log"
+    ))["c"]
+
+    with pytest.raises(NotFoundError):
+        await submit_task(
+            storage=storage,
+            permissions=_submit_task_resolver(),
+            request=SubmitTaskInput(
+                agent_role="implementer",
+                description="orphan subtask",
+                parent_task_id="does-not-exist",
+            ),
+            caller_agent_id="agent-eng-a",
+            caller_role="engineer",
+            caller_source="static",
+        )
+
+    post_task_count = (await storage.fetch_one(
+        "SELECT COUNT(*) AS c FROM tasks"
+    ))["c"]
+    post_audit_count = (await storage.fetch_one(
+        "SELECT COUNT(*) AS c FROM audit_log"
+    ))["c"]
+    assert post_task_count == pre_task_count
+    assert post_audit_count == pre_audit_count
+
+
+def test_human_literal_role_map_phase_1_shape() -> None:
+    """HUMAN_LITERAL_ROLE_MAP at commit 3: single Phase 1 entry mapping
+    'human:mike' → 'pm' per CQ10 Reading A. Sentinel test pins the
+    Phase 1 simplification; Phase 2 generalization tracked in BACKLOG."""
+    assert HUMAN_MIKE_LITERAL == "human:mike"
+    assert HUMAN_LITERAL_ROLE_MAP == {"human:mike": "pm"}

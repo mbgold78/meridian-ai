@@ -100,3 +100,57 @@ def test_is_in_subtree() -> None:
     assert r.is_in_subtree("pm", "implementer") is True
     assert r.is_in_subtree("engineer", "tester") is True
     assert r.is_in_subtree("tester", "engineer") is False
+
+
+def test_manages_directly_strict_one_hop() -> None:
+    """``manages_directly`` is strictly one-hop, NOT transitive — the
+    semantics ``submit_task``'s hierarchy gate requires per
+    ``06-mcp-tools-phase-one.md:44``. Mike→PM→Engineer→{Impl,Tester}
+    are direct edges; transitive reads are spec-explicit bypasses.
+    """
+    r = _resolver()
+    # Direct edges return True.
+    assert r.manages_directly("pm", "engineer") is True
+    assert r.manages_directly("engineer", "implementer") is True
+    assert r.manages_directly("engineer", "tester") is True
+
+
+def test_manages_directly_transitive_returns_false() -> None:
+    """The PM→Implementer transitive path must return False per spec
+    line 44 anti-example: 'PM **cannot** submit a task with
+    agent_role=implementer — that's a hierarchy bypass.' This is the
+    behavioral distinction from ``is_descendant`` (which returns True
+    for transitive paths)."""
+    r = _resolver()
+    assert r.manages_directly("pm", "implementer") is False
+    assert r.manages_directly("pm", "tester") is False
+    # Confirm is_descendant disagrees on the same input — the two
+    # methods serve different gates.
+    assert r.is_descendant("pm", "implementer") is True
+
+
+def test_manages_directly_self_returns_false() -> None:
+    """A role does not directly manage itself; ``manages_directly``
+    returns False for self-target. Distinct from ``is_descendant``
+    (which returns True for self per inclusive-subtree convention).
+    The Q9 self-submit gate in ``submit_task`` is layered separately
+    on top of this primitive."""
+    r = _resolver()
+    assert r.manages_directly("pm", "pm") is False
+    assert r.manages_directly("engineer", "engineer") is False
+
+
+def test_manages_directly_inverse_returns_false() -> None:
+    """Inverse-hierarchy reads return False — the primitive is
+    direction-sensitive. engineer does not directly manage PM."""
+    r = _resolver()
+    assert r.manages_directly("engineer", "pm") is False
+    assert r.manages_directly("implementer", "engineer") is False
+
+
+def test_manages_directly_unknown_caller_returns_false() -> None:
+    """Unknown caller_role (no agent registered) returns False —
+    ``_direct_manages`` returns ``[]`` for unregistered roles, so the
+    membership check is trivially False."""
+    r = _resolver()
+    assert r.manages_directly("nonexistent", "pm") is False  # type: ignore[arg-type]

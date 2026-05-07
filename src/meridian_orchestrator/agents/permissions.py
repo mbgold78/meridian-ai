@@ -100,6 +100,29 @@ class PermissionResolver:
             frontier.extend(self._direct_manages(current))
         return False
 
+    def manages_directly(
+        self, caller_role: AgentRole, target_role: AgentRole
+    ) -> bool:
+        """True if ``target_role`` is in ``caller_role``'s direct
+        ``manages`` list — strictly one hop, NOT transitive.
+
+        Distinct from :meth:`is_descendant` which walks the full subtree.
+        Used by ``submit_task``'s hierarchy gate per
+        ``06-mcp-tools-phase-one.md:44`` ("caller may submit a task only
+        for a role they manage (direct report). [...] PM **cannot**
+        submit a task with `agent_role='implementer'` — that's a
+        hierarchy bypass."). Mike→PM, PM→Engineer, Engineer→Implementer,
+        Engineer→Tester are direct edges; transitive reads (e.g.,
+        PM→Implementer) are explicit hierarchy bypasses by spec.
+
+        Self-target returns False (a role does not directly manage
+        itself); the Q9 self-submit gate is layered separately on top of
+        this primitive in ``tools.tasks._check_can_submit_task``.
+        """
+        if caller_role == target_role:
+            return False
+        return target_role in self._direct_manages(caller_role)
+
     def is_ancestor(
         self, caller_role: AgentRole, target_role: AgentRole
     ) -> bool:

@@ -50,7 +50,7 @@ from meridian_orchestrator.audit.sampler import (
     SourceEventKind,
     record_sampleable_event,
 )
-from meridian_orchestrator.auth import TokenStore, _parse_token
+from meridian_orchestrator.auth import TokenSource, TokenStore, _parse_token
 from meridian_orchestrator.bridge.activity import (
     record_mcp_call,
     record_oauth_pm_auto_flip,
@@ -159,6 +159,11 @@ from meridian_orchestrator.tools.supervisor import (
     SignalCompactionOutput,
     signal_compaction,
 )
+from meridian_orchestrator.tools.tasks import (
+    SubmitTaskInput,
+    SubmitTaskOutput,
+    submit_task,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -202,6 +207,43 @@ def _resolve_caller_token_id() -> str:
         raise AuthError("could not parse bearer token")
     token_id, _ = parsed
     return token_id
+
+
+def _resolve_caller_source(token_store: TokenStore) -> TokenSource:
+    """Read the caller's ``TokenRecord.source`` from the request context.
+
+    Mirrors :func:`_resolve_caller_token_id` shape but returns the
+    token's source — ``"static"`` for daemon-issued tokens (Engineer /
+    Implementer / Tester / PM-continuous subprocess) or ``"oauth"`` for
+    Mike-via-Claude-Code-OAuth-flow tokens. Per
+    ``project_token_source_distinguishes_oauth_from_static`` memory:
+    the auth chain already exposes this distinction at issuance time;
+    no auth-chain modification needed for handler-side reads.
+
+    First operational consumer at M4d-task-management-surface commit 3:
+    :func:`tools.tasks.submit_task` uses ``caller_source`` to gate
+    self-submit per Q9 (A) disposition (PM-as-agent self-submit
+    rejected; Mike-via-OAuth allowed) and to populate ``submitted_by``
+    per CQ3 disposition (OAuth → ``"human:mike"``; static →
+    ``caller_agent_id``).
+
+    Raises :class:`AuthError` when no access context exists, the bearer
+    token isn't parseable, or ``token_id`` doesn't resolve to a
+    record. All three are wrapper-layer bugs, not caller errors.
+    """
+    access = get_access_token()
+    if access is None:
+        raise AuthError("no authenticated context for tool call")
+    parsed = _parse_token(access.token)
+    if parsed is None:
+        raise AuthError("could not parse bearer token")
+    token_id, _ = parsed
+    record = token_store.lookup_by_token_id(token_id)
+    if record is None:
+        raise AuthError(
+            f"could not resolve TokenRecord for token_id={token_id!r}"
+        )
+    return record.source
 
 
 async def _observe_caller(
@@ -347,6 +389,8 @@ def build_server(
 
     if registry is not None:
         _register_agent_tools(mcp, registry, storage, token_store)
+        if storage is not None:
+            _register_task_tools(mcp, registry, storage, token_store)
 
     if storage is not None:
         _register_dispatch_query_tools(mcp, storage, token_store)
@@ -1554,6 +1598,76 @@ def _register_agent_tools(
         resolver = PermissionResolver(registry.configs_by_role())
         resolver.require_tool(caller_role, "get_org_chart")  # type: ignore[arg-type]
         return get_org_chart(registry, GetOrgChartInput())
+
+
+def _register_task_tools(
+    mcp: FastMCP,
+    registry: AgentRegistry,
+    storage: Storage,
+    token_store: TokenStore,
+) -> None:
+    """Register task-management tools on ``mcp``.
+
+    M4d-task-management-surface ships six task-management MCP tools across
+    commits 3-7; this commit (commit 3) registers ``submit_task``. Future
+    commits 4-7 register ``claim_task``, ``update_task_status``,
+    ``get_queue``, ``get_subtasks``, and ``set_task_priority`` by extending
+    this function.
+
+    Wrapper resolves caller identity via :func:`_resolve_agent_id` +
+    :func:`_resolve_caller_role_via_token` + :func:`_resolve_caller_source`
+    (the third is new at M4d commit 3 per Q9 (A) caller-distinction fold);
+    builds :class:`PermissionResolver` from the registry's current
+    snapshot; threads everything into the pure handler. Per-tool
+    flat-allowlist gate is applied via the registered agent's
+    ``mcp_tools_allowed`` list (caller's role must include
+    ``"submit_task"``).
+    """
+
+    @mcp.tool(
+        name="submit_task",
+        description=(
+            "Submit a new task to the queue. Hierarchy gate: caller may "
+            "submit only for a role they manage (PM → Engineer; Engineer "
+            "→ Implementer/Tester; Mike → PM). Self-submit allowed only "
+            "for OAuth callers (Mike-via-OAuth). For sub-tasks "
+            "(parent_task_id set), caller must be claimed_by the parent "
+            "OR caller's role must equal the role that submitted the "
+            "parent. task_type taxonomy describes work-shape (cognitive "
+            "operation), not work-domain (product/area). Audited as "
+            "task.submit."
+        ),
+    )
+    async def _submit_task(
+        agent_role: str,
+        description: str,
+        priority: int = 2,
+        complexity: int = 3,
+        parent_task_id: str | None = None,
+        task_type: str | None = None,
+    ) -> SubmitTaskOutput:
+        agent_id = _resolve_agent_id()
+        await _observe_caller(storage, token_store, "submit_task")
+        caller_role = _resolve_caller_role_via_token()
+        caller_source = _resolve_caller_source(token_store)
+        resolver = PermissionResolver(registry.configs_by_role())
+        resolver.require_tool(caller_role, "submit_task")  # type: ignore[arg-type]
+        request = SubmitTaskInput(
+            agent_role=agent_role,
+            description=description,
+            priority=priority,
+            complexity=complexity,
+            parent_task_id=parent_task_id,
+            task_type=task_type,  # type: ignore[arg-type]  # Pydantic Literal validates at construction
+        )
+        return await submit_task(
+            storage=storage,
+            permissions=resolver,
+            request=request,
+            caller_agent_id=agent_id,
+            caller_role=caller_role,
+            caller_source=caller_source,
+        )
 
 
 async def serve(

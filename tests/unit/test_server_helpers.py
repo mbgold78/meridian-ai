@@ -25,7 +25,10 @@ from mcp.server.auth.provider import AccessToken
 
 from meridian_orchestrator.auth import TokenStore
 from meridian_orchestrator.errors import AuthError
-from meridian_orchestrator.server import _resolve_caller_token_id
+from meridian_orchestrator.server import (
+    _resolve_caller_source,
+    _resolve_caller_token_id,
+)
 
 
 def test_resolves_token_id_from_valid_bearer_token(
@@ -116,3 +119,83 @@ def test_returns_short_hex_prefix_format_matching_dispatch_lookup(
     )
     assert record.agent_id == "agent-y"
     assert record.role == "implementer"
+
+
+# ---------------------------------------------------------------------------
+# _resolve_caller_source — M4d-task-management-surface commit 3
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("source", ["static", "oauth"])
+def test_resolve_caller_source_returns_token_record_source(
+    monkeypatch: pytest.MonkeyPatch, source: str
+) -> None:
+    """Happy path for both source values: ``_resolve_caller_source``
+    returns ``TokenRecord.source`` from the request context.
+
+    Per ``project_token_source_distinguishes_oauth_from_static`` memory:
+    the auth chain already exposes the distinction at issuance time;
+    handler-side reads use this helper. First operational consumer at
+    M4d commit 3 (``submit_task``) for Q9 (A) self-submit gating + CQ3
+    submitted_by population.
+    """
+    store = TokenStore(service=f"resolve-source-test-{source}")
+    issued = store.issue(
+        "agent-z", "pm", f"test-pm-{source}", source=source  # type: ignore[arg-type]
+    )
+
+    access = AccessToken(
+        token=issued.token,
+        client_id=issued.record.agent_id,
+        scopes=["role:pm"],
+    )
+    monkeypatch.setattr(
+        "meridian_orchestrator.server.get_access_token",
+        lambda: access,
+    )
+
+    resolved = _resolve_caller_source(store)
+    assert resolved == source
+
+
+def test_resolve_caller_source_raises_on_missing_access_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No authenticated context (no Bearer token on the request) raises
+    AuthError. Mirrors ``_resolve_caller_token_id``'s no-silent-fallback
+    discipline — wrapper-layer callers can't accidentally pass a falsy
+    source into a handler that assumes a definite Literal value."""
+    store = TokenStore(service="resolve-source-test-no-context")
+    monkeypatch.setattr(
+        "meridian_orchestrator.server.get_access_token",
+        lambda: None,
+    )
+
+    with pytest.raises(AuthError, match="no authenticated context"):
+        _resolve_caller_source(store)
+
+
+def test_resolve_caller_source_raises_on_unresolvable_token_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Bearer token parses cleanly but token_id doesn't resolve to a
+    record (revoked, deleted, or otherwise gone). Helper raises
+    AuthError rather than silently returning a sentinel; this is a
+    wrapper-layer bug not a caller error per the docstring contract."""
+    store = TokenStore(service="resolve-source-test-orphan")
+    issued = store.issue("agent-orphan", "pm", "orphan-source-test")
+    # Hard-delete the record so lookup_by_token_id returns None.
+    store.delete(issued.record.token_id)
+
+    access = AccessToken(
+        token=issued.token,
+        client_id=issued.record.agent_id,
+        scopes=["role:pm"],
+    )
+    monkeypatch.setattr(
+        "meridian_orchestrator.server.get_access_token",
+        lambda: access,
+    )
+
+    with pytest.raises(AuthError, match="could not resolve TokenRecord"):
+        _resolve_caller_source(store)
