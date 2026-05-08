@@ -297,6 +297,10 @@ Format note: per `claude --help`, `--allowedTools` accepts comma- or space-separ
 
 ### Per-dispatch MCP server configuration (--mcp-config wiring at dispatcher)
 
+**RESOLVED at M5-acceptance commit 3.5 (2026-05-08).** Implementation landed per the path locked at commit 3 prep (ε-3 disposition); Q1/Q2/Q3 dispositions per commit 3.5 prep cycle: **Q1 (a) RETAIN** — token revocation at terminal state renders retained config inert via `auth.TokenStore.lookup` returning None for revoked records; mirrors stderr.log convention. **Q2 per-dispatch minted already correct** — empirical trace at `dispatcher.py:501-506` showed per-call `TokenStore.issue` minting; no scope expansion needed. **Q3 hermetic confirmed** — empirical probe with sentinel-at-user-scope vs. empty-config + `--strict-mcp-config` showed user-scope registrations cannot leak into the strict view. Production code at `bridge/mcp_config.py` (NEW module) + `bridge/dispatcher.py` (DispatchLaunchContext.mcp_config_path field; conditional argv emission; BridgeDispatcher.__init__ daemon_url; dispatch() write before launcher). Entry kept (not deleted) as audit lineage — future watch-for-pattern entries reading this trail see how the discipline cycles from V2 architectural-evolution candidate (commit 3 prep) → Phase 1 immediate prerequisite (ε-3 disposition) → resolved (commit 3.5).
+
+**Provenance preserved below** for the V2-candidate framing and the ε-3 reasoning chain. Original entry follows verbatim:
+
 Pinned 2026-05-08 at M5-acceptance commit 3 prep. **Status: Phase 1 immediate prerequisite for β operational gate** (transitioned from V2 architectural-evolution candidate at commit 3 prep when empirical investigation surfaced subprocess MCP auth gap). Surfaced empirically via verification-first probes against `claude --print` MCP auth surface; reviewer-Claude disposition ε-3 (2026-05-08) defers implementation to commit 3.5 to preserve cap discipline + blast-radius isolation at β6 (β6 is the first real subprocess→MCP auth exercise; should not share a commit with `--allowedTools` wiring — a regression at β6 must have a single suspect, not two).
 
 **Implementation path (locked at commit 3 prep; not for re-litigation at 3.5 prep):**
@@ -328,6 +332,38 @@ Pinned 2026-05-08 at M5-acceptance commit 3 prep. **Status: Phase 1 immediate pr
 - All M4-M5 dispatcher/supervisor tests inject fakes via `subprocess_launcher` parameter; β6 is the first real exercise of subprocess→MCP server auth
 
 **Touchpoints at implementation (commit 3.5):** `bridge/dispatcher.py:_default_launcher` (argv composition: add `--mcp-config <path> --strict-mcp-config`); `bridge/dispatcher.py:DispatchLaunchContext` (new `mcp_config_path: Path | None = None` field); new helper writes per-dispatch JSON to `<dispatches_root>/<dispatch_id>/mcp_config.json` containing orchestrator HTTP MCP + (tester only) Playwright stdio MCP; `tools/dispatch.py:_resolve_mcp_config_for_role` helper (or compose at launcher); cleanup-vs-retain policy per Q1; per-role yaml may need `mcp_servers:` field if per-role MCP set diverges (tester gets Playwright; implementer doesn't).
+
+### Per-spawn supervisor auth wiring at supervisor_base.py launcher (--allowedTools + --mcp-config)
+
+Pinned 2026-05-08 at M5-acceptance commit 3.5 prep. **Status: Phase 1 immediate prerequisite for β operational gate (supervisor side)** — PM-continuous + Engineer-continuous loops invoking orchestrator MCP tools (write_pm_handoff, signal_compaction, get_window_state, dispatch_implementer, dispatch_tester, etc.) hit the same auth gap surfaced empirically at commit 3 prep cycle for the dispatcher side.
+
+**Lifecycle anchor (load-bearing reasoning per ζ-1 disposition, reviewer-Claude 2026-05-08):** long-lived per-spawn supervisor token lifecycle is distinct from per-dispatch short-lived lifecycle of the dispatcher commit 3.5 wiring. Isolation justified for triage of long-lived-token regression at β: a regression in long-lived-token wiring at β must have a single suspect, distinct from short-lived-token wiring. Generic "blast radius" framing without the lifecycle anchor would be too easily extensible (e.g., would justify splitting PM-supervisor and Engineer-supervisor into separate commits, which it shouldn't); the lifecycle anchor bottoms out the principle.
+
+**Empirical anchors at pin time (2026-05-08, commit 3.5 prep):**
+- `bridge/supervisor_base.py:_default_launcher` argv: `("claude", "--effort", ctx.effort, "-p", ctx.prompt, ...)` — no `--mcp-config`, no `--allowedTools`, no auth wiring. Same architectural gap as dispatcher side pre-commit-3.5.
+- `bridge/supervisor_base.py:560-565` — supervisor mints per-spawn token via `self._token_store.issue(self._supervisor_agent_id(), self._token_role(), self._token_label())`. Token EXISTS but is not wired into subprocess auth path; subprocess receives `MERIDIAN_ORCHESTRATOR_TOKEN` env var via `bridge/launch_env.py:build_subprocess_env` but standard Claude Code does NOT translate env vars to `Authorization: Bearer` headers for MCP requests.
+- Supervisor invokes orchestrator MCP tools across continuous loop iterations (PM: `write_pm_handoff`, `get_window_state`, `record_api_call`, `notify_human`, `signal_compaction`; Engineer: `dispatch_implementer`, `dispatch_tester`, `signal_compaction`, ...) — same FastMCP auth enforcement applies (`server.py:198,219,222`).
+
+**Designed shape:** symmetric to dispatcher commit 3 + commit 3.5 wiring shape, but at `bridge/supervisor_base.py:_default_launcher` with per-spawn token + per-spawn JSON config:
+
+- `SupervisorLaunchContext.allowed_tools: list[str]` field — built-in tools (Read, Bash, Glob, Grep) + prefixed orchestrator MCP tools per supervisor role's `mcp_tools_allowed` (PM: 12+ tools per pm.yaml; Engineer: 12+ tools per engineer.yaml). NO Playwright (supervisors don't run browser-driven verification).
+- `SupervisorLaunchContext.mcp_config_path: Path | None = None` field — symmetric to dispatcher's field
+- `_default_launcher` argv composition adds conditional `--allowedTools` block + `--mcp-config <path> --strict-mcp-config` block (Option A ordering preserved)
+- Helper writes per-spawn JSON to `<dispatches_root>/<spawn_dispatch_id>/mcp_config.json` (note: supervisor's "dispatch_id" per F4 stderr drain naming is the supervisor-spawn dispatch_id; same path layout). NO Playwright entry in supervisor's mcp_config.json (role-asymmetry).
+- `LongRunningSupervisor.__init__` adds `daemon_url: str | None = None` parameter; main.py wires from `f"http://{settings.mcp_host}:{settings.mcp_port}/mcp"` (mirrors BridgeDispatcher pattern landed at commit 3.5)
+- `_spawn` method writes per-spawn JSON before launcher invocation; threads `mcp_config_path` through SupervisorLaunchContext
+
+**Per-spawn token lifecycle (distinct from per-dispatch):** supervisor token revoked at supervisor shutdown / heartbeat-timeout-respawn / unexpected-exit / compaction-completed paths (per F4 cleanup anchors). Each respawn mints a fresh token + writes a fresh JSON config; the prior spawn's token is revoked in the same cleanup path. Q1 (a) RETAIN disposition extends symmetrically: revoked tokens are inert via `auth.TokenStore.lookup` returning None for revoked records; retained mcp_config.json file from a prior spawn is operationally inert.
+
+**Cost estimate:** ~80-120 LOC + 8-12 unique tests (symmetric to commit 3.5 dispatcher work; F2.1 mid-band sentinel-heavy sub-category). New file `tests/unit/bridge/test_supervisor_default_launcher_mcp_config.py` (mirrors `test_default_launcher_mcp_config.py` shape); + extension to `tests/unit/bridge/test_mcp_config.py` if the helpers from commit 3.5 are reused for per-spawn paths (likely YES — same helpers handle both per-dispatch and per-spawn cases since the path computation + JSON write are role-conditional but lifecycle-agnostic).
+
+**Pattern-replication at launcher level reaches threshold-of-three when this entry implements** (commit 2 dispatcher --append-system-prompt + commit 3 dispatcher --allowedTools + commit 3.5 dispatcher --mcp-config + commit 3.6 supervisor combined). Convention 19 candidate at M5-acceptance closeout: "auth + permission wiring at subprocess launchers" as a confirmed pattern; ChatGPT/reviewer-Claude/Code triad-wide methodology operating across the chain.
+
+**Trigger:** ζ-1 disposition → commit 3.6 implementation cycle (next prep cycle after commit 3.5 closes). β operational gate cannot run end-to-end without this; β session opens at commit 4 (after 3.6 lands).
+
+**Connection to V2 roadmap:** subset of V2 #8 (project adapter abstraction) — different project contexts may have different per-supervisor MCP server requirements; per-spawn `--mcp-config` becomes per-project-adapter configuration in Phase 2. Until V2 #8, role-conditional shape lands at commit 3.6.
+
+**Touchpoints at implementation (commit 3.6):** `bridge/supervisor_base.py:_default_launcher` (argv composition: add `--allowedTools` + `--mcp-config <path> --strict-mcp-config`); `bridge/supervisor_base.py:SupervisorLaunchContext` (new `allowed_tools: list[str]` + `mcp_config_path: Path | None = None` fields); `bridge/supervisor_base.py:LongRunningSupervisor.__init__` (new `daemon_url: str | None = None` parameter); `_spawn` method (write per-spawn JSON before launcher); `bridge/mcp_config.py` likely reused (helpers are lifecycle-agnostic; just role-conditional); `src/meridian_orchestrator/main.py` (pass `daemon_url` to PMSupervisor + EngineerSupervisor constructors symmetric to BridgeDispatcher precedent); per-role yaml `allowed_tools` field already exists from commit 3 (PM/Engineer yaml may need `allowed_tools` populated per the helper's read pattern — verify at commit 3.6 prep whether existing pm.yaml + engineer.yaml have the field or need it added).
 
 ## Phase 2 architectural-evolution candidates
 

@@ -189,6 +189,14 @@ async def _run_lifespan_body(
                     # bridge.stderr_drain. Persists beyond worktree
                     # cleanup for post-mortem.
                     dispatches_root=settings.dispatches_root,
+                    # Orchestrator daemon URL embedded into per-dispatch
+                    # mcp_config.json's meridian-orchestrator HTTP MCP
+                    # entry; the dispatcher uses it to compose the
+                    # ``Authorization: Bearer`` header per per-dispatch
+                    # token. See :mod:`bridge.mcp_config`.
+                    daemon_url=(
+                        f"http://{settings.mcp_host}:{settings.mcp_port}/mcp"
+                    ),
                 )
                 logger.info(
                     "canonical.provisioning_complete",

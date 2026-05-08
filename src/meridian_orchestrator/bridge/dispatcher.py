@@ -57,6 +57,7 @@ from meridian_orchestrator.bridge.canonical import (
     CanonicalDivergedError,
 )
 from meridian_orchestrator.bridge.launch_env import build_subprocess_env
+from meridian_orchestrator.bridge.mcp_config import mcp_config_path, write_mcp_config
 from meridian_orchestrator.bridge.stderr_drain import (
     DrainingSubprocess,
     _drain_stream_to_file,
@@ -163,6 +164,19 @@ class DispatchLaunchContext:
     # custom ``subprocess_launcher`` callables don't need to grow a new
     # path argument they wouldn't use.
     dispatches_root: Path | None = None
+    # Per-dispatch JSON config at ``<dispatches_root>/<dispatch_id>/
+    # mcp_config.json`` containing the orchestrator HTTP MCP entry with
+    # ``Authorization: Bearer <token>`` header + (tester only) Playwright
+    # stdio entry. Launcher emits ``--mcp-config <path> --strict-mcp-config``
+    # so the subprocess uses ONLY this config; user-scope and local-scope
+    # registrations cannot leak in. ``None`` default so non-dispatcher
+    # callers (test fixtures with custom ``subprocess_launcher`` injections)
+    # don't silently inject the flags; the launcher conditionally emits
+    # both flags only when the path is non-None. Production path:
+    # ``BridgeDispatcher.dispatch`` calls
+    # :func:`bridge.mcp_config.write_mcp_config` to materialize the JSON
+    # before launcher invocation, then threads the path here.
+    mcp_config_path: Path | None = None
 
 
 class SubprocessHandle(Protocol):
@@ -264,22 +278,31 @@ async def _default_launcher(ctx: DispatchLaunchContext) -> SubprocessHandle:
     #   appends to Claude Code's default system prompt
     # - `--allowedTools <tools...>` (2026-05-08, commit 3): comma- or
     #   space-separated list of tool names; example:
-    #   `"Bash(git *) Edit"`. The launcher passes the list as a single
-    #   argv element with space-separated tool names — supports B1
-    #   unrestricted Bash disposition (Mike's D4, 2026-05-08).
+    #   `"Bash(git *) Edit"`. Single argv element with space-separated
+    #   tool names — supports B1 unrestricted Bash disposition.
+    # - `--mcp-config <configs...>` (2026-05-08, commit 3.5): "Load
+    #   MCP servers from JSON files or strings". `--strict-mcp-config`
+    #   "Only use MCP servers from --mcp-config, ignoring all other
+    #   MCP configurations" — hermetic semantic verified empirically
+    #   2026-05-08 (sentinel-at-user-scope vs. empty-config probe).
     #
     # Argv shape (Option A ordering): ("claude", "--effort", <level>,
     # ["--append-system-prompt", <sp>], ["--allowedTools", <space-joined>],
-    # "-p", <prompt>). Each conditional block is omitted entirely when
-    # its source field is empty so non-dispatcher callers (test fixtures
-    # with default DispatchLaunchContext) don't silently extend argv.
-    # Order keeps `-p <prompt>` last (positional adjacency); flags
-    # compose freely before the positional per `claude --help`.
+    # ["--mcp-config", <path>, "--strict-mcp-config"], "-p", <prompt>).
+    # Each conditional block is omitted entirely when its source field
+    # is empty/None so non-dispatcher callers (test fixtures with default
+    # DispatchLaunchContext) don't silently extend argv. Order keeps
+    # `-p <prompt>` last (positional adjacency); flags compose freely
+    # before the positional per `claude --help`.
     argv: list[str] = ["claude", "--effort", ctx.effort]
     if ctx.system_prompt:
         argv.extend(["--append-system-prompt", ctx.system_prompt])
     if ctx.allowed_tools:
         argv.extend(["--allowedTools", " ".join(ctx.allowed_tools)])
+    if ctx.mcp_config_path is not None:
+        argv.extend(
+            ["--mcp-config", str(ctx.mcp_config_path), "--strict-mcp-config"]
+        )
     argv.extend(["-p", ctx.prompt])
     proc = await asyncio.create_subprocess_exec(
         *argv,
@@ -322,6 +345,7 @@ class BridgeDispatcher:
         poll_interval_seconds: float = 0.1,
         push_after_merge: bool = True,
         dispatches_root: Path | None = None,
+        daemon_url: str | None = None,
     ) -> None:
         if canonical.path in _dispatcher_owned_canonicals:
             raise RuntimeError(
@@ -341,6 +365,15 @@ class BridgeDispatcher:
         # from path-wiring churn (per feedback_optional_dependency_in_helpers
         # precedent). main.py wires settings.dispatches_root explicitly.
         self._dispatches_root = dispatches_root
+        # Orchestrator daemon URL embedded into per-dispatch mcp_config.json's
+        # meridian-orchestrator HTTP MCP entry as the ``url`` field.
+        # Resolved from settings.mcp_host + settings.mcp_port at main.py
+        # construction time. ``None`` default + None-handling at
+        # dispatch-time preserves the test-fixture path: when daemon_url
+        # is None OR dispatches_root is None, the per-dispatch JSON
+        # write is skipped and the launcher omits ``--mcp-config``
+        # entirely. Production main.py wires both.
+        self._daemon_url = daemon_url
         self._launcher: SubprocessLauncher = (
             subprocess_launcher
             if subprocess_launcher is not None
@@ -557,6 +590,34 @@ class BridgeDispatcher:
                 terminate_reason = "failed"
                 raise
 
+            # Materialize per-dispatch mcp_config.json with the
+            # orchestrator HTTP MCP entry carrying ``Authorization: Bearer
+            # <issued_token.token>`` header + (tester only) Playwright
+            # stdio entry. Both ``self._dispatches_root`` and
+            # ``self._daemon_url`` must be set for the JSON write to fire
+            # — when either is None (test-fixture path with custom
+            # subprocess_launcher injection), ``mcp_config_path_value``
+            # stays None and the launcher omits ``--mcp-config`` entirely.
+            # File persists past dispatch terminal state; token revocation
+            # in this method's finally clause renders the retained config
+            # inert via ``auth.TokenStore.lookup`` returning None for
+            # revoked records. Mirrors stderr.log retention convention.
+            mcp_config_path_value: Path | None = None
+            if (
+                self._dispatches_root is not None
+                and self._daemon_url is not None
+            ):
+                cfg_path = mcp_config_path(
+                    self._dispatches_root, dispatch_id
+                )
+                if cfg_path is not None and write_mcp_config(
+                    cfg_path,
+                    daemon_url=self._daemon_url,
+                    token=issued_token.token,
+                    role=role,
+                ):
+                    mcp_config_path_value = cfg_path
+
             ctx = DispatchLaunchContext(
                 dispatch_id=dispatch_id,
                 role=role,
@@ -567,6 +628,7 @@ class BridgeDispatcher:
                 system_prompt=system_prompt,
                 allowed_tools=allowed_tools or [],
                 dispatches_root=self._dispatches_root,
+                mcp_config_path=mcp_config_path_value,
             )
             proc = await self._launcher(ctx)
             await self._storage.execute(
