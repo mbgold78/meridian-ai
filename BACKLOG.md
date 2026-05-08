@@ -70,6 +70,9 @@ Sketched in `docs/kickoff/12-phase-two-engineering-team.md`.
 - Manual `supervisor.halt()` clear without service restart (M4c+; supervisor.halt() currently requires service restart for recovery — adequate for Phase 1 since the operator is in the loop, but a future admin command to clear the halt without restart would improve operability when the underlying cause is well-understood and a full restart is heavyweight. Spec home: `docs/kickoff/11-engineer-bridge.md` § Cap escalation surface.)
 - Retrofit supervisor respawn paths to single-SQL-transaction atomicity (M4c-compaction +). Both the heartbeat-timeout respawn and the compaction-driven respawn currently use the in-process `_current_dispatch_id is None` flag to gate the watchdog during the brief window where the old row is terminal but the new row hasn't been inserted yet. External readers (currently none) see a transient "no active supervisor row" state. When external readers are introduced — likely M5's PMSupervisor lifecycle visualization or M6's `notify_human` surfacing — wrap the old-row-terminal UPDATE and the new-row INSERT in a single SQLite transaction so external queries see consistent state at all times. Spec home: `docs/kickoff/11-engineer-bridge.md` § Engineer compaction (atomicity subsection).
 - Auto-persona review-discipline ingraining (Phase 2 sub-milestone). The metrics-driven quality-signals discipline established in M5-continuous-pm-driver depends on reviewing-Claude + Mike paired-reviewer pattern. Auto-persona mode loses this pairing. Three pattern candidates for ingraining: (1) cross-persona review at architectural decision points; (2) operator spot-check ritual at sub-milestone boundaries with quality-signals pattern audit; (3) persona-prompt-level metrics-format requirement. Sub-milestone scope: design the cross-persona review protocol, define operator-spot-check ritual, bake metrics requirement into persona prompts. Trigger: Phase 2 transition, after first auto-persona sub-milestone has run enough to surface real failure modes.
+- **Operator-tunable heartbeat timeout via environment variable.** The supervisor heartbeat timeout is hardcoded at `bridge/supervisor_base.py:274` (`timeout_seconds: int = 1800`; default 30 minutes) and `bridge/engineer_supervisor.py:75` (matching constructor default), and not exposed as a Settings env var. Pinned at M5-flag-flips commit 5 prep when memory's claimed `MERIDIAN_ORCH_ENGINEER_HEARTBEAT_TIMEOUT_SECONDS=1800` env var was empirically verified to NOT exist (memory drift caught at prep time per bidirectional verification-first discipline). Phase 1 default matches `engineer.yaml`'s "30 minutes silent triggers SIGTERM and respawn" promise; tunability isn't load-bearing pre-operational-data. **Trigger:** first instance of operational data showing the 30min default needs adjustment OR first operator request for shorter/longer timeout. **Fix scope:** add `MERIDIAN_ORCH_ENGINEER_HEARTBEAT_TIMEOUT_SECONDS` field to `config.py:Settings`; thread through `main.py` `EngineerSupervisor` construction; add explicit-default test mirroring the `pm_loop_tick_seconds` / `audit_sample_percentage` precedents (~5-10 LOC + 1 test). PM-supervisor heartbeat may want a symmetric env var; defer to a commit-6 BACKLOG addition if PM-supervisor empirical verification at that commit shows the same pattern. Touchpoints: `bridge/supervisor_base.py:274`; `bridge/engineer_supervisor.py:75`; `main.py` (the `EngineerSupervisor(...)` construction in `_run_lifespan_body`'s post-`mcp_ready` block).
+- **Extended stale-snapshot escalation for Engineer compaction trigger.** The `## Compaction trigger` subsection in `config/agents/engineer.yaml` (added at M5-flag-flips commit 5) gates compaction signaling on `snapshot_age_seconds <= 120`. When the snapshot is stale, Engineer continues normal iteration without signaling, rechecking on each iteration. Persistent stale-snapshot windows (snapshot ageing past 120s for many consecutive iterations) currently produce no escalation surface — Engineer keeps iterating with `pace_recommendation='unknown'` until the snapshot freshens. **Trigger:** first instance of stale-snapshot persisting beyond N iterations during real Engineer operation (operational observation post-flag-flip). **Fix scope:** define escalation threshold (N consecutive stale-snapshot iterations); decide escalation mechanism (operator alert via task note? automatic compaction-trigger override regardless of staleness? supervisor restart with diagnostic packet?). Cost: TBD; design decision required at trigger. **Related:** Phase 2 V2 roadmap entry "Degraded-state recovery / operator pacing control loop" (this file's tail) — stale-snapshot escalation likely subsumes under that governance layer's signal-tracking + recovery-mode framework rather than landing as a standalone Engineer-yaml refinement. Touchpoints: `config/agents/engineer.yaml` § Compaction trigger; `tools/budget.py:get_window_state` (snapshot_age_seconds source); future governance-layer module per V2 #9 placement.
+
 ## Conventions
 
 **Migrated 2026-05-07** to `docs/conventions/00-README.md` per the
@@ -666,3 +669,82 @@ After four rounds, inflection point reached. Round 5 explicitly declined.
 This applies to future sessions reading this entry: **do not re-open observability design questions during M5 or initial operations without specific runtime-data-driven cause.** The next meaningful improvements come from real anomaly patterns, real intervention cost trends, real disagreement frequency — not pre-runtime critique.
 
 If a future session feels the urge to refine this design before runtime data exists, that urge IS the failure mode being warned against. The right response is to ship and observe.
+
+## Degraded-state recovery / operator pacing control loop
+
+**Phase**: 2 architectural evolution / methodology-as-product
+**Status**: Deferred from M5-flag-flips disposition 2026-05-09
+**Trigger for prioritization**: First real dogfooding session where the operator becomes the recovery glue after throttle/context rotation fails, OR repeated manual pacing/adjudication is needed to preserve quality.
+
+### Rationale
+
+Product-relevant but not Phase 1-critical. The correct abstraction is not "take a break" or calendar-time rest. Orchestrator should not depend on "tomorrow" as a primitive. The right model is state-based recovery: detect degraded quality signals, enter a named recovery mode, and exit only when explicit conditions are met.
+
+### Scope
+
+- Soft signaling only by default. No hard paternalistic enforcement.
+- System surfaces quality-risk telemetry and recommended recovery modes.
+- Human remains able to override, continue, pause, or change priority.
+- Goal: reduce decision load and preserve work quality, not moralize rest.
+
+### Signals to track
+
+- Context pressure / compaction pressure
+- Budget or subscription-window pressure
+- Repeated correction loops or reversal rate
+- Same issue reopened repeatedly
+- Conflicting reviewer conclusions
+- Test instability or flaky retry behavior
+- Dispatch timeout / heartbeat failures
+- Tool/runtime failures
+- High unresolved finding count
+- Rapid high-stakes decision cadence
+- Late-stage closeout or post-close fix churn
+- Operator interaction pattern suggesting overloaded decision queue
+
+### Recovery modes
+
+- Compact and resume from handoff
+- Reduce concurrency
+- Downgrade risk: switch from implementation to read-only review/synthesis
+- Split work into smaller tasks
+- Freeze implementation and launch adjudication
+- Spawn independent reviewer/root-cause agents
+- Produce options matrix with exact citations
+- Queue implementation tasks but defer execution until explicit approval
+- Run diagnostic loop / minimal reproduction
+- Roll back to last known good checkpoint when appropriate
+- Mark task blocked with diagnostic packet
+- Continue unrelated safe work around the blocker
+
+### Escalation rule
+
+If throttle/reduced-concurrency does not recover, do not stall. Escalate from pacing control to fault isolation:
+
+1. Identify the binding constraint
+2. Fork recovery paths where safe
+3. Roll back or isolate if needed
+4. Ask the operator for one bounded decision only when required
+5. Preserve diagnostics and continue safe work if blocked
+
+### Exit criteria
+
+Each recovery mode must define clear exit conditions, such as:
+
+- Fresh context spawned and handoff accepted
+- Tests stable for N runs
+- Reviewer disagreement adjudicated
+- Human decision recorded
+- Budget window recovered or model route changed
+- Blocker isolated and backlog/fix task opened
+- Last known good checkpoint restored
+
+### Architectural placement
+
+Lives above individual Engineer/Implementer/Tester as a PM/supervisor governance layer. Not a subprocess "break" feature. Quality-preserving control loop for a human-operated AI delivery system.
+
+### Connection to V2 roadmap
+
+- Connects to V2 #7 (observation as structured event emission, not wrapper-side mutation): governance layer subscribes to event stream, doesn't participate in command execution.
+- Connects to methodology-as-moat #12: pacing discipline + verification-first + closeout discipline are parts of cumulative methodology; this entry extends the methodology into the product as governance-layer feature. The methodology becomes a product surface.
+- State-based recovery vs calendar-time rest is a Phase 2 design principle that generalizes beyond pacing — applies to any quality-protection mechanism in continuously-running systems.

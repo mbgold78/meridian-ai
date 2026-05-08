@@ -34,12 +34,14 @@ class Settings(BaseSettings):
     mcp_port: int = Field(default=8765, ge=1, le=65535)
     mcp_allow_non_loopback: bool = Field(default=False)
 
-    # M4c-engineer-supervisor: ships dormant. Flag flip is M5's behavioral
-    # milestone (alongside PMSupervisor's analogous flag). See
-    # `project_m5_engineer_supervisor_flag_flip` memory for the M5
-    # verification checklist (subscription_5h attribution, compaction-at-80%,
-    # heartbeat calibration).
-    enable_engineer_supervisor: bool = Field(default=False)
+    # M4c-engineer-supervisor: shipped dormant; flipped to default True at
+    # M5-flag-flips commit 5 after the three-behavior verification checklist
+    # closed (subscription_5h attribution, compaction-at-80%, heartbeat
+    # calibration). See `project_m5_engineer_supervisor_flag_flip` memory
+    # for the verification disposition + `config/agents/engineer.yaml`
+    # § Compaction trigger for the prompt-driven signal_compaction trigger
+    # this flag gates.
+    enable_engineer_supervisor: bool = Field(default=True)
 
     # M5-pm-supervisor-base: ships dormant. Flag flip is M5-flag-flips
     # alongside enable_engineer_supervisor. PMSupervisor doesn't need a

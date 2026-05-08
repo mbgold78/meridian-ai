@@ -33,6 +33,39 @@ def test_load_engineer_yaml_from_repo() -> None:
     assert cfg.system_prompt.startswith("You are Engineer at Meridian AI.")
 
 
+def test_engineer_yaml_system_prompt_contains_compaction_trigger() -> None:
+    """M5-flag-flips commit 5 contract test: engineer.yaml's system_prompt
+    MUST contain the ``## Compaction trigger`` subsection wiring
+    signal_compaction at subscription_5h utilization >= 80% with
+    snapshot freshness gating.
+
+    Methodology-as-moat: encoding the amendment as a contract test
+    surfaces accidental yaml deletion in CI rather than allowing
+    silent drift between the daemon's flag-flip behavior and the
+    Engineer subprocess's prompt-driven trigger. Asserts on
+    load-bearing semantic strings (subsection header, MCP tool name,
+    bucket name, threshold value, staleness gate, exit-clean
+    semantic) rather than full-text equality so minor wording
+    refinements don't break the test while structural deletions do.
+    """
+    cfg = load_agent_config(REPO_CONFIG_DIR / "engineer.yaml")
+    prompt = cfg.system_prompt
+
+    # Subsection header
+    assert "## Compaction trigger" in prompt
+    # MCP tool name (signal_compaction handler in tools/supervisor.py)
+    assert "signal_compaction" in prompt
+    # Canonical bucket name per project_subscription_first_architecture
+    assert "subscription_5h" in prompt
+    # Threshold per spec (08-implementation-plan.md:301;
+    # project_subscription_first_architecture B-2 disposition)
+    assert "utilization >= 80" in prompt
+    # Staleness gate per V2.1 disposition (snapshot freshness threshold)
+    assert "snapshot_age_seconds <= 120" in prompt
+    # Exit-clean semantic from signal_compaction's next_action return
+    assert "exit_clean" in prompt
+
+
 def test_load_pm_yaml_from_repo() -> None:
     cfg = load_agent_config(REPO_CONFIG_DIR / "pm.yaml")
     assert cfg.role == "pm"

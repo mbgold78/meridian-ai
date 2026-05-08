@@ -207,6 +207,51 @@ async def test_launcher_receives_registry_prompt_and_supervisor_dir(
         await supervisor.shutdown()
 
 
+async def test_supervisor_start_inserts_engineer_supervisor_dispatch_row(
+    storage: SqliteStorage, settings: Settings, tmp_path: Path
+) -> None:
+    """M5-flag-flips commit 5 flag-flip smoke test: a started
+    EngineerSupervisor inserts exactly one ``dispatches`` row with
+    ``role='engineer-supervisor'`` and ``status='running'``. Existing
+    tests (launcher context, watchdog activity, heartbeat respawn)
+    implicitly rely on this row but don't assert it directly. This
+    smoke test pins the lifecycle-row contract explicitly so accidental
+    drift in the supervisor's spawn path surfaces in CI rather than
+    only manifesting through downstream-test failure cascades."""
+    registry, token_store, _ = await _build_registry_with_engineer(
+        tmp_path, service="engineer-sup-flag-flip-smoke"
+    )
+
+    async def launcher(
+        ctx: SupervisorLaunchContext,
+    ) -> SupervisorSubprocessHandle:
+        return _ControllableProc(cooperative_terminate=True)
+
+    supervisor = EngineerSupervisor(
+        registry=registry,
+        working_directory=settings.engineer_supervisor_dir,
+        storage=storage,
+        token_store=token_store,
+        subprocess_launcher=launcher,
+        # Long timeout — we shut down before the watchdog fires.
+        check_interval_seconds=10.0,
+        timeout_seconds=600,
+    )
+
+    await supervisor.start()
+    try:
+        rows = await storage.fetch_all(
+            "SELECT id, role, status FROM dispatches "
+            "WHERE role = 'engineer-supervisor'"
+        )
+        assert len(rows) == 1
+        assert rows[0]["role"] == "engineer-supervisor"
+        assert rows[0]["status"] == "running"
+        assert rows[0]["id"] == supervisor._current_dispatch_id
+    finally:
+        await supervisor.shutdown()
+
+
 async def test_construction_rejects_unregistered_engineer(
     storage: SqliteStorage, settings: Settings, tmp_path: Path
 ) -> None:

@@ -136,6 +136,12 @@ system_prompt: |
   5. Claim new dispatchable work per your pace recommendation; compose dispatch spec with embedded altitude-1 decisions; dispatch
   6. Heartbeat: every iteration makes at least one MCP call, which updates `dispatches.last_activity_at` on your engineer-supervisor row (`dispatches.role='engineer-supervisor'`, single row owned by EngineerSupervisor across daemon lifetime). The watchdog requires a call within 15 minutes; 30 minutes silent triggers SIGTERM and respawn per the bridge spec's continuous-mode pattern.
 
+  ## Compaction trigger
+
+  After step 1 of the operating loop reads get_window_state(bucket="subscription_5h"): if the snapshot is fresh (snapshot_age_seconds <= 120) AND utilization >= 80, call signal_compaction with iteration_marker=<current ISO 8601 UTC timestamp with millisecond precision, e.g., 2026-05-09T14:23:45.789Z> and proxy_value=<utilization/100.0>. The tool returns next_action='exit_clean'; exit immediately (rc=0). The watchdog observes the clean exit, marks your dispatch row status='compacted', and respawns a fresh supervisor with reset context. In-flight Implementer/Tester dispatches continue independently (separate subprocesses managed by BridgeDispatcher); the fresh supervisor reconstructs state from get_dispatch_status and get_recent_dispatches on its first iteration.
+
+  When snapshot_age_seconds > 120, utilization is unknown — do not signal compaction during stale-snapshot windows. Continue normal iteration; recheck on the next iteration.
+
   ## Parallel dispatch: balanced
 
   You parallelize when reasonable indication suggests files won't overlap:
