@@ -76,6 +76,55 @@ def test_load_pm_yaml_from_repo() -> None:
     assert "notify_human" in cfg.mcp_tools_allowed
 
 
+def test_pm_yaml_system_prompt_contains_compaction_lifecycle() -> None:
+    """M5-flag-flips commit 6 contract test: pm.yaml's system_prompt
+    MUST contain the ``## Compaction lifecycle`` subsection wiring
+    ``signal_compaction`` at the ``subscription_5h`` conserve threshold
+    with ``write_pm_handoff`` sequencing.
+
+    Methodology-as-moat: encoding the existing wiring as a contract
+    test surfaces accidental yaml deletion in CI rather than allowing
+    silent drift between the daemon's flag-flip behavior and the PM
+    subprocess's prompt-driven trigger. The PM compaction wiring
+    shipped at M5-continuous-pm-driver commits 7+8 (predates this
+    flag flip); the test locks the load-bearing semantic strings
+    against accidental deletion at flag-flip time and beyond.
+
+    PM-specific divergence from engineer.yaml's commit-5 amendment
+    (intentional architecture, NOT drift to fix): PM uses
+    ``pace_recommendation == 'conserve'`` indirection (fires at the
+    same threshold as Engineer's literal ``utilization >= 80`` via
+    ``tools/budget.py:_compute_pace_recommendation``'s
+    ``remaining < 20%`` rule) + has a companion ``write_pm_handoff``
+    call before signal_compaction (Engineer has no handoff doc) +
+    anti-flapping discipline absent from engineer.yaml (PM has
+    handoff-doc-staleness check; Engineer doesn't need one).
+
+    Asserts on load-bearing semantic strings (subsection header, MCP
+    tool names, bucket name, trigger condition, exit-clean semantic)
+    rather than full-text equality so minor wording refinements
+    don't break the test while structural deletions do.
+    """
+    cfg = load_agent_config(REPO_CONFIG_DIR / "pm.yaml")
+    prompt = cfg.system_prompt
+
+    # Subsection header (PM-specific: "lifecycle" not "trigger")
+    assert "## Compaction lifecycle" in prompt
+    # MCP tool name (signal_compaction handler in tools/supervisor.py)
+    assert "signal_compaction" in prompt
+    # Canonical bucket name per project_subscription_first_architecture
+    assert "subscription_5h" in prompt
+    # PM-specific trigger condition — pace_recommendation indirection
+    # (fires at same threshold as Engineer's literal utilization >= 80
+    # per _compute_pace_recommendation's remaining<20% rule)
+    assert "pace_recommendation == 'conserve'" in prompt
+    # PM-specific companion MCP tool — handoff doc write before
+    # signal_compaction (architectural asymmetry from engineer.yaml)
+    assert "write_pm_handoff" in prompt
+    # Exit-clean semantic from signal_compaction's next_action return
+    assert "Exit cleanly" in prompt
+
+
 def test_load_implementer_yaml_from_repo() -> None:
     cfg = load_agent_config(REPO_CONFIG_DIR / "implementer.yaml")
     assert cfg.role == "implementer"

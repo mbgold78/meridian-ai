@@ -214,6 +214,57 @@ async def test_launcher_receives_registry_loaded_pm_prompt_and_pm_continuous_cwd
         await supervisor.shutdown()
 
 
+async def test_supervisor_start_inserts_pm_continuous_dispatch_row(
+    storage: SqliteStorage, settings: Settings, tmp_path: Path
+) -> None:
+    """M5-flag-flips commit 6 flag-flip smoke test (mirror of
+    EngineerSupervisor's commit 5 smoke test): a started PMSupervisor
+    inserts exactly one ``dispatches`` row with ``role='pm-continuous'``
+    and ``status='running'``. Existing tests (launcher context, watchdog
+    activity, heartbeat respawn, _reconstruct_state no-op) implicitly
+    rely on this row but don't assert it directly. This smoke test pins
+    the lifecycle-row contract explicitly so accidental drift in the
+    supervisor's spawn path surfaces in CI rather than only manifesting
+    through downstream-test failure cascades.
+
+    Note: ``role='pm-continuous'`` (not ``'pm-supervisor'``) per
+    ``pm_supervisor.py:_token_label()`` returning ``'pm-continuous'``;
+    ``supervisor_base.py:_token_role_with_label()`` writes the label to
+    the dispatches.role column. Verified empirically at commit 6 prep."""
+    registry, token_store, _ = await _build_registry_with_pm(
+        tmp_path, service="pm-sup-flag-flip-smoke"
+    )
+
+    async def launcher(
+        ctx: SupervisorLaunchContext,
+    ) -> SupervisorSubprocessHandle:
+        return _ControllableProc(cooperative_terminate=True)
+
+    supervisor = PMSupervisor(
+        registry=registry,
+        working_directory=settings.pm_continuous_dir,
+        storage=storage,
+        token_store=token_store,
+        subprocess_launcher=launcher,
+        # Long timeout — we shut down before the watchdog fires.
+        check_interval_seconds=10.0,
+        timeout_seconds=600,
+    )
+
+    await supervisor.start()
+    try:
+        rows = await storage.fetch_all(
+            "SELECT id, role, status FROM dispatches "
+            "WHERE role = 'pm-continuous'"
+        )
+        assert len(rows) == 1
+        assert rows[0]["role"] == "pm-continuous"
+        assert rows[0]["status"] == "running"
+        assert rows[0]["id"] == supervisor._current_dispatch_id
+    finally:
+        await supervisor.shutdown()
+
+
 async def test_construction_rejects_unregistered_pm(
     storage: SqliteStorage, settings: Settings, tmp_path: Path
 ) -> None:

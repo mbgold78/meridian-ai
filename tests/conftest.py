@@ -8,9 +8,10 @@ The ``_default_supervisor_flags_off_for_tests`` fixture defaults the
 ``enable_engineer_supervisor`` and ``enable_pm_supervisor`` flags to
 ``false`` at the env-var layer for every test. Production defaults
 flipped to ``true`` at M5-flag-flips commit 5 (engineer-supervisor) and
-will flip at commit 6 (pm-supervisor); the flipped production default
+commit 6 (pm-supervisor); the engineer-supervisor flipped default
 activates the substrate_working_directory validator on every
-``Settings()`` call. Tests that don't exercise the canonical-clone
+``Settings()`` call (the pm-supervisor flag has no validator
+dependency per `config.py` § enable_pm_supervisor). Tests that don't exercise the canonical-clone
 provisioning path (the vast majority — they construct supervisors
 directly via the class API or bypass the lifespan body) shouldn't need
 to thread substrate_working_directory through every fixture. The
@@ -100,8 +101,9 @@ def _default_supervisor_flags_off_for_tests(
     commit-6 flag flip — once that commit lands the autouse default
     will already be in place; no test-side churn at that commit.
     """
-    # See M5-flag-flips commit 5 disposition for reasoning; production
-    # default flipped at this commit. Operational verification of the
-    # flag-on path lives at M5-acceptance β, not unit/integration tests.
+    # See M5-flag-flips commit 5+6 dispositions for reasoning; production
+    # defaults flipped at those commits (engineer-supervisor at 5;
+    # pm-supervisor at 6). Operational verification of the flag-on paths
+    # lives at M5-acceptance β, not unit/integration tests.
     monkeypatch.setenv("MERIDIAN_ORCH_ENABLE_ENGINEER_SUPERVISOR", "false")
     monkeypatch.setenv("MERIDIAN_ORCH_ENABLE_PM_SUPERVISOR", "false")

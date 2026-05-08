@@ -113,3 +113,57 @@ def test_env_var_flag_off_bypasses_substrate_validator(
     monkeypatch.setenv("MERIDIAN_ORCH_ENABLE_ENGINEER_SUPERVISOR", "false")
     settings = Settings(data_dir=tmp_path)
     assert settings.enable_engineer_supervisor is False
+
+
+def test_production_default_enables_pm_supervisor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """M5-flag-flips commit 6 contract: the production default for
+    ``enable_pm_supervisor`` is ``True``. Symmetric assertion to
+    ``test_production_default_enables_engineer_supervisor`` for
+    ``enable_engineer_supervisor``; pinned for the same reason —
+    without this test, a future revert of the commit-6 flag flip
+    would not surface in CI because every other test runs under the
+    autouse-masked ``"false"`` env var.
+
+    ``substrate_working_directory`` is provided here only to satisfy
+    the engineer-only validator (also at production default ``True``
+    after commit 5); the PM flag itself has no validator dependency,
+    which is verified separately in
+    ``test_pm_supervisor_flag_has_no_substrate_validator_dependency``.
+    """
+    _clear_supervisor_flag_overrides(monkeypatch)
+    settings = Settings(
+        data_dir=tmp_path,
+        substrate_working_directory=tmp_path,
+    )
+    assert settings.enable_pm_supervisor is True
+
+
+def test_pm_supervisor_flag_has_no_substrate_validator_dependency(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """M5-flag-flips commit 6 contract: ``enable_pm_supervisor=True``
+    does NOT require ``substrate_working_directory``. PMSupervisor
+    has no canonical-clone analog (per ``config.py`` § 'PMSupervisor
+    doesn't need a substrate working tree — the
+    substrate_working_directory validator above is engineer-only');
+    the validator only fires for ``enable_engineer_supervisor=True``.
+
+    Verifies the asymmetry explicitly: with
+    ``enable_pm_supervisor=True`` AND
+    ``enable_engineer_supervisor=False`` (so the engineer validator
+    doesn't fire), ``Settings()`` constructs successfully even with
+    ``substrate_working_directory`` unset. This pins the asymmetry
+    against accidental future tightening that would force a
+    symmetric validator on PM (which would be incorrect — PM's
+    subprocess working directory ``settings.pm_continuous_dir`` is
+    derived from ``data_dir``, not from a substrate clone).
+    """
+    _clear_supervisor_flag_overrides(monkeypatch)
+    monkeypatch.setenv("MERIDIAN_ORCH_ENABLE_ENGINEER_SUPERVISOR", "false")
+    # PM flag stays at production default (True) per delenv above
+    settings = Settings(data_dir=tmp_path)
+    assert settings.enable_pm_supervisor is True
+    assert settings.enable_engineer_supervisor is False
+    assert settings.substrate_working_directory is None

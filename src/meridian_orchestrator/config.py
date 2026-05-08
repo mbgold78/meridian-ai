@@ -43,11 +43,18 @@ class Settings(BaseSettings):
     # this flag gates.
     enable_engineer_supervisor: bool = Field(default=True)
 
-    # M5-pm-supervisor-base: ships dormant. Flag flip is M5-flag-flips
-    # alongside enable_engineer_supervisor. PMSupervisor doesn't need a
-    # substrate working tree (no canonical-clone analog) — the
-    # substrate_working_directory validator above is engineer-only.
-    enable_pm_supervisor: bool = Field(default=False)
+    # M5-pm-supervisor-base: shipped dormant; flipped to default True at
+    # M5-flag-flips commit 6 after the three-behavior verification checklist
+    # closed (subscription_5h attribution, compaction-at-80%, heartbeat
+    # calibration — symmetric to enable_engineer_supervisor commit 5).
+    # PMSupervisor doesn't need a substrate working tree (no canonical-clone
+    # analog) — the substrate_working_directory validator above is
+    # engineer-only. See `project_m5_engineer_supervisor_flag_flip` memory
+    # § "the same three checks apply to PMSupervisor's M5-flag-flips flag
+    # flip" for the symmetric framework + `config/agents/pm.yaml`
+    # § Compaction lifecycle (shipped at M5-continuous-pm-driver commits 7+8)
+    # for the prompt-driven signal_compaction trigger this flag gates.
+    enable_pm_supervisor: bool = Field(default=True)
 
     # M5-pm-mode-and-window-state commit 7: OAuth subscription token
     # the daemon uses to poll Anthropic's /api/oauth/usage endpoint.
