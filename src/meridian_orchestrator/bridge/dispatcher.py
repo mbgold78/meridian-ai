@@ -122,6 +122,19 @@ class DispatchLaunchContext:
     # flag. Phase 1 values per orchestrator-utilization-addendum:
     # Implementer xhigh, Tester high.
     effort: str = "high"
+    # M5-acceptance commit 2 launcher-wiring (Finding A closure): the
+    # dispatched sub-agent's behavioral discipline (179-line
+    # tester.yaml.system_prompt; 109-line implementer.yaml.system_prompt)
+    # is loaded into the subprocess via ``--append-system-prompt``
+    # immediately before the ``-p <prompt>`` positional. Empty default
+    # so non-dispatcher callers (test fixtures constructing
+    # DispatchLaunchContext directly) don't silently inject a flag;
+    # the launcher conditionally inserts ``--append-system-prompt
+    # <content>`` only when ``system_prompt`` is non-empty. Production
+    # path: ``tools/dispatch.py`` resolves from
+    # ``AgentConfig.system_prompt`` via the registry, mirrors the
+    # ``effort`` plumbing pattern.
+    system_prompt: str = ""
     env_extras: dict[str, str] = field(default_factory=dict)
     # M5-flag-flips F4 stderr drain destination root. The launcher
     # writes per-dispatch stderr to ``<dispatches_root>/<dispatch_id>/
@@ -229,17 +242,24 @@ async def _default_launcher(ctx: DispatchLaunchContext) -> SubprocessHandle:
         else asyncio.subprocess.DEVNULL
     )
 
-    # CLI flag literal verified via `claude --help` (2026-05-05):
-    # `--effort <level>` accepts low/medium/high/xhigh/max. Flag
-    # appears before `-p` so the prompt is the final positional
-    # argument; this matches the existing argv ordering pattern
-    # for claude subprocess invocations across the codebase.
+    # CLI flag literals verified via `claude --help` (2026-05-05 for
+    # `--effort`; 2026-05-08 for `--append-system-prompt` at
+    # M5-acceptance commit 2 prep): `--effort <level>` accepts
+    # low/medium/high/xhigh/max; `--append-system-prompt <prompt>`
+    # appends the given text to Claude Code's default system prompt.
+    # Argv shape: ("claude", "--effort", <level>, "--append-system-prompt",
+    # <sp>, "-p", <prompt>) when system_prompt is non-empty; the
+    # append flag is omitted entirely when empty so non-dispatcher
+    # callers (test fixtures with default ``DispatchLaunchContext``)
+    # don't silently extend argv. Order keeps `-p <prompt>` last
+    # (positional adjacency); flags compose freely before the
+    # positional per `claude --help`.
+    argv: list[str] = ["claude", "--effort", ctx.effort]
+    if ctx.system_prompt:
+        argv.extend(["--append-system-prompt", ctx.system_prompt])
+    argv.extend(["-p", ctx.prompt])
     proc = await asyncio.create_subprocess_exec(
-        "claude",
-        "--effort",
-        ctx.effort,
-        "-p",
-        ctx.prompt,
+        *argv,
         cwd=str(ctx.working_directory),
         env=env,
         stdin=asyncio.subprocess.DEVNULL,
@@ -329,6 +349,7 @@ class BridgeDispatcher:
         actor: str,
         requested_working_directory: str | None = None,
         commit_hash: str | None = None,
+        system_prompt: str = "",
     ) -> DispatchOutcome:
         """Run the full dispatch lifecycle and return the final outcome.
 
@@ -364,6 +385,16 @@ class BridgeDispatcher:
         the new commit it composed. F5's ``COALESCE`` shape on
         ``complete_dispatch`` UPDATE preserves the up-front Tester value
         through terminal.
+
+        ``system_prompt`` is the dispatched sub-agent's behavioral discipline
+        (yaml.system_prompt for the implementer/tester role) loaded into the
+        subprocess via ``--append-system-prompt`` per M5-acceptance commit 2
+        (Finding A closure). Empty default means the launcher omits the flag
+        entirely — preserves the test-fixture path where callers construct
+        BridgeDispatcher with custom subprocess_launcher and don't thread
+        registry-resolved prompts. Production path: ``tools/dispatch.py``
+        ``dispatch_implementer`` / ``dispatch_tester`` resolve from
+        ``AgentConfig.system_prompt`` via the registry and pass through.
         """
         if role not in ("implementer", "tester"):
             raise DispatcherError(f"unsupported role for dispatch: {role!r}")
@@ -497,6 +528,7 @@ class BridgeDispatcher:
                 working_directory=worktree.path,
                 token=issued_token.token,
                 effort=effort,
+                system_prompt=system_prompt,
                 dispatches_root=self._dispatches_root,
             )
             proc = await self._launcher(ctx)

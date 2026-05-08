@@ -218,6 +218,7 @@ async def dispatch_implementer(
 
     model = _resolve_model_for_role(registry, "implementer")
     effort = _resolve_effort_for_role(registry, "implementer")
+    system_prompt = _resolve_system_prompt_for_role(registry, "implementer")
 
     outcome = await dispatcher.dispatch(
         task_id=request.task_id,
@@ -232,6 +233,7 @@ async def dispatch_implementer(
         engineer_decisions=[d.model_dump() for d in request.engineer_decisions],
         actor=caller_agent_id,
         requested_working_directory=request.working_directory,
+        system_prompt=system_prompt,
     )
     return _outcome_to_implementer_output(outcome)
 
@@ -284,6 +286,35 @@ def _resolve_effort_for_role(
     return agent.config.effort
 
 
+def _resolve_system_prompt_for_role(
+    registry: AgentRegistry | None, role: str
+) -> str:
+    """Resolve the dispatched role's behavioral discipline from the
+    registry's ``AgentConfig.system_prompt`` field per M5-acceptance
+    commit 2 (Finding A closure: yaml.system_prompt was previously
+    documented but not loaded into the dispatched subprocess).
+
+    Returns ``""`` when ``registry`` is ``None`` or when the role has no
+    registered config — same fallback pattern as :func:`_resolve_effort_for_role`
+    and :func:`_resolve_model_for_role`. Empty-string fallback is
+    load-bearing: the dispatcher's launcher conditionally inserts
+    ``--append-system-prompt`` only when the value is non-empty, so
+    lightweight tests passing ``registry=None`` keep their current argv
+    shape (no flag added) without further plumbing.
+
+    Production path: ``dispatch_implementer`` / ``dispatch_tester`` MCP
+    handlers resolve from registry per-dispatch so yaml hot-reload picks
+    up new system_prompt at the NEXT dispatch (mirrors
+    :func:`_resolve_effort_for_role` cadence per F6.2 Q9 Reading A).
+    """
+    if registry is None:
+        return ""
+    agent = registry.get(role)  # type: ignore[arg-type]
+    if agent is None:
+        return ""
+    return agent.config.system_prompt
+
+
 def _outcome_to_implementer_output(
     outcome: DispatchOutcome,
 ) -> DispatchImplementerOutput:
@@ -332,6 +363,7 @@ async def dispatch_tester(
 
     model = _resolve_model_for_role(registry, "tester")
     effort = _resolve_effort_for_role(registry, "tester")
+    system_prompt = _resolve_system_prompt_for_role(registry, "tester")
 
     outcome = await dispatcher.dispatch(
         task_id=request.task_id,
@@ -347,6 +379,7 @@ async def dispatch_tester(
         actor=caller_agent_id,
         requested_working_directory=request.working_directory,
         commit_hash=request.commit_hash,
+        system_prompt=system_prompt,
     )
     return DispatchTesterOutput(
         dispatch_id=outcome.dispatch_id,
