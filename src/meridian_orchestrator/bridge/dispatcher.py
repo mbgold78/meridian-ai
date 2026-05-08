@@ -328,6 +328,7 @@ class BridgeDispatcher:
         engineer_decisions: list[dict[str, Any]] | None = None,
         actor: str,
         requested_working_directory: str | None = None,
+        commit_hash: str | None = None,
     ) -> DispatchOutcome:
         """Run the full dispatch lifecycle and return the final outcome.
 
@@ -353,6 +354,16 @@ class BridgeDispatcher:
         the hard timeout via :func:`bridge.timeouts.calculate_timeout`.
         Precedence: ``timeout_override_seconds`` > ``calculate_timeout(model,
         estimated_tokens)`` > ``timeout_seconds`` (legacy default 300).
+
+        ``commit_hash`` is recorded on the ``dispatches`` row at INSERT time
+        per M5-flag-flips F5 — Tester dispatches identify the commit under
+        verification up front so PM/Engineer queries surface what's being
+        tested before the dispatch terminates. Implementer and supervisor
+        lifecycle paths pass ``None`` (default); the column starts NULL and
+        is populated when the Implementer's ``complete_dispatch`` reports
+        the new commit it composed. F5's ``COALESCE`` shape on
+        ``complete_dispatch`` UPDATE preserves the up-front Tester value
+        through terminal.
         """
         if role not in ("implementer", "tester"):
             raise DispatcherError(f"unsupported role for dispatch: {role!r}")
@@ -397,6 +408,7 @@ class BridgeDispatcher:
             timeout_override_seconds=timeout_override_seconds,
             keep_worktree_on_failure=keep_worktree_on_failure,
             engineer_decisions=engineer_decisions or [],
+            commit_hash=commit_hash,
         )
         await write_audit(
             self._storage,
@@ -724,6 +736,7 @@ class BridgeDispatcher:
         timeout_override_seconds: int | None,
         keep_worktree_on_failure: bool,
         engineer_decisions: list[dict[str, Any]],
+        commit_hash: str | None,
     ) -> None:
         import json as _json
 
@@ -731,8 +744,8 @@ class BridgeDispatcher:
             "INSERT INTO dispatches "
             "(id, task_id, role, status, working_directory, spec_path, "
             "timeout_seconds, timeout_override_seconds, keep_worktree_on_failure, "
-            "engineer_decisions_json) "
-            "VALUES (?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?)",
+            "engineer_decisions_json, commit_hash) "
+            "VALUES (?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?)",
             (
                 dispatch_id,
                 task_id,
@@ -743,6 +756,7 @@ class BridgeDispatcher:
                 timeout_override_seconds,
                 1 if keep_worktree_on_failure else 0,
                 _json.dumps(engineer_decisions, sort_keys=True),
+                commit_hash,
             ),
         )
 

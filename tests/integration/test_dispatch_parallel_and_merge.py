@@ -615,3 +615,91 @@ async def test_dispatch_tester_returns_structured_test_results(
     assert row is not None
     assert row["role"] == "tester"
     assert row["test_results_json"] is not None
+
+
+async def test_dispatch_tester_records_commit_hash_at_insert(
+    storage: SqliteStorage, upstream_repo: Path, tmp_path: Path
+) -> None:
+    """F5: Tester ``commit_hash`` is recorded on the dispatch row at INSERT
+    time (before ``complete_dispatch`` lands the terminal state) so PM/
+    Engineer queries surface what's under verification while the dispatch
+    is still in flight. End-to-end through the dispatcher: caller passes
+    ``DispatchTesterInput.commit_hash`` → ``dispatch_tester`` →
+    ``BridgeDispatcher.dispatch(commit_hash=...)`` →
+    ``_insert_dispatch_row`` writes the column at INSERT.
+    """
+    canonical = CanonicalClone(
+        path=tmp_path / "data" / "substrate-canonical",
+        upstream_url=str(upstream_repo),
+        default_branch="main",
+    )
+    await canonical.ensure_provisioned()
+    token_store = TokenStore()
+    background: list[asyncio.Task[None]] = []
+    proc = _FakeSubprocess()
+    expected_commit = "deadbeef" + "0" * 32
+    observed_at_running: dict[str, str | None] = {}
+
+    async def launcher(ctx: DispatchLaunchContext) -> SubprocessHandle:
+        async def simulate() -> None:
+            await asyncio.sleep(0)
+            # F5 INSERT-time verification: read the row while the dispatch
+            # is still 'running' (BEFORE complete_dispatch lands terminal).
+            row = await storage.fetch_one(
+                "SELECT commit_hash, status FROM dispatches WHERE id = ?",
+                (ctx.dispatch_id,),
+            )
+            assert row is not None
+            observed_at_running["commit_hash"] = row["commit_hash"]
+            observed_at_running["status"] = row["status"]
+            await complete_dispatch(
+                storage=storage,
+                token_store=token_store,
+                request=CompleteDispatchInput(
+                    dispatch_id=ctx.dispatch_id,
+                    status="completed",
+                    notes="verified",
+                ),
+                caller_agent_id="tester-agent-id",
+                caller_role="tester",
+            )
+            proc.signal_clean_exit()
+
+        background.append(asyncio.create_task(simulate()))
+        return proc
+
+    dispatcher = BridgeDispatcher(
+        storage=storage,
+        token_store=token_store,
+        canonical=canonical,
+        worktrees_root=tmp_path / "data" / "dispatch-worktrees",
+        subprocess_launcher=launcher,
+        poll_interval_seconds=0.02,
+    )
+
+    out = await dispatch_tester(
+        dispatcher=dispatcher,
+        registry=None,
+        request=DispatchTesterInput(
+            task_id="task-T",
+            commit_hash=expected_commit,
+            working_directory=str(upstream_repo),
+            assertion_spec="Verify the commit.",
+        ),
+        caller_agent_id="eng-agent-id",
+        caller_role="engineer",
+        tester_agent_id="tester-agent-id",
+    )
+
+    # commit_hash was on the row before terminal state landed.
+    assert observed_at_running["commit_hash"] == expected_commit
+    assert observed_at_running["status"] == "running"
+    # And it survived through terminal (CQ-D COALESCE preserves it
+    # when complete_dispatch passes commit_hash=None).
+    row = await storage.fetch_one(
+        "SELECT commit_hash, status FROM dispatches WHERE id = ?",
+        (out.dispatch_id,),
+    )
+    assert row is not None
+    assert row["commit_hash"] == expected_commit
+    assert row["status"] == "completed"

@@ -346,6 +346,7 @@ async def dispatch_tester(
         engineer_decisions=[d.model_dump() for d in request.engineer_decisions],
         actor=caller_agent_id,
         requested_working_directory=request.working_directory,
+        commit_hash=request.commit_hash,
     )
     return DispatchTesterOutput(
         dispatch_id=outcome.dispatch_id,
@@ -430,7 +431,15 @@ async def complete_dispatch(
         )
 
     await storage.execute(
-        "UPDATE dispatches SET status = ?, commit_hash = ?, decline_reason = ?, "
+        # M5-flag-flips F5 CQ-D: ``commit_hash = COALESCE(?, commit_hash)``
+        # preserves the up-front value Tester dispatches record at INSERT
+        # (per BridgeDispatcher.dispatch's ``commit_hash`` kwarg). Caller
+        # intent: ``request.commit_hash is None`` means "don't change the
+        # column" — Tester verifies an existing commit and has nothing to
+        # report; Implementer fail/decline likewise leaves NULL untouched.
+        # Implementer success passes the new commit's sha and overwrites.
+        "UPDATE dispatches SET status = ?, "
+        "commit_hash = COALESCE(?, commit_hash), decline_reason = ?, "
         "test_results_json = ?, queue_items_raised_json = ?, artifacts_json = ?, "
         "notes = ?, completed_at = datetime('now') WHERE id = ?",
         (

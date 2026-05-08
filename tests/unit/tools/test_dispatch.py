@@ -258,6 +258,142 @@ async def test_complete_dispatch_unknown_id(
         )
 
 
+# ----- F5: tester commit_hash pass-through + COALESCE preservation --------
+
+
+async def test_complete_dispatch_tester_preserves_commit_hash_on_none(
+    storage: SqliteStorage, token_store: TokenStore
+) -> None:
+    """F5 CQ-D: Tester's complete_dispatch with commit_hash=None must NOT
+    clobber the up-front-recorded value. The COALESCE shape on the UPDATE
+    delivers the docstring contract that the verified commit is recorded
+    up front and visible end-to-end on the dispatches row."""
+    issued = token_store.issue("tester-agent-id", "tester", "dispatch:dt1")
+    seeded_sha = "deadbeef" + "0" * 32
+    await storage.execute(
+        "INSERT INTO dispatches "
+        "(id, task_id, role, status, working_directory, timeout_seconds, "
+        "token_id, commit_hash) "
+        "VALUES (?, 'task-1', 'tester', 'running', '/tmp/wt', 300, ?, ?)",
+        ("dt1", issued.record.token_id, seeded_sha),
+    )
+
+    await complete_dispatch(
+        storage=storage,
+        token_store=token_store,
+        request=CompleteDispatchInput(
+            dispatch_id="dt1",
+            status="completed",
+            notes="verified",
+        ),
+        caller_agent_id="tester-agent-id",
+        caller_role="tester",
+    )
+
+    row = await storage.fetch_one(
+        "SELECT status, commit_hash FROM dispatches WHERE id = 'dt1'"
+    )
+    assert row is not None
+    assert row["status"] == "completed"
+    # COALESCE preserved the up-front sha through terminal.
+    assert row["commit_hash"] == seeded_sha
+
+
+async def test_complete_dispatch_implementer_overwrites_commit_hash(
+    storage: SqliteStorage, token_store: TokenStore
+) -> None:
+    """F5 CQ-D symmetry: Implementer success path still overwrites the
+    column when a new commit_hash is provided. COALESCE only no-ops when
+    the caller passes None."""
+    issued = token_store.issue("impl-agent-id", "implementer", "dispatch:di1")
+    await _seed_dispatch(
+        storage,
+        dispatch_id="di1",
+        role="implementer",
+        status="running",
+        token_id=issued.record.token_id,
+    )
+
+    await complete_dispatch(
+        storage=storage,
+        token_store=token_store,
+        request=CompleteDispatchInput(
+            dispatch_id="di1",
+            status="completed",
+            commit_hash="cafebabe" + "1" * 32,
+        ),
+        caller_agent_id="impl-agent-id",
+        caller_role="implementer",
+    )
+
+    row = await storage.fetch_one(
+        "SELECT commit_hash FROM dispatches WHERE id = 'di1'"
+    )
+    assert row is not None
+    assert row["commit_hash"] == "cafebabe" + "1" * 32
+
+
+async def test_complete_dispatch_implementer_decline_leaves_commit_hash_null(
+    storage: SqliteStorage, token_store: TokenStore
+) -> None:
+    """F5 CQ-D symmetry: Implementer decline/fail path leaves commit_hash
+    NULL (no clobber semantics; the row's INSERT defaulted to NULL and
+    COALESCE(None, NULL) = NULL preserves the absence)."""
+    issued = token_store.issue("impl-agent-id", "implementer", "dispatch:di2")
+    await _seed_dispatch(
+        storage,
+        dispatch_id="di2",
+        role="implementer",
+        status="running",
+        token_id=issued.record.token_id,
+    )
+
+    await complete_dispatch(
+        storage=storage,
+        token_store=token_store,
+        request=CompleteDispatchInput(
+            dispatch_id="di2",
+            status="declined",
+            decline_reason="spec contradicts §UI-7",
+        ),
+        caller_agent_id="impl-agent-id",
+        caller_role="implementer",
+    )
+
+    row = await storage.fetch_one(
+        "SELECT status, commit_hash, decline_reason FROM dispatches "
+        "WHERE id = 'di2'"
+    )
+    assert row is not None
+    assert row["status"] == "declined"
+    assert row["commit_hash"] is None
+    assert row["decline_reason"] == "spec contradicts §UI-7"
+
+
+def test_bridge_dispatcher_dispatch_commit_hash_is_keyword_only() -> None:
+    """F5 CQ-B contract: ``commit_hash`` on ``BridgeDispatcher.dispatch`` is
+    keyword-only with a None default. Encodes the convention so a future
+    refactor can't silently flip the parameter to positional and break
+    callers that omit it."""
+    import inspect
+
+    from meridian_orchestrator.bridge.dispatcher import BridgeDispatcher
+
+    sig = inspect.signature(BridgeDispatcher.dispatch)
+    param = sig.parameters.get("commit_hash")
+    assert param is not None, (
+        "BridgeDispatcher.dispatch must accept commit_hash kwarg per F5"
+    )
+    assert param.kind is inspect.Parameter.KEYWORD_ONLY, (
+        "commit_hash must be KEYWORD_ONLY (consistent with all other "
+        "BridgeDispatcher.dispatch parameters after the * separator)"
+    )
+    assert param.default is None, (
+        "commit_hash must default to None — non-tester callers "
+        "(dispatch_implementer, supervisor lifecycle) omit the kwarg"
+    )
+
+
 # ----- get_dispatch_status / result ---------------------------------------
 
 
