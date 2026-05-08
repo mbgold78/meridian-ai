@@ -233,3 +233,23 @@ class Settings(BaseSettings):
         subdirectory under this root, cleaned up on terminal state unless
         ``keep_worktree_on_failure`` is set."""
         return self.data_dir / "dispatch-worktrees"
+
+    @property
+    def dispatches_root(self) -> Path:
+        """Root directory for per-dispatch persistent diagnostic state.
+
+        M5-flag-flips F4 destination for stderr drain logs:
+        ``<data_dir>/dispatches/<dispatch_id>/stderr.log`` per the F4
+        Reading C disposition (drain stderr to per-dispatch file for
+        operator post-mortem on uncaught subprocess crashes).
+
+        Distinct from ``dispatch_worktrees_root`` because worktrees are
+        cleaned up on terminal state (unless ``keep_worktree_on_failure``);
+        stderr logs persist beyond worktree cleanup so post-mortem on a
+        completed-then-cleaned dispatch is still possible. Retention /
+        rotation policy deferred to BACKLOG per F4 guardrail #6 with
+        concrete trigger ("first instance where stderr log directory
+        size becomes operational concern OR first instance where
+        operator manually deletes old stderr logs").
+        """
+        return self.data_dir / "dispatches"

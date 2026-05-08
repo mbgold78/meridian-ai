@@ -88,6 +88,7 @@ class PMSupervisor(LongRunningSupervisor):
         respawn_cap: int = 3,
         respawn_window_seconds: int = 3600,
         grace_seconds: float = 10.0,
+        dispatches_root: Path | None = None,
     ) -> None:
         pm = registry.get("pm")
         if pm is None:
@@ -116,6 +117,11 @@ class PMSupervisor(LongRunningSupervisor):
             # this configures the daemon-launched PM-continuous
             # subprocess only.
             effort=pm.config.effort,
+            # M5-flag-flips F4: per-dispatch stderr log root passes
+            # through to the default supervisor launcher via
+            # SupervisorLaunchContext. main.py wires
+            # settings.dispatches_root.
+            dispatches_root=dispatches_root,
         )
 
     # ---- LongRunningSupervisor hooks -------------------------------------

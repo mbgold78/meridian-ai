@@ -76,6 +76,7 @@ class EngineerSupervisor(LongRunningSupervisor):
         respawn_cap: int = 3,
         respawn_window_seconds: int = 3600,
         grace_seconds: float = 10.0,
+        dispatches_root: Path | None = None,
     ) -> None:
         engineer = registry.get("engineer")
         if engineer is None:
@@ -103,6 +104,11 @@ class EngineerSupervisor(LongRunningSupervisor):
             # yaml hot-reload picks up new effort at the NEXT
             # supervisor restart per F6.2 Q9 disposition.
             effort=engineer.config.effort,
+            # M5-flag-flips F4: per-dispatch stderr log root passes
+            # through to the default supervisor launcher via
+            # SupervisorLaunchContext. main.py wires
+            # settings.dispatches_root.
+            dispatches_root=dispatches_root,
         )
 
     # ---- LongRunningSupervisor hooks -------------------------------------

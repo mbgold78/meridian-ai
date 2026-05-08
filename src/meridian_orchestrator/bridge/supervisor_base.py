@@ -21,6 +21,15 @@ Cap behavior (Decision C in prep): ``start()`` raises
 :class:`HaltedSupervisorError` when called on a halted instance. Recovery
 requires service restart, which provides a fresh supervisor object.
 
+M5-flag-flips F4 subprocess output handling (symmetric with
+``bridge/dispatcher.py:_default_launcher``): ``stdout=DEVNULL``;
+``stderr=PIPE`` drained continuously to
+``<data_dir>/dispatches/<dispatch_id>/stderr.log`` via
+:mod:`bridge.stderr_drain`. Drain task cancellation lives in each of
+this base class's existing cleanup paths — :meth:`shutdown`,
+:meth:`_handle_heartbeat_timeout`, :meth:`_handle_subprocess_unexpected_exit`,
+:meth:`_handle_compaction_completed` — per F4 guardrail #5.
+
 See ``docs/kickoff/11-engineer-bridge.md`` § Heartbeat watchdog and
 § Cap escalation surface for the full lifecycle semantics.
 """
@@ -44,6 +53,12 @@ from meridian_orchestrator.audit.logger import write_audit
 from meridian_orchestrator.auth import IssuedToken, TokenStore
 from meridian_orchestrator.bridge.dispatcher import _TERMINAL_STATES
 from meridian_orchestrator.bridge.launch_env import build_subprocess_env
+from meridian_orchestrator.bridge.stderr_drain import (
+    DrainingSubprocess,
+    _drain_stream_to_file,
+    cancel_drain_task,
+    stderr_log_path,
+)
 from meridian_orchestrator.errors import OrchestratorError
 from meridian_orchestrator.storage.datetime_utils import _coerce_naive_to_utc
 from meridian_orchestrator.storage.interface import Storage
@@ -103,6 +118,16 @@ class SupervisorLaunchContext:
     # xhigh.
     effort: str = "high"
     env_extras: dict[str, str] = field(default_factory=dict)
+    # M5-flag-flips F4 stderr drain destination root. Symmetric with
+    # DispatchLaunchContext.dispatches_root in bridge/dispatcher.py.
+    # Launcher writes per-dispatch stderr to ``<dispatches_root>/
+    # <dispatch_id>/stderr.log`` for operator post-mortem on uncaught
+    # supervisor crashes. ``None`` disables the drain (DEVNULL); test
+    # fixtures with custom subprocess_launcher injections that don't
+    # wire the path keep working unchanged. Production main.py wires
+    # ``settings.dispatches_root`` explicitly via the supervisor
+    # constructor.
+    dispatches_root: Path | None = None
 
 
 class SupervisorSubprocessHandle(Protocol):
@@ -147,9 +172,34 @@ async def _default_launcher(
     inherit subscription auth at this sub-milestone); M5-flag-flips will
     revisit when ``extra_usage.is_enabled: true`` becomes a configurable
     operator path.
+
+    M5-flag-flips F4 subprocess output handling (symmetric with
+    ``bridge/dispatcher.py:_default_launcher``): ``stdout=DEVNULL``
+    (operationally noise — supervisor outcomes flow via ``complete_dispatch``
+    and the heartbeat / unexpected-exit / compaction audit chain).
+    ``stderr=PIPE`` drained continuously to a per-dispatch log file under
+    ``<dispatches_root>/<dispatch_id>/stderr.log`` for uncaught-crash
+    diagnostic capture. When ``ctx.dispatches_root`` is None (test
+    fixtures), stderr also goes to DEVNULL — no drain task spawned. The
+    wrapper :class:`bridge.stderr_drain.DrainingSubprocess` exposes the
+    drain task for cancellation in the supervisor's existing cleanup
+    paths per F4 guardrail #5.
     """
     env = build_subprocess_env(token=ctx.token, dispatch_id=ctx.dispatch_id)
     env.update(ctx.env_extras)
+
+    # F4 guardrail #3: create the per-dispatch directory before subprocess
+    # launch. Helper handles OSError best-effort per F4 guardrail #4 —
+    # returns None if mkdir fails; launcher falls back to DEVNULL stderr.
+    stderr_path: Path | None = None
+    if ctx.dispatches_root is not None:
+        stderr_path = stderr_log_path(ctx.dispatches_root, ctx.dispatch_id)
+    stderr_kwarg = (
+        asyncio.subprocess.PIPE
+        if stderr_path is not None
+        else asyncio.subprocess.DEVNULL
+    )
+
     # CLI flag literal verified via `claude --help` (2026-05-05):
     # `--effort <level>` accepts low/medium/high/xhigh/max. Same
     # ordering as bridge/dispatcher.py:_default_launcher — effort
@@ -163,10 +213,20 @@ async def _default_launcher(
         cwd=str(ctx.working_directory),
         env=env,
         stdin=asyncio.subprocess.DEVNULL,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=stderr_kwarg,
     )
-    return proc  # asyncio.subprocess.Process satisfies the Protocol
+
+    drain_task: asyncio.Task[None] | None = None
+    if stderr_path is not None:
+        drain_task = asyncio.create_task(
+            _drain_stream_to_file(
+                proc.stderr, stderr_path, dispatch_id=ctx.dispatch_id
+            ),
+            name=f"stderr-drain-{ctx.dispatch_id}",
+        )
+
+    return DrainingSubprocess(proc=proc, drain_task=drain_task)
 
 
 @dataclass(frozen=True)
@@ -216,6 +276,7 @@ class LongRunningSupervisor(ABC):
         respawn_window_seconds: int = 3600,
         grace_seconds: float = _GRACE_SECONDS_DEFAULT,
         effort: str = "high",
+        dispatches_root: Path | None = None,
     ) -> None:
         self._storage = storage
         self._token_store = token_store
@@ -229,6 +290,15 @@ class LongRunningSupervisor(ABC):
         self._respawn_cap = respawn_cap
         self._respawn_window = timedelta(seconds=respawn_window_seconds)
         self._grace = grace_seconds
+        # M5-flag-flips F4: per-dispatch stderr log root. Threaded to
+        # the default launcher via SupervisorLaunchContext.dispatches_root.
+        # Symmetric with BridgeDispatcher's same-named field. Optional
+        # with None default to keep test fixtures with custom
+        # subprocess_launcher injections free from path-wiring churn
+        # (per feedback_optional_dependency_in_helpers precedent).
+        # main.py wires settings.dispatches_root explicitly through
+        # EngineerSupervisor / PMSupervisor subclasses.
+        self._dispatches_root = dispatches_root
         # Effort level threaded into SupervisorLaunchContext at each
         # _spawn() call. Set at construction from the registry's
         # AgentConfig.effort for the supervisor's role (PM/Engineer)
@@ -362,6 +432,12 @@ class LongRunningSupervisor(ABC):
 
         if proc is not None:
             await self._terminate_subprocess(proc)
+            # M5-flag-flips F4 guardrail #5: cancel the stderr drain task
+            # in the existing shutdown cleanup path. No-op for non-
+            # DrainingSubprocess handles (test fakes) and for already-
+            # completed drain tasks (subprocess closed stderr cleanly →
+            # drain hit EOF before terminate).
+            await cancel_drain_task(proc)
 
         if token is not None and dispatch_id is not None:
             revoked = await asyncio.to_thread(
@@ -511,6 +587,7 @@ class LongRunningSupervisor(ABC):
             working_directory=self._working_directory(),
             token=issued.token,
             effort=self._effort,
+            dispatches_root=self._dispatches_root,
         )
         proc = await self._launcher(ctx)
 
@@ -661,6 +738,13 @@ class LongRunningSupervisor(ABC):
             (_now_iso(), dispatch_id),
         )
 
+        # M5-flag-flips F4 guardrail #5: cancel the stderr drain task in
+        # the existing compaction-completed cleanup path before clearing
+        # the proc reference. Subprocess already exited cleanly so the
+        # drain task most likely hit EOF; cancel + await is idempotent
+        # and ensures the task object isn't orphaned.
+        await cancel_drain_task(self._current_proc)
+
         # Clear in-process state — subprocess is dead, token revoked, row
         # terminal. Watchdog will skip iterations until _spawn() sets the
         # new _current_dispatch_id (the (b)-2 atomicity pattern).
@@ -725,6 +809,14 @@ class LongRunningSupervisor(ABC):
                 dispatch_id,
             ),
         )
+
+        # M5-flag-flips F4 guardrail #5: cancel the stderr drain task in
+        # the existing unexpected-exit cleanup path before clearing the
+        # proc reference. Subprocess already exited (returncode is set);
+        # drain task most likely hit EOF, but explicit cancel + await is
+        # idempotent and prevents orphan task accumulation if the kernel
+        # didn't propagate EOF cleanly (e.g., crash-mid-write).
+        await cancel_drain_task(self._current_proc)
 
         self._current_proc = None
         self._current_token = None
@@ -828,6 +920,11 @@ class LongRunningSupervisor(ABC):
         signal_used: str | None = None
         if proc is not None:
             exit_code, signal_used = await self._terminate_subprocess(proc)
+            # M5-flag-flips F4 guardrail #5: cancel the stderr drain task
+            # in the existing heartbeat-timeout cleanup path, immediately
+            # after _terminate_subprocess returns so the drain doesn't
+            # outlive the proc reference clear below.
+            await cancel_drain_task(proc)
 
         if token is not None:
             revoked = await asyncio.to_thread(

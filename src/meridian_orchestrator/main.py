@@ -183,6 +183,12 @@ async def _run_lifespan_body(
                     token_store=TokenStore(),
                     canonical=canonical,
                     worktrees_root=settings.dispatch_worktrees_root,
+                    # M5-flag-flips F4: per-dispatch stderr log root.
+                    # The default launcher writes per-dispatch stderr
+                    # to <dispatches_root>/<dispatch_id>/stderr.log via
+                    # bridge.stderr_drain. Persists beyond worktree
+                    # cleanup for post-mortem.
+                    dispatches_root=settings.dispatches_root,
                 )
                 logger.info(
                     "canonical.provisioning_complete",
@@ -444,6 +450,10 @@ async def _run_lifespan_body(
                                     working_directory=settings.pm_continuous_dir,
                                     storage=storage,
                                     token_store=TokenStore(),
+                                    # M5-flag-flips F4: stderr drain
+                                    # destination for the PM-continuous
+                                    # supervisor subprocess.
+                                    dispatches_root=settings.dispatches_root,
                                 )
                                 await pm_supervisor.start()
                                 logger.info(
@@ -467,6 +477,10 @@ async def _run_lifespan_body(
                                     working_directory=settings.engineer_supervisor_dir,
                                     storage=storage,
                                     token_store=TokenStore(),
+                                    # M5-flag-flips F4: stderr drain
+                                    # destination for the Engineer
+                                    # supervisor subprocess.
+                                    dispatches_root=settings.dispatches_root,
                                 )
                                 await engineer_supervisor.start()
                                 logger.info(

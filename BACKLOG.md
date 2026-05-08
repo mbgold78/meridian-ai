@@ -129,6 +129,23 @@ Detail prose: M5-continuous-pm-driver grounding doc § F5.2 Q10 Reading A dispos
 
 Watch shape during the writer-only window: at default-disabled config (`audit_sample_percentage=0.0`), no rows accumulate in `audit_sample_log`; the deferred re-evaluator has nothing to process. At non-zero operator-set percentages, rows accumulate with `re_eval_state='pending'` indefinitely until the destination sub-milestone ships. This is operationally acceptable at low percentages; if the operator enables high-percentage sampling before the re-evaluator lands, a manual SQL pass to clear stale pending rows is the bridge.
 
+### → Phase 2 (operational-data-driven trigger): per-dispatch stderr log retention/rotation policy
+
+M5-flag-flips F4 (commit 3) ships per-dispatch stderr capture at `<data_dir>/dispatches/<dispatch_id>/stderr.log` via `bridge/stderr_drain.py`. Files persist beyond worktree cleanup so post-mortem on a completed-then-cleaned dispatch is still possible. **No retention or rotation policy ships at F4** — files accumulate indefinitely under `<data_dir>/dispatches/`.
+
+Phase 1 acceptance: at single-operator volume, accumulation is operationally fine for weeks-to-months. The persistent-by-default shape is load-bearing for the F4 disposition (Reading C: stderr drain to per-dispatch file as the operator-friendly diagnostic surface; cleanup-on-terminal-state would defeat the post-mortem purpose).
+
+**Concrete trigger** (per F4 guardrail #6): first instance where stderr log directory size becomes operational concern OR first instance where operator manually deletes old stderr logs (the manual-deletion event is the operational signal that retention policy is now load-bearing).
+
+**Fix scope at trigger:** evaluate three policy shapes:
+- **Fixed-window TTL** (e.g., delete logs older than 30 days). Simplest; risks deleting still-referenced logs if Mike post-mortems an old dispatch.
+- **Terminal-state-based cleanup** (e.g., delete logs for dispatches in `completed` state older than 7 days; preserve `failed` / `timed_out` / `unexpected_exit` indefinitely). Aligns retention with diagnostic value but adds dispatch-state-aware cleanup logic.
+- **Operator-tunable policy** via `MERIDIAN_ORCH_STDERR_LOG_RETENTION_DAYS` (Settings field; default unset = no cleanup, opt-in to TTL). Defers the policy decision to operational data + Mike's preference.
+
+**Touchpoints at trigger:** `bridge/stderr_drain.py` (cleanup helper, possibly invoked from a daemon-startup or periodic asyncio task); `config.py` (Settings field if operator-tunable); `BACKLOG.md` cross-reference here.
+
+**Cost estimate:** ~2-4h depending on policy shape; trigger-driven so deferral cost is zero unless trigger fires.
+
 ## Future architectural work
 
 Section established 2026-05-07 at M4d-task-management-surface commit 1 per Decision 5 routing convention (lazy-create on first entry). Distinct from `## Deferred` (which is for things to do at unspecified-future-time without a designed shape) and from `## Carry-forward to future sub-milestones` (which routes to a specifically-named destination). This section is for **designed-but-deferred-on-trigger architectural concepts** — the shape is sketched; a triggering condition is named; the work waits for the trigger.

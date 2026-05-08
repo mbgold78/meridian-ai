@@ -26,7 +26,11 @@ dispatch and the ``--ff-only`` merge into canonical/main. M5-flag-flips F3
 adds dispatch timeout enforcement via :func:`asyncio.timeout` in
 ``_await_terminal``; heartbeat watchdog deferred to a future sub-milestone
 (no current BACKLOG entry; surface as new entry with concrete trigger if
-operationally indicated post-flag-flip).
+operationally indicated post-flag-flip). M5-flag-flips F4 closes the
+subprocess pipe deadlock surface (``stdout=DEVNULL``; ``stderr=PIPE``
+drained continuously to ``<data_dir>/dispatches/<dispatch_id>/stderr.log``
+via :mod:`bridge.stderr_drain`); drain task cancellation lives in
+``dispatch()``'s finally clause per the F4 guardrails.
 
 Subprocess launching is injectable via the ``subprocess_launcher`` constructor
 parameter so tests can simulate a sub-agent that calls ``complete_dispatch``
@@ -53,6 +57,12 @@ from meridian_orchestrator.bridge.canonical import (
     CanonicalDivergedError,
 )
 from meridian_orchestrator.bridge.launch_env import build_subprocess_env
+from meridian_orchestrator.bridge.stderr_drain import (
+    DrainingSubprocess,
+    _drain_stream_to_file,
+    cancel_drain_task,
+    stderr_log_path,
+)
 from meridian_orchestrator.bridge.timeouts import ModelString, calculate_timeout
 from meridian_orchestrator.bridge.worktree import DispatchWorktree, MergeResult
 from meridian_orchestrator.errors import OrchestratorError
@@ -113,6 +123,17 @@ class DispatchLaunchContext:
     # Implementer xhigh, Tester high.
     effort: str = "high"
     env_extras: dict[str, str] = field(default_factory=dict)
+    # M5-flag-flips F4 stderr drain destination root. The launcher
+    # writes per-dispatch stderr to ``<dispatches_root>/<dispatch_id>/
+    # stderr.log`` for operator post-mortem on uncaught subprocess
+    # crashes. ``None`` disables the drain (launcher uses
+    # ``stderr=DEVNULL``); production main.py always wires a real
+    # path via ``Settings.dispatches_root``. ``None`` is the
+    # test-friendly default per ``feedback_optional_dependency_in_helpers``
+    # — the 11 integration test fixtures that construct dispatcher with
+    # custom ``subprocess_launcher`` callables don't need to grow a new
+    # path argument they wouldn't use.
+    dispatches_root: Path | None = None
 
 
 class SubprocessHandle(Protocol):
@@ -180,9 +201,34 @@ async def _default_launcher(ctx: DispatchLaunchContext) -> SubprocessHandle:
     not exposed here at M5-record-api-call (sub-agent dispatches always
     inherit subscription auth at this sub-milestone); M5-flag-flips will
     revisit if explicit overflow per-dispatch becomes needed.
+
+    M5-flag-flips F4 subprocess output handling: ``stdout=DEVNULL``
+    (operationally noise per ``11-engineer-bridge.md`` § Long-running
+    supervisors — structured outcomes flow via ``complete_dispatch``).
+    ``stderr=PIPE`` drained continuously to a per-dispatch log file under
+    ``<dispatches_root>/<dispatch_id>/stderr.log`` for uncaught-crash
+    diagnostic capture. When ``ctx.dispatches_root`` is None (e.g., test
+    fixtures with custom ``subprocess_launcher`` injection that don't
+    wire the path), stderr also goes to DEVNULL — no drain task
+    spawned. The wrapper :class:`DrainingSubprocess` exposes the drain
+    task for cancellation in ``dispatch()``'s existing finally clause
+    per F4 guardrail #5.
     """
     env = build_subprocess_env(token=ctx.token, dispatch_id=ctx.dispatch_id)
     env.update(ctx.env_extras)
+
+    # F4 guardrail #3: create the per-dispatch directory before subprocess
+    # launch. Helper handles OSError best-effort per F4 guardrail #4 —
+    # returns None if mkdir fails, launcher falls back to DEVNULL stderr.
+    stderr_path: Path | None = None
+    if ctx.dispatches_root is not None:
+        stderr_path = stderr_log_path(ctx.dispatches_root, ctx.dispatch_id)
+    stderr_kwarg = (
+        asyncio.subprocess.PIPE
+        if stderr_path is not None
+        else asyncio.subprocess.DEVNULL
+    )
+
     # CLI flag literal verified via `claude --help` (2026-05-05):
     # `--effort <level>` accepts low/medium/high/xhigh/max. Flag
     # appears before `-p` so the prompt is the final positional
@@ -197,10 +243,20 @@ async def _default_launcher(ctx: DispatchLaunchContext) -> SubprocessHandle:
         cwd=str(ctx.working_directory),
         env=env,
         stdin=asyncio.subprocess.DEVNULL,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=stderr_kwarg,
     )
-    return proc  # asyncio.subprocess.Process satisfies SubprocessHandle
+
+    drain_task: asyncio.Task[None] | None = None
+    if stderr_path is not None:
+        drain_task = asyncio.create_task(
+            _drain_stream_to_file(
+                proc.stderr, stderr_path, dispatch_id=ctx.dispatch_id
+            ),
+            name=f"stderr-drain-{ctx.dispatch_id}",
+        )
+
+    return DrainingSubprocess(proc=proc, drain_task=drain_task)
 
 
 class BridgeDispatcher:
@@ -222,6 +278,7 @@ class BridgeDispatcher:
         subprocess_launcher: SubprocessLauncher | None = None,
         poll_interval_seconds: float = 0.1,
         push_after_merge: bool = True,
+        dispatches_root: Path | None = None,
     ) -> None:
         if canonical.path in _dispatcher_owned_canonicals:
             raise RuntimeError(
@@ -234,6 +291,13 @@ class BridgeDispatcher:
         self._token_store = token_store
         self._canonical = canonical
         self._worktrees_root = worktrees_root
+        # M5-flag-flips F4: per-dispatch stderr log root. Threaded to the
+        # default launcher via DispatchLaunchContext.dispatches_root.
+        # Optional with None default to keep the 11 integration test
+        # fixtures that inject custom subprocess_launcher callables free
+        # from path-wiring churn (per feedback_optional_dependency_in_helpers
+        # precedent). main.py wires settings.dispatches_root explicitly.
+        self._dispatches_root = dispatches_root
         self._launcher: SubprocessLauncher = (
             subprocess_launcher
             if subprocess_launcher is not None
@@ -421,6 +485,7 @@ class BridgeDispatcher:
                 working_directory=worktree.path,
                 token=issued_token.token,
                 effort=effort,
+                dispatches_root=self._dispatches_root,
             )
             proc = await self._launcher(ctx)
             await self._storage.execute(
@@ -477,6 +542,12 @@ class BridgeDispatcher:
             )
             if proc is not None:
                 exit_code, signal_used = await self._terminate_subprocess(proc)
+                # M5-flag-flips F4 guardrail #5: drain task cancellation
+                # lives in the existing dispatch() finally clause, not a
+                # parallel lifecycle. Helper is no-op for non-DrainingSubprocess
+                # handles (test fakes) and for already-completed drain tasks
+                # (subprocess closed stderr cleanly → drain hit EOF).
+                await cancel_drain_task(proc)
                 if started is not None and started["started_at"] is not None:
                     try:
                         delta = datetime.now(tz=UTC) - datetime.fromisoformat(
