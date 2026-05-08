@@ -78,9 +78,16 @@ supported — that flow is cloud-mediated and cannot reach a localhost
 daemon. See the design notes in `docs/kickoff/`.)
 
 ```bash
-claude mcp add --transport http meridian-orchestrator http://127.0.0.1:8765/mcp
+claude mcp add --transport http -s user meridian-orchestrator http://127.0.0.1:8765/mcp
 claude
 ```
+
+The `-s user` scope flag is load-bearing — without it `claude mcp add`
+defaults to local scope (per `claude mcp add --help`), binding the
+registration to the current cwd's claude config and making the
+orchestrator MCP server invisible to the Claude Code session when
+launched from any other directory. Verified empirically at M5-acceptance
+commit 3 prep (2026-05-08).
 
 Inside the Claude Code session, `/mcp` shows the server with an Authenticate
 option. Picking it triggers:

@@ -12,7 +12,20 @@ canonical files under ``config/agents/`` in the repo (and the runtime location
 - ``manages`` — list of roles this agent dispatches to
 - ``model_tier_default`` — routing baseline for ``check_budget_for_task``
 - ``system_prompt`` — the agent's full instruction text
-- ``mcp_tools_allowed`` — explicit allowlist (no wildcards; exact tool names)
+- ``mcp_tools_allowed`` — explicit orchestrator-MCP allowlist (no wildcards;
+  exact tool names; enforced server-side at ``server.py`` per per-role
+  permission resolution; e.g., ``update_task_status``, ``complete_dispatch``)
+- ``allowed_tools`` — explicit subprocess-level allowlist passed to
+  ``claude --allowedTools`` per M5-acceptance commit 3 (Convention 17 sub-
+  type (c) closure of the conditional permission-gating gap surfaced
+  empirically at prep cycle: ``claude --print`` fails closed on MCP tool
+  invocations + outside-cwd reads + non-standard Bash commands). Holds
+  built-in Claude Code tools (Read, Edit, Write, Bash, Glob, Grep) +
+  non-orchestrator MCP tools with already-prefixed shape (e.g.,
+  ``mcp__playwright__browser_navigate`` for tester). Orchestrator MCP
+  tools come from ``mcp_tools_allowed`` and are prefixed at launcher
+  composition time by ``tools/dispatch.py:_resolve_allowed_tools_for_role``;
+  single-source-of-truth preserved (Mike's D1 disposition A1, 2026-05-08).
 - ``knowledge_paths_readable`` / ``knowledge_paths_writable`` — glob patterns
 
 The on-disk YAML uses role names for ``reports_to`` / ``manages`` because the
@@ -88,6 +101,13 @@ class AgentConfig(BaseModel):
     effort: Effort
     system_prompt: str
     mcp_tools_allowed: list[str] = Field(default_factory=list)
+    # M5-acceptance commit 3: subprocess-level tool allowlist passed to
+    # ``claude --allowedTools`` at dispatcher launch time. See module
+    # docstring above for the field's role + relationship to
+    # ``mcp_tools_allowed``. Empty default means "no --allowedTools flag
+    # added" — not "all tools denied" — preserving the test-fixture path
+    # for callers constructing AgentConfig without subprocess wiring.
+    allowed_tools: list[str] = Field(default_factory=list)
     knowledge_paths_readable: list[str] = Field(default_factory=list)
     knowledge_paths_writable: list[str] = Field(default_factory=list)
 

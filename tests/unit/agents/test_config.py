@@ -298,6 +298,123 @@ system_prompt: |
         load_agent_config(p)
 
 
+def test_tester_yaml_allowed_tools_contains_playwright_and_readonly_builtins() -> None:
+    """M5-acceptance commit 3 contract test (Convention 17 sub-type (b)
+    Presence enforcement): tester.yaml's ``allowed_tools`` MUST contain
+    the 8 prefixed Playwright MCP tools + the read-only built-in tool
+    set (Read, Bash, Glob, Grep — no Edit/Write per tester read-only-
+    on-codebase discipline).
+
+    Methodology-as-moat: encoding the load-bearing tool names as a
+    contract test surfaces accidental yaml deletion in CI rather than
+    allowing silent drift between the dispatched-Tester subprocess's
+    runtime allowlist and the yaml's documented capability surface.
+    Without these entries in ``allowed_tools``, ``claude --print`` mode
+    permission-gates the corresponding tools (verified empirically at
+    commit 3 prep 2026-05-08); β6 (Tester invokes Playwright +
+    complete_dispatch) would surface as permission-denied across every
+    Playwright tool call.
+
+    Asserts on substring presence + tool count rather than full-list
+    equality so future additions (e.g., a new Playwright tool added at
+    @playwright/mcp's next release) don't break the test while
+    structural deletions of the load-bearing tools do.
+
+    Edit/Write absence is asserted explicitly — load-bearing for
+    tester read-only-on-codebase discipline (yaml line 154:
+    "Read-only on the codebase").
+    """
+    cfg = load_agent_config(REPO_CONFIG_DIR / "tester.yaml")
+    allowed = cfg.allowed_tools
+
+    # Built-in read-only set (Mike's D3 disposition 2026-05-08)
+    assert "Read" in allowed
+    assert "Bash" in allowed
+    assert "Glob" in allowed
+    assert "Grep" in allowed
+
+    # Read-only-on-codebase invariant: no Edit/Write tools
+    assert "Edit" not in allowed, (
+        "tester.yaml allowed_tools contains Edit — violates "
+        "read-only-on-codebase discipline (yaml line 154)"
+    )
+    assert "Write" not in allowed, (
+        "tester.yaml allowed_tools contains Write — violates "
+        "read-only-on-codebase discipline (yaml line 154)"
+    )
+    assert "MultiEdit" not in allowed, (
+        "tester.yaml allowed_tools contains MultiEdit — violates "
+        "read-only-on-codebase discipline (yaml line 154)"
+    )
+
+    # Playwright MCP tools — all 8 prefixed entries (canonical naming
+    # per empirical verification 2026-05-08: `mcp__<server>__<tool>`)
+    expected_playwright = [
+        "mcp__playwright__browser_navigate",
+        "mcp__playwright__browser_snapshot",
+        "mcp__playwright__browser_evaluate",
+        "mcp__playwright__browser_console_messages",
+        "mcp__playwright__browser_network_requests",
+        "mcp__playwright__browser_wait_for",
+        "mcp__playwright__browser_take_screenshot",
+        "mcp__playwright__browser_close",
+    ]
+    for tool in expected_playwright:
+        assert tool in allowed, (
+            f"tester.yaml allowed_tools missing {tool!r} — β6 would "
+            "surface permission-denied on this Playwright invocation. "
+            "If a Playwright tool is renamed at @playwright/mcp's next "
+            "release, update both this assertion and the yaml in lockstep."
+        )
+
+
+def test_implementer_yaml_allowed_tools_contains_full_filesystem_set() -> None:
+    """M5-acceptance commit 3 contract test (Convention 17 sub-type (b)
+    Presence enforcement): implementer.yaml's ``allowed_tools`` MUST
+    contain the full file-system tool set (Read, Edit, Write, MultiEdit,
+    Bash, Glob, Grep) per implementer.yaml's prose at line 56:
+    "you have file-system tools (Edit, Write, Read, Glob, Grep, Bash)
+    for the worktree's contents".
+
+    Methodology-as-moat: encoding the file-system tool set as a contract
+    test surfaces accidental yaml deletion in CI rather than allowing
+    silent drift between the dispatched-Implementer subprocess's runtime
+    allowlist and the yaml's documented capability surface. Without
+    these entries, ``claude --print`` mode permission-gates the
+    corresponding tools (verified empirically at commit 3 prep
+    2026-05-08); β5 (Implementer produces commit on dispatch branch)
+    would surface as permission-denied on file edits / git Bash
+    invocations.
+
+    Implementer does NOT include Playwright tools — Tester does that
+    work. Asserting absence of Playwright-prefixed entries locks the
+    role-asymmetry against accidental drift.
+    """
+    cfg = load_agent_config(REPO_CONFIG_DIR / "implementer.yaml")
+    allowed = cfg.allowed_tools
+
+    # Full file-system set per implementer.yaml prose line 56 + Mike's
+    # D3 disposition 2026-05-08 (MultiEdit added beyond yaml prose)
+    expected_builtins = ["Read", "Edit", "Write", "MultiEdit", "Bash", "Glob", "Grep"]
+    for tool in expected_builtins:
+        assert tool in allowed, (
+            f"implementer.yaml allowed_tools missing {tool!r} — β5 "
+            "would surface permission-denied on this file-system "
+            "operation. Yaml prose at line 56 documents the full set."
+        )
+
+    # Role-asymmetry invariant: no Playwright entries (Tester does
+    # browser-driven verification; Implementer does code changes)
+    playwright_entries = [t for t in allowed if t.startswith("mcp__playwright__")]
+    assert playwright_entries == [], (
+        f"implementer.yaml allowed_tools contains Playwright entries "
+        f"{playwright_entries!r} — violates role-asymmetry: Tester does "
+        "browser-driven verification, Implementer does code changes. "
+        "If a future commit deliberately gives Implementer browser "
+        "access, update this assertion in lockstep."
+    )
+
+
 def test_per_role_effort_assignments_per_addendum() -> None:
     """All four repo-controlled yamls match the
     orchestrator-utilization-addendum's per-role assignments:

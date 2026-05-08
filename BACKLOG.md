@@ -241,6 +241,94 @@ Phase 2 generalization shape: when non-Mike OAuth callers land (multi-operator s
 
 **Phase 1 acceptance**: 4-line special-case (constant + map + branch); two-site-in-same-commit (`submitted_by` populator + clause 2 resolver) was the threshold for module-level extraction at commit 3. Phase 2 trigger threshold is independent — the map exists; generalization is when the map outgrows the dict shape.
 
+### Subprocess directory access constraints (--add-dir wiring at dispatcher)
+
+Pinned 2026-05-08 at M5-acceptance commit 3 prep. Sister entry to Phase 2 V2 #8 (project adapter abstraction); subset scope at the dispatcher-launcher layer.
+
+**Phase 1 disposition:** acceptable as-is — no wiring needed. Empirical verification at commit 3 prep (2026-05-08) confirmed Claude Code subprocess `--print` mode fails closed by default for cross-boundary operations: subprocess CANNOT read files outside cwd; CANNOT invoke unauthorized Bash commands; returns structured permission errors instead of silent broad access or interactive permission prompts (the latter would block non-interactive `--print` operationally). For β operational gate this is the safest of the four risk-surface outcomes — worktree-scoped operations work normally; broader access fails cleanly. Bounded HITL per CQ-E disposition E-2 catches edge cases.
+
+**Rationale:** Phase 1 architecture relies on subprocess inheriting Mike's user permissions + cwd convention (set to per-dispatch worktree) + Claude Code's `--print` fail-closed defaults. No explicit `--add-dir` wiring at `bridge/dispatcher.py:_default_launcher`. The same shape that protects β from accidental broader access becomes limiting in V2 territory where dispatched roles legitimately need access to paths outside the dispatch worktree (per-product knowledge paths under V2 #8 multi-project; cross-substrate consolidation work; per-project artifact references).
+
+**Trigger for prioritization:** ANY of —
+- First operational finding at β or post-β where subprocess directory access surfaces as concern (broader access than expected; legitimate need for paths outside worktree)
+- Third instance where prompt-level discipline insufficient and explicit `--add-dir` wiring needed for cross-directory access
+- Security review surfacing concern about subprocess access scope
+- V2 #2 (policy layer consolidation) evaluation including subprocess-directory-access surface in `can(actor, action, resource)` matrix
+
+**Designed shape:** add `--add-dir <directories...>` flag wiring at `bridge/dispatcher.py:_default_launcher` (Option A argv ordering preserved: `--effort` → `--append-system-prompt` → `--allowedTools` → `--add-dir` → `-p <prompt>`); thread `additional_directories: list[Path]` through `DispatchLaunchContext` with empty-list default symmetric to `system_prompt: str = ""` and `allowed_tools: list[str]` precedents; `tools/dispatch.py:dispatch_implementer` / `dispatch_tester` resolve from per-role yaml config (e.g., `additional_dirs:` key per role) via the registry. Mirrors commit 2 + commit 3 wiring shape.
+
+**Cost estimate:** ~20-30 LOC + 5-8 unique tests (Convention 17 sub-types (a) contract-enforcement on argv shape + (c) invariant-enforcement on default-empty + per-yaml resolution invariants); symmetric to commit 2 and commit 3 wiring shape.
+
+**Connection to V2 roadmap:** subset of V2 #8 (project adapter abstraction) — different project contexts may have different directory access requirements; `--add-dir` wiring becomes per-project-adapter configuration under V2 #8's `ProjectAdapter` interface. Until V2 #8 surfaces the per-project taxonomy, per-role yaml config is the interim resolution shape.
+
+**Empirical anchors at pin time (2026-05-08):**
+- `claude --help` confirms `--add-dir <directories...>` flag with semantics "Additional directories to allow tool access to"
+- `claude --effort low -p` from cwd `/tmp/cc-cwd-probe-inside/` requesting read of `/tmp/cc-cwd-probe-outside/marker.txt` returned structured permission error: `Error: "Claude requested permissions to read from \tmp\cc-cwd-probe-outside\marker.txt, but you haven't granted it yet."`
+- Bash-tool probe also fail-closed: arbitrary `claude mcp list` invocation via subprocess Bash returned `"The command requires user approval to run."`
+
+**Touchpoints at trigger:** `bridge/dispatcher.py:_default_launcher` (argv composition); `bridge/dispatcher.py:DispatchLaunchContext` (new field); `tools/dispatch.py:dispatch_implementer` / `dispatch_tester` (registry resolution + thread-through; new `_resolve_additional_dirs_for_role` helper mirroring `_resolve_allowed_tools_for_role`); `config/agents/*.yaml` (per-role `additional_dirs:` key); per-role yaml content tests + dispatcher invariant tests.
+
+### Bash pattern restriction per role at --allowedTools
+
+Pinned 2026-05-08 at M5-acceptance commit 3. Sister to the `--allowedTools` wiring landing at commit 3; refines the unrestricted-Bash disposition (Mike's D4 Reading B1) toward role-specific Bash command patterns.
+
+**Phase 1 disposition:** unrestricted `Bash` in `config/agents/*.yaml:allowed_tools` per Mike's D4 disposition (B1) at commit 3 prep. System_prompt prose discipline governs which commands subprocess invokes — Convention 17 sub-type (b) presence-enforcement on system_prompt content covers the architectural intent at the prompt layer. Phase 1 lacks operational data to know which exact Bash commands are needed for each role; pinning B2 prematurely risks Implementer being blocked on routine commands not anticipated in yaml prose.
+
+**Rationale:** `claude --allowedTools` accepts restricted-pattern shape `Bash(git *)` per `claude --help` example (2026-05-08). Restricted patterns are methodology-as-moat (matches yaml prose constraints; explicit allowlist; subprocess-side enforcement adds defense-in-depth beyond prompt-layer discipline). But operational data is needed to define the right patterns per role; Phase 1 ships unrestricted as the sane baseline.
+
+**Trigger for prioritization:** ANY of —
+- First instance during β / post-β where Implementer subprocess invokes a Bash command outside system_prompt's documented commands (`cd frontend && npx tsc --noEmit`, `npm run build`, `git diff --stat`, etc.) — the violation IS the operational signal that prompt-layer discipline alone is insufficient
+- First instance during β / post-β where Tester subprocess invokes Bash beyond documented commands (`curl -sf http://localhost:5173/`, `npm run dev`, etc.)
+- Security review surfacing concern about unrestricted Bash in subprocess allowlist
+- Third instance where unrestricted Bash produces operationally-confusing subprocess behavior (caller-side debugging of "did the subprocess invoke X command?" via stderr.log inspection)
+
+**Designed shape:** per-role yaml `allowed_tools` lists restricted-pattern Bash entries instead of bare `Bash`:
+
+- Implementer: `Bash(git *) Bash(npm *) Bash(npx *) Bash(node *) Bash(curl *) Bash(cd *)` (covers spec's documented commands at implementer.yaml:91-97)
+- Tester: `Bash(curl *) Bash(git rev-parse *) Bash(cd *)` (covers tester.yaml:80,86,87 documented commands)
+
+Format note: per `claude --help`, `--allowedTools` accepts comma- or space-separated lists; restricted patterns with internal spaces (e.g., `Bash(git *)` contains a space inside parens) may benefit from comma-separated argv composition. Verify at trigger-time which separator the Claude CLI parses correctly for parens-containing patterns.
+
+**Cost estimate:** ~10-15 LOC yaml content edits + 4-6 unique tests (Convention 17 sub-type (b) presence-enforcement on yaml content + sub-type (c) invariant-enforcement on launcher argv composition with comma-separated alternative if needed); minimal launcher.py changes (separator may shift from space-join to comma-join; 1-2 LOC).
+
+**Connection to V2 roadmap:** independent of V2 trajectory; pure Phase 1 hygiene at operational-signal trigger.
+
+**Touchpoints at trigger:** `config/agents/tester.yaml:allowed_tools`; `config/agents/implementer.yaml:allowed_tools`; possibly `bridge/dispatcher.py:_default_launcher` argv composition (separator shift); `tests/unit/agents/test_config.py` (yaml content presence assertions update); `tests/unit/bridge/test_default_launcher_allowed_tools.py` (launcher argv invariant update).
+
+### Per-dispatch MCP server configuration (--mcp-config wiring at dispatcher)
+
+Pinned 2026-05-08 at M5-acceptance commit 3 prep. **Status: Phase 1 immediate prerequisite for β operational gate** (transitioned from V2 architectural-evolution candidate at commit 3 prep when empirical investigation surfaced subprocess MCP auth gap). Surfaced empirically via verification-first probes against `claude --print` MCP auth surface; reviewer-Claude disposition ε-3 (2026-05-08) defers implementation to commit 3.5 to preserve cap discipline + blast-radius isolation at β6 (β6 is the first real subprocess→MCP auth exercise; should not share a commit with `--allowedTools` wiring — a regression at β6 must have a single suspect, not two).
+
+**Implementation path (locked at commit 3 prep; not for re-litigation at 3.5 prep):**
+
+- Per-dispatch JSON written by launcher helper at `<dispatches_root>/<dispatch_id>/mcp_config.json`
+- Launcher appends `--mcp-config <path> --strict-mcp-config` to argv (strict mode = subprocess uses ONLY this config; ignores user-scope claude config; cleanest isolation)
+- meridian-orchestrator HTTP MCP entry carries per-dispatch token via `Authorization: Bearer <token>` header
+- Tester dispatches additionally include Playwright stdio MCP entry (so user-scope Playwright registration becomes operator convenience for interactive PM only — not a subprocess-path requirement)
+
+**Surface 1 + Surface 2 consolidation (consolidated framing per ε-3 amendment 3):** per-dispatch `--mcp-config` resolves BOTH subprocess MCP visibility (Surface 1: local-scope registrations not visible to subprocess from non-home cwd) AND subprocess MCP auth (Surface 2: dispatcher/supervisor launchers wire no `Authorization: Bearer` mechanism). Both surfaces collapse under one architectural mechanism. User-scope re-registration of meridian-orchestrator (operationally proposed at δ-3 disposition this morning, then ε-3 superseded) becomes operator convenience for interactive PM only — not a subprocess-path requirement.
+
+**Rationale:** Phase 1 architecture (M4 dispatcher + supervisor) shipped without auth wiring at the launcher level because all M4-M5 tests inject fakes via the `subprocess_launcher` parameter, bypassing real `claude --print` entirely. β6 (Tester invokes Playwright + complete_dispatch) is the first sub-milestone integration test that would exercise the real subprocess→MCP auth chain. Surfaced architectural gap ≠ implementation defect; was always-pending architectural wiring that integration tests with fakes couldn't reveal. Pin at M5-acceptance closeout per Convention 9 sub-pattern (architectural-gap-vs-implementation-defect distinction).
+
+**Open questions for commit 3.5 prep cycle (do not pre-answer at commit 3):**
+
+- **Q1 — Token lifecycle on disk.** Retain-for-postmortem matches stderr.log convention but stderr.log doesn't contain a credential. Two options: (a) retain + rely on dispatch-scoped token expiry making the retained file inert on terminal-state; (b) write `mcp_config.json` (real) + `mcp_config.redacted.json` (token → `<REDACTED>`); unlink real on terminal-state, retain redacted for postmortem. Lean toward option 1 if token lifecycle is genuinely dispatch-scoped. Confirm at 3.5 prep.
+- **Q2 — Token issuance source.** Does the orchestrator mint per-dispatch tokens today, or is `MERIDIAN_ORCHESTRATOR_TOKEN` (set by `bridge/launch_env.py:build_subprocess_env`) a shared token reused across dispatches? If shared: 3.5 either (a) reuses with per-dispatch minting as hardening BACKLOG, or (b) introduces per-dispatch minting as part of 3.5. Probably (a). Decide at 3.5 prep.
+- **Q3 — `--strict-mcp-config` semantics.** Confirm whether the flag means "use ONLY configs in --mcp-config, ignore user-scope" (hermetic — what we want) or something weaker. If hermetic, Surface-1-as-operator-convenience framing holds. If weaker, this entry needs adjustment.
+
+**Cost estimate (commit 3.5):** ~80-120 LOC + 10-15 unique tests; symmetric to commit 2 + commit 3 launcher-wiring shape (third instance of pattern-replication at launcher level reaches threshold-of-three when commit 3.5 lands; Convention 19 candidate at M5-acceptance closeout).
+
+**Connection to V2 roadmap:** composes with V2 #8 (project adapter abstraction) — different project contexts may have different MCP server requirements; per-dispatch `--mcp-config` wiring becomes per-project-adapter configuration in Phase 2 multi-project scenarios. Composes with Phase 2 multi-daemon scenarios — multiple orchestrator instances (different ports / different supervisor configurations) require explicit per-dispatch MCP routing. Until V2 #8 surfaces the per-project taxonomy, the per-dispatch JSON shape lands at commit 3.5 as Phase 1 immediate prerequisite.
+
+**Empirical anchors at pin time (2026-05-08):**
+- `claude --help` confirms `--mcp-config <configs...>` "Load MCP servers from JSON files or strings" + `--strict-mcp-config` "Only use MCP servers from --mcp-config, ignoring all other MCP configurations"
+- `claude mcp add --help` confirms `--header <header...>` "Set WebSocket headers (e.g. -H 'X-Api-Key: abc123')" — example for HTTP transport: `claude mcp add --transport http corridor https://app.corridor.dev/api/mcp --header "Authorization: Bearer ..."`
+- `server.py:198,219,222` raises `AuthError("no authenticated context for tool call")` for unauthenticated MCP requests; `server.py:34` imports `from mcp.server.auth.middleware.auth_context import get_access_token`
+- `bridge/dispatcher.py:_default_launcher` and `bridge/supervisor_base.py:_default_launcher` invoke `claude` subprocess with NO `--mcp-config` / `--header` / auth-relevant flag; `bridge/launch_env.py:build_subprocess_env` sets `MERIDIAN_ORCHESTRATOR_TOKEN` env var but standard Claude Code does NOT translate env vars to `Authorization: Bearer` headers
+- All M4-M5 dispatcher/supervisor tests inject fakes via `subprocess_launcher` parameter; β6 is the first real exercise of subprocess→MCP server auth
+
+**Touchpoints at implementation (commit 3.5):** `bridge/dispatcher.py:_default_launcher` (argv composition: add `--mcp-config <path> --strict-mcp-config`); `bridge/dispatcher.py:DispatchLaunchContext` (new `mcp_config_path: Path | None = None` field); new helper writes per-dispatch JSON to `<dispatches_root>/<dispatch_id>/mcp_config.json` containing orchestrator HTTP MCP + (tester only) Playwright stdio MCP; `tools/dispatch.py:_resolve_mcp_config_for_role` helper (or compose at launcher); cleanup-vs-retain policy per Q1; per-role yaml may need `mcp_servers:` field if per-role MCP set diverges (tester gets Playwright; implementer doesn't).
+
 ## Phase 2 architectural-evolution candidates
 
 Section established 2026-05-08 at M5-flag-flips closeout (commit 7) per CQ-F Reading A disposition. Consolidates 8 codex clean-slate critique candidates surfaced at M5-flag-flips commit 2 close (2026-05-07; original session: codex review session) plus the degraded-state recovery / operator pacing control loop entry that Mike pasted manually at commit 5 (file tail; migrated here as #9 at commit 7 closeout).

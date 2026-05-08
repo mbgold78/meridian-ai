@@ -44,6 +44,49 @@ mcp_tools_allowed:
   # Dispatch completion (M4) — how the subprocess delivers structured output
   - complete_dispatch
 
+# Subprocess-level tool allowlist passed to ``claude --allowedTools`` at
+# dispatch time per M5-acceptance commit 3. Two layers, distinct concerns:
+#
+# - ``mcp_tools_allowed`` (above): orchestrator-MCP allowlist enforced at
+#   the orchestrator side (server.py rejects calls from agents not listed
+#   here). Bare tool names; the dispatcher prefixes each with
+#   ``mcp__meridian-orchestrator__`` at launcher composition time per the
+#   canonical Claude Code MCP tool naming convention (verified empirically
+#   2026-05-08).
+# - ``allowed_tools`` (below): subprocess-level allowlist enforced at the
+#   Claude Code client side (gates which tools the subprocess will even
+#   attempt to invoke). Holds built-in Claude Code tools — Implementer
+#   does not invoke non-orchestrator MCP tools (no Playwright; Tester
+#   does that work).
+#
+# Why both: ``claude --print`` mode fails closed on MCP tool invocations +
+# outside-cwd reads + non-standard Bash commands by default (verified
+# empirically 2026-05-08). Without ``--allowedTools`` wiring, β5
+# (Implementer produces commit on dispatch branch) would risk permission
+# blocks on Bash invocations of git/npm and on file-edit operations.
+# ``mcp_tools_allowed`` alone is server-side; doesn't unlock the
+# subprocess-side gate.
+#
+# Bash is unrestricted at commit 3 per Mike's D4 disposition (B1) —
+# system_prompt prose discipline governs which commands are invoked.
+# Per-role pattern restrictions (e.g., ``Bash(git *) Bash(npm *)``)
+# pinned for future hygiene per Bash-pattern-restriction BACKLOG entry.
+allowed_tools:
+  # Built-in Claude Code tools — full file-system set (Read/Edit/Write/
+  # MultiEdit/Bash/Glob/Grep) per implementer.yaml prose at line 56:
+  # "you have file-system tools (Edit, Write, Read, Glob, Grep, Bash)
+  # for the worktree's contents". MultiEdit added beyond yaml prose for
+  # batch-edit cases the spec naturally entails (verified-acceptable for
+  # commit 3; operational findings at β route scope-expand if subprocess
+  # invokes a tool outside this set).
+  - Read
+  - Edit
+  - Write
+  - MultiEdit
+  - Bash
+  - Glob
+  - Grep
+
 knowledge_paths_readable:
   - /product/**
 

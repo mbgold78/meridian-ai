@@ -219,6 +219,7 @@ async def dispatch_implementer(
     model = _resolve_model_for_role(registry, "implementer")
     effort = _resolve_effort_for_role(registry, "implementer")
     system_prompt = _resolve_system_prompt_for_role(registry, "implementer")
+    allowed_tools = _resolve_allowed_tools_for_role(registry, "implementer")
 
     outcome = await dispatcher.dispatch(
         task_id=request.task_id,
@@ -234,6 +235,7 @@ async def dispatch_implementer(
         actor=caller_agent_id,
         requested_working_directory=request.working_directory,
         system_prompt=system_prompt,
+        allowed_tools=allowed_tools,
     )
     return _outcome_to_implementer_output(outcome)
 
@@ -284,6 +286,65 @@ def _resolve_effort_for_role(
     if agent is None:
         return "high"
     return agent.config.effort
+
+
+# Canonical Claude Code MCP tool name prefix for the orchestrator's
+# FastMCP server (registered as ``name="meridian-orchestrator"`` at
+# ``server.py:368``). Verified empirically at M5-acceptance commit 3
+# prep cycle (2026-05-08): subprocess attempted ``mcp__meridian-
+# orchestrator__list_agents``; hyphen preserved (not normalized to
+# underscore). Convention seen with claude.ai HTTP MCPs in the
+# deferred-tools list (``mcp__claude_ai_Gmail__authenticate``) shows
+# spaces and dots normalize to underscore but hyphens are valid
+# identifier chars and preserved verbatim.
+_ORCHESTRATOR_MCP_TOOL_PREFIX = "mcp__meridian-orchestrator__"
+
+
+def _resolve_allowed_tools_for_role(
+    registry: AgentRegistry | None, role: str
+) -> list[str]:
+    """Resolve the dispatched role's ``claude --allowedTools`` list per
+    M5-acceptance commit 3 (closes the conditional permission-gating gap
+    surfaced empirically at prep cycle: ``claude --print`` mode fails
+    closed on MCP tool invocations + outside-cwd reads + non-standard
+    Bash commands).
+
+    Combines two yaml fields per Mike's D1 disposition A1 (single-source-
+    of-truth at launcher composition time, not yaml duplication):
+
+    - ``AgentConfig.allowed_tools`` — built-in Claude Code tools (Read,
+      Edit, Write, Bash, Glob, Grep) + non-orchestrator MCP tools
+      (Playwright for tester) with already-prefixed shape (e.g.,
+      ``mcp__playwright__browser_navigate``).
+    - ``AgentConfig.mcp_tools_allowed`` — orchestrator MCP tools (bare
+      names like ``update_task_status``, ``complete_dispatch``); this
+      helper prefixes each with ``mcp__meridian-orchestrator__``.
+
+    Returns ``[]`` when ``registry`` is None or the role has no
+    registered config — same fallback pattern as
+    :func:`_resolve_system_prompt_for_role` /
+    :func:`_resolve_effort_for_role` /
+    :func:`_resolve_model_for_role`. Empty result causes the dispatcher
+    launcher to omit ``--allowedTools`` entirely (test-fixture argv
+    shape preserved per ``feedback_optional_dependency_in_helpers``
+    precedent). Production paths always pass a populated registry.
+
+    Output ordering: built-in/external tools first (yaml literal order),
+    orchestrator tools second (yaml literal order with prefix). Stable
+    across runs so test fixtures asserting on the exact list don't
+    flap.
+    """
+    if registry is None:
+        return []
+    agent = registry.get(role)  # type: ignore[arg-type]
+    if agent is None:
+        return []
+    builtin_and_external = list(agent.config.allowed_tools)
+    orchestrator_prefixed = [
+        _ORCHESTRATOR_MCP_TOOL_PREFIX + tool
+        for tool in agent.config.mcp_tools_allowed
+    ]
+    return builtin_and_external + orchestrator_prefixed
 
 
 def _resolve_system_prompt_for_role(
@@ -364,6 +425,7 @@ async def dispatch_tester(
     model = _resolve_model_for_role(registry, "tester")
     effort = _resolve_effort_for_role(registry, "tester")
     system_prompt = _resolve_system_prompt_for_role(registry, "tester")
+    allowed_tools = _resolve_allowed_tools_for_role(registry, "tester")
 
     outcome = await dispatcher.dispatch(
         task_id=request.task_id,
@@ -380,6 +442,7 @@ async def dispatch_tester(
         requested_working_directory=request.working_directory,
         commit_hash=request.commit_hash,
         system_prompt=system_prompt,
+        allowed_tools=allowed_tools,
     )
     return DispatchTesterOutput(
         dispatch_id=outcome.dispatch_id,

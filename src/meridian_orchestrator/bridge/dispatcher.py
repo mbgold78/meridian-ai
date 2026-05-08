@@ -135,6 +135,22 @@ class DispatchLaunchContext:
     # ``AgentConfig.system_prompt`` via the registry, mirrors the
     # ``effort`` plumbing pattern.
     system_prompt: str = ""
+    # M5-acceptance commit 3 launcher-wiring: subprocess-level tool
+    # allowlist passed to ``claude --allowedTools <tools>`` so the
+    # dispatched subprocess can invoke MCP tools + outside-cwd reads
+    # + non-standard Bash commands (verified empirically 2026-05-08:
+    # ``claude --print`` mode fails closed on these by default).
+    # Empty-list default so test fixtures constructing
+    # DispatchLaunchContext directly don't silently inject a flag with
+    # empty content; the launcher conditionally inserts
+    # ``--allowedTools <space-joined>`` only when the list is non-empty.
+    # Production path: ``tools/dispatch.py:_resolve_allowed_tools_for_role``
+    # combines ``AgentConfig.allowed_tools`` (built-in tools + non-
+    # orchestrator MCP tools) with prefixed orchestrator MCP tools
+    # derived from ``AgentConfig.mcp_tools_allowed`` per Mike's D1
+    # disposition A1 (single-source-of-truth at launcher composition
+    # time). Mirrors ``system_prompt`` and ``effort`` plumbing patterns.
+    allowed_tools: list[str] = field(default_factory=list)
     env_extras: dict[str, str] = field(default_factory=dict)
     # M5-flag-flips F4 stderr drain destination root. The launcher
     # writes per-dispatch stderr to ``<dispatches_root>/<dispatch_id>/
@@ -242,21 +258,28 @@ async def _default_launcher(ctx: DispatchLaunchContext) -> SubprocessHandle:
         else asyncio.subprocess.DEVNULL
     )
 
-    # CLI flag literals verified via `claude --help` (2026-05-05 for
-    # `--effort`; 2026-05-08 for `--append-system-prompt` at
-    # M5-acceptance commit 2 prep): `--effort <level>` accepts
-    # low/medium/high/xhigh/max; `--append-system-prompt <prompt>`
-    # appends the given text to Claude Code's default system prompt.
-    # Argv shape: ("claude", "--effort", <level>, "--append-system-prompt",
-    # <sp>, "-p", <prompt>) when system_prompt is non-empty; the
-    # append flag is omitted entirely when empty so non-dispatcher
-    # callers (test fixtures with default ``DispatchLaunchContext``)
-    # don't silently extend argv. Order keeps `-p <prompt>` last
-    # (positional adjacency); flags compose freely before the
-    # positional per `claude --help`.
+    # CLI flag literals verified via `claude --help`:
+    # - `--effort <level>` (2026-05-05): low/medium/high/xhigh/max
+    # - `--append-system-prompt <prompt>` (2026-05-08, commit 2):
+    #   appends to Claude Code's default system prompt
+    # - `--allowedTools <tools...>` (2026-05-08, commit 3): comma- or
+    #   space-separated list of tool names; example:
+    #   `"Bash(git *) Edit"`. The launcher passes the list as a single
+    #   argv element with space-separated tool names — supports B1
+    #   unrestricted Bash disposition (Mike's D4, 2026-05-08).
+    #
+    # Argv shape (Option A ordering): ("claude", "--effort", <level>,
+    # ["--append-system-prompt", <sp>], ["--allowedTools", <space-joined>],
+    # "-p", <prompt>). Each conditional block is omitted entirely when
+    # its source field is empty so non-dispatcher callers (test fixtures
+    # with default DispatchLaunchContext) don't silently extend argv.
+    # Order keeps `-p <prompt>` last (positional adjacency); flags
+    # compose freely before the positional per `claude --help`.
     argv: list[str] = ["claude", "--effort", ctx.effort]
     if ctx.system_prompt:
         argv.extend(["--append-system-prompt", ctx.system_prompt])
+    if ctx.allowed_tools:
+        argv.extend(["--allowedTools", " ".join(ctx.allowed_tools)])
     argv.extend(["-p", ctx.prompt])
     proc = await asyncio.create_subprocess_exec(
         *argv,
@@ -350,6 +373,7 @@ class BridgeDispatcher:
         requested_working_directory: str | None = None,
         commit_hash: str | None = None,
         system_prompt: str = "",
+        allowed_tools: list[str] | None = None,
     ) -> DispatchOutcome:
         """Run the full dispatch lifecycle and return the final outcome.
 
@@ -395,6 +419,18 @@ class BridgeDispatcher:
         registry-resolved prompts. Production path: ``tools/dispatch.py``
         ``dispatch_implementer`` / ``dispatch_tester`` resolve from
         ``AgentConfig.system_prompt`` via the registry and pass through.
+
+        ``allowed_tools`` is the subprocess-level tool allowlist passed to
+        ``claude --allowedTools`` per M5-acceptance commit 3 (closes the
+        conditional permission-gating gap surfaced empirically at prep
+        cycle: ``claude --print`` mode fails closed on MCP tool invocations
+        + outside-cwd reads + non-standard Bash commands). ``None`` default
+        coerces to empty list and the launcher omits the flag entirely —
+        same test-fixture-friendly fallback as ``system_prompt``.
+        Production path: ``tools/dispatch.py:_resolve_allowed_tools_for_role``
+        combines yaml ``allowed_tools`` + prefixed ``mcp_tools_allowed``
+        per Mike's D1 disposition A1 (single-source-of-truth at launcher
+        composition time, not yaml duplication).
         """
         if role not in ("implementer", "tester"):
             raise DispatcherError(f"unsupported role for dispatch: {role!r}")
@@ -529,6 +565,7 @@ class BridgeDispatcher:
                 token=issued_token.token,
                 effort=effort,
                 system_prompt=system_prompt,
+                allowed_tools=allowed_tools or [],
                 dispatches_root=self._dispatches_root,
             )
             proc = await self._launcher(ctx)

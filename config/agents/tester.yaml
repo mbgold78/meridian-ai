@@ -45,13 +45,50 @@ mcp_tools_allowed:
   # Dispatch completion (M4)
   - complete_dispatch
 
-# Tester also needs Playwright MCP tools for browser-driven verification:
-# browser_navigate, browser_snapshot, browser_evaluate, browser_console_messages,
-# browser_network_requests, browser_wait_for, browser_take_screenshot,
-# browser_close. These are configured on the Claude Code subprocess at
-# dispatch time (Playwright MCP is wired into the dispatch subprocess's
-# Claude Code config), not via this allowlist — they aren't orchestrator
-# tools.
+# Subprocess-level tool allowlist passed to ``claude --allowedTools`` at
+# dispatch time per M5-acceptance commit 3. Two layers, distinct concerns:
+#
+# - ``mcp_tools_allowed`` (above): orchestrator-MCP allowlist enforced at
+#   the orchestrator side (server.py rejects calls from agents not listed
+#   here). Bare tool names; the dispatcher prefixes each with
+#   ``mcp__meridian-orchestrator__`` at launcher composition time per the
+#   canonical Claude Code MCP tool naming convention (verified empirically
+#   2026-05-08: hyphens preserved in server names; spaces/dots normalize
+#   to underscore).
+# - ``allowed_tools`` (below): subprocess-level allowlist enforced at the
+#   Claude Code client side (gates which tools the subprocess will even
+#   attempt to invoke). Holds built-in Claude Code tools + non-orchestrator
+#   MCP tools (Playwright for tester) with already-prefixed shape.
+#
+# Why both: ``claude --print`` mode fails closed on MCP tool invocations +
+# outside-cwd reads + non-standard Bash commands by default (verified
+# empirically 2026-05-08). Without ``--allowedTools`` wiring, β6 (Tester
+# invokes Playwright + complete_dispatch) would surface "permission denied"
+# on every tool call. ``mcp_tools_allowed`` alone is server-side; doesn't
+# unlock the subprocess-side gate.
+#
+# Tester is read-only on the codebase (constraints below) — no Edit/Write
+# in the built-in set. Bash is unrestricted at commit 3 (system_prompt's
+# prose discipline governs which commands are invoked); per-role pattern
+# restrictions are pinned for future hygiene per Bash-pattern-restriction
+# BACKLOG entry.
+allowed_tools:
+  # Built-in Claude Code tools (read-only set; no Edit/Write per
+  # tester read-only-on-codebase discipline)
+  - Read
+  - Bash
+  - Glob
+  - Grep
+  # Playwright MCP tools (browser-driven verification; non-orchestrator
+  # MCP server registered separately at user scope per operator setup)
+  - mcp__playwright__browser_navigate
+  - mcp__playwright__browser_snapshot
+  - mcp__playwright__browser_evaluate
+  - mcp__playwright__browser_console_messages
+  - mcp__playwright__browser_network_requests
+  - mcp__playwright__browser_wait_for
+  - mcp__playwright__browser_take_screenshot
+  - mcp__playwright__browser_close
 
 knowledge_paths_readable:
   - /product/**
