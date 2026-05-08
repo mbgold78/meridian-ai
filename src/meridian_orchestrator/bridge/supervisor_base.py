@@ -53,6 +53,11 @@ from meridian_orchestrator.audit.logger import write_audit
 from meridian_orchestrator.auth import IssuedToken, TokenStore
 from meridian_orchestrator.bridge.dispatcher import _TERMINAL_STATES
 from meridian_orchestrator.bridge.launch_env import build_subprocess_env
+from meridian_orchestrator.bridge.mcp_config import (
+    SubprocessRole,
+    mcp_config_path,
+    write_mcp_config,
+)
 from meridian_orchestrator.bridge.stderr_drain import (
     DrainingSubprocess,
     _drain_stream_to_file,
@@ -117,6 +122,30 @@ class SupervisorLaunchContext:
     # per orchestrator-utilization-addendum: PM xhigh, Engineer
     # xhigh.
     effort: str = "high"
+    # Subprocess-level tool allowlist passed to ``claude --allowedTools
+    # <tools>`` so the supervisor subprocess can invoke MCP tools +
+    # outside-cwd reads + non-standard Bash commands (``claude --print``
+    # mode fails closed on these by default per empirical verification
+    # 2026-05-08). Empty-list default so test fixtures constructing
+    # SupervisorLaunchContext directly don't silently inject a flag with
+    # empty content; the launcher conditionally inserts the flag only
+    # when the list is non-empty. Production path: subclass's
+    # :meth:`LongRunningSupervisor._subprocess_allowed_tools` resolves via
+    # :func:`bridge.mcp_config.resolve_allowed_tools_for_role` against
+    # the registry's per-role yaml ``allowed_tools`` + ``mcp_tools_allowed``
+    # fields. Symmetric with ``DispatchLaunchContext.allowed_tools``.
+    allowed_tools: list[str] = field(default_factory=list)
+    # Per-spawn JSON config at ``<dispatches_root>/<spawn_dispatch_id>/
+    # mcp_config.json`` containing the orchestrator HTTP MCP entry with
+    # ``Authorization: Bearer <per-spawn-token>`` header. Launcher emits
+    # ``--mcp-config <path> --strict-mcp-config`` so the subprocess uses
+    # ONLY this config; user-scope and local-scope registrations cannot
+    # leak in. ``None`` default so test fixtures don't silently inject
+    # the flags. Production path: :meth:`LongRunningSupervisor._spawn`
+    # calls :func:`bridge.mcp_config.write_mcp_config` to materialize the
+    # JSON before launcher invocation, then threads the path here.
+    # Symmetric with ``DispatchLaunchContext.mcp_config_path``.
+    mcp_config_path: Path | None = None
     env_extras: dict[str, str] = field(default_factory=dict)
     # M5-flag-flips F4 stderr drain destination root. Symmetric with
     # DispatchLaunchContext.dispatches_root in bridge/dispatcher.py.
@@ -200,16 +229,37 @@ async def _default_launcher(
         else asyncio.subprocess.DEVNULL
     )
 
-    # CLI flag literal verified via `claude --help` (2026-05-05):
-    # `--effort <level>` accepts low/medium/high/xhigh/max. Same
-    # ordering as bridge/dispatcher.py:_default_launcher — effort
-    # flag before the prompt's `-p` positional.
+    # CLI flag literals verified via `claude --help`:
+    # - `--effort <level>` (2026-05-05): low/medium/high/xhigh/max
+    # - `--allowedTools <tools...>` (2026-05-08, commit 3.6 supervisor
+    #   wiring): comma- or space-separated tool names; single argv
+    #   element with space-separated names.
+    # - `--mcp-config <configs...>` (2026-05-08, commit 3.6 supervisor
+    #   wiring): "Load MCP servers from JSON files or strings".
+    #   `--strict-mcp-config` "Only use MCP servers from --mcp-config,
+    #   ignoring all other MCP configurations" — hermetic semantic
+    #   verified empirically 2026-05-08.
+    #
+    # Argv shape (Option A ordering, supervisor-side): ("claude",
+    # "--effort", <level>, ["--allowedTools", <space-joined>],
+    # ["--mcp-config", <path>, "--strict-mcp-config"], "-p", <prompt>).
+    # No --append-system-prompt: supervisor's yaml.system_prompt is the
+    # ``-p <prompt>`` user message (subclass-provided via
+    # :meth:`LongRunningSupervisor._subprocess_prompt`); architectural
+    # difference from dispatcher (which splits system+user message via
+    # --append-system-prompt + -p). Each conditional block is omitted
+    # entirely when its source field is empty/None so test-fixture argv
+    # stays unchanged.
+    argv: list[str] = ["claude", "--effort", ctx.effort]
+    if ctx.allowed_tools:
+        argv.extend(["--allowedTools", " ".join(ctx.allowed_tools)])
+    if ctx.mcp_config_path is not None:
+        argv.extend(
+            ["--mcp-config", str(ctx.mcp_config_path), "--strict-mcp-config"]
+        )
+    argv.extend(["-p", ctx.prompt])
     proc = await asyncio.create_subprocess_exec(
-        "claude",
-        "--effort",
-        ctx.effort,
-        "-p",
-        ctx.prompt,
+        *argv,
         cwd=str(ctx.working_directory),
         env=env,
         stdin=asyncio.subprocess.DEVNULL,
@@ -277,6 +327,7 @@ class LongRunningSupervisor(ABC):
         grace_seconds: float = _GRACE_SECONDS_DEFAULT,
         effort: str = "high",
         dispatches_root: Path | None = None,
+        daemon_url: str | None = None,
     ) -> None:
         self._storage = storage
         self._token_store = token_store
@@ -309,6 +360,15 @@ class LongRunningSupervisor(ABC):
         # mid-flight respawns, per F6.2 Q9 disposition's
         # supervisor-granularity acknowledgment).
         self._effort = effort
+        # Orchestrator daemon URL embedded into per-spawn mcp_config.json's
+        # meridian-orchestrator HTTP MCP entry as the ``url`` field.
+        # Resolved from settings.mcp_host + settings.mcp_port at main.py
+        # construction time. ``None`` default + None-handling at spawn
+        # time preserves the test-fixture path: when daemon_url is None
+        # OR dispatches_root is None, the per-spawn JSON write is
+        # skipped and the launcher omits ``--mcp-config`` entirely.
+        # Symmetric with ``BridgeDispatcher._daemon_url``.
+        self._daemon_url = daemon_url
 
         # Mutable lifecycle state.
         self._current_dispatch_id: str | None = None
@@ -352,6 +412,21 @@ class LongRunningSupervisor(ABC):
     @abstractmethod
     def _supervisor_agent_id(self) -> str:
         """The agent_id the supervisor's static token binds to."""
+        ...
+
+    @abstractmethod
+    def _subprocess_allowed_tools(self) -> list[str]:
+        """The ``claude --allowedTools`` argv list for the supervisor
+        subprocess. Mirrors :meth:`_subprocess_prompt` shape — read fresh
+        on each spawn so a hot-reload of yaml ``allowed_tools`` between
+        spawns picks up the new list.
+
+        Subclasses typically resolve via
+        :func:`bridge.mcp_config.resolve_allowed_tools_for_role` against
+        the registry: built-in tools (yaml ``allowed_tools``) +
+        prefixed orchestrator MCP tools (yaml ``mcp_tools_allowed``).
+        Empty list causes the launcher to omit ``--allowedTools``
+        entirely (test-fixture path)."""
         ...
 
     async def _reconstruct_state(self) -> None:
@@ -580,6 +655,38 @@ class LongRunningSupervisor(ABC):
 
         await self._reconstruct_state()
 
+        # Materialize per-spawn mcp_config.json with the orchestrator
+        # HTTP MCP entry carrying ``Authorization: Bearer <issued.token>``
+        # header. Both ``self._dispatches_root`` and ``self._daemon_url``
+        # must be set for the JSON write to fire — when either is None
+        # (test-fixture path with custom subprocess_launcher injection),
+        # ``mcp_config_path_value`` stays None and the launcher omits
+        # ``--mcp-config`` entirely. File persists past dispatch
+        # terminal state; per-spawn token revocation in the supervisor's
+        # cleanup paths (shutdown / heartbeat-timeout / unexpected-exit /
+        # compaction-completed) renders the retained config inert via
+        # ``auth.TokenStore.lookup`` returning None for revoked records.
+        # Mirrors stderr.log retention convention. Per-spawn directory
+        # accumulates alongside stderr.log (same dispatch_id keying).
+        # No Playwright entry — supervisors don't run browser-driven
+        # verification (role asymmetry: only Tester gets Playwright).
+        mcp_config_path_value: Path | None = None
+        if (
+            self._dispatches_root is not None
+            and self._daemon_url is not None
+        ):
+            cfg_path = mcp_config_path(self._dispatches_root, dispatch_id)
+            # _token_role() returns "pm" or "engineer" per supervisor
+            # subclass contract; both are SubprocessRole literals.
+            supervisor_role: SubprocessRole = self._token_role()  # type: ignore[assignment]
+            if cfg_path is not None and write_mcp_config(
+                cfg_path,
+                daemon_url=self._daemon_url,
+                token=issued.token,
+                role=supervisor_role,
+            ):
+                mcp_config_path_value = cfg_path
+
         ctx = SupervisorLaunchContext(
             dispatch_id=dispatch_id,
             role=self._token_role_with_label(),
@@ -587,6 +694,8 @@ class LongRunningSupervisor(ABC):
             working_directory=self._working_directory(),
             token=issued.token,
             effort=self._effort,
+            allowed_tools=self._subprocess_allowed_tools(),
+            mcp_config_path=mcp_config_path_value,
             dispatches_root=self._dispatches_root,
         )
         proc = await self._launcher(ctx)

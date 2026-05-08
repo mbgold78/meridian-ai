@@ -60,6 +60,31 @@ mcp_tools_allowed:
   - get_dispatch_events
   - get_recent_dispatches
 
+# Subprocess-level tool allowlist passed to ``claude --allowedTools``
+# at Engineer-supervisor spawn time. Mirrors the implementer/tester
+# yaml shape (commit 3); supervisor symmetric wiring lands at commit 3.6.
+# Two layers, distinct concerns:
+#
+# - ``mcp_tools_allowed`` (above): orchestrator-MCP allowlist enforced at
+#   the orchestrator side (server.py rejects calls from agents not listed
+#   here). Bare tool names; the supervisor launcher prefixes each with
+#   ``mcp__meridian-orchestrator__`` at argv composition time.
+# - ``allowed_tools`` (below): subprocess-level allowlist enforced at the
+#   Claude Code client side (gates which tools the supervisor subprocess
+#   will even attempt to invoke). Holds built-in Claude Code tools only.
+#
+# Engineer does NOT include Playwright (browser-driven verification is
+# Tester's job; Engineer coordinates via dispatch_implementer /
+# dispatch_tester MCP calls). Bash is unrestricted at commit 3.6 per
+# Mike's D4 disposition (B1) — system_prompt prose discipline governs
+# which commands are invoked. Per-role pattern restrictions pinned for
+# future hygiene per Bash-pattern-restriction BACKLOG entry.
+allowed_tools:
+  - Read
+  - Bash
+  - Glob
+  - Grep
+
 knowledge_paths_readable:
   - /product/**
 

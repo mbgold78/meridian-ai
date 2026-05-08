@@ -462,6 +462,16 @@ async def _run_lifespan_body(
                                     # destination for the PM-continuous
                                     # supervisor subprocess.
                                     dispatches_root=settings.dispatches_root,
+                                    # Orchestrator daemon URL for
+                                    # per-spawn mcp_config.json's
+                                    # meridian-orchestrator HTTP MCP
+                                    # entry; supervisor uses it to
+                                    # compose the Authorization: Bearer
+                                    # header per per-spawn token.
+                                    daemon_url=(
+                                        f"http://{settings.mcp_host}:"
+                                        f"{settings.mcp_port}/mcp"
+                                    ),
                                 )
                                 await pm_supervisor.start()
                                 logger.info(
@@ -489,6 +499,16 @@ async def _run_lifespan_body(
                                     # destination for the Engineer
                                     # supervisor subprocess.
                                     dispatches_root=settings.dispatches_root,
+                                    # Orchestrator daemon URL for
+                                    # per-spawn mcp_config.json's
+                                    # meridian-orchestrator HTTP MCP
+                                    # entry; supervisor uses it to
+                                    # compose the Authorization: Bearer
+                                    # header per per-spawn token.
+                                    daemon_url=(
+                                        f"http://{settings.mcp_host}:"
+                                        f"{settings.mcp_port}/mcp"
+                                    ),
                                 )
                                 await engineer_supervisor.start()
                                 logger.info(

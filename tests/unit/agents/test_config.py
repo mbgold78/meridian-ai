@@ -368,6 +368,70 @@ def test_tester_yaml_allowed_tools_contains_playwright_and_readonly_builtins() -
         )
 
 
+def test_pm_yaml_allowed_tools_contains_supervisor_set_no_playwright() -> None:
+    """M5-acceptance commit 3.6 contract test (Convention 17 sub-type
+    (b) Presence enforcement): pm.yaml's ``allowed_tools`` MUST contain
+    the supervisor-side built-in tool set (Read, Bash, Glob, Grep) and
+    MUST NOT contain Playwright entries (browser-driven verification is
+    Tester's job; PM coordinates via MCP tools).
+
+    Without these entries, the PM-continuous supervisor's subprocess
+    fails closed on Bash invocations + outside-cwd reads (per empirical
+    verification 2026-05-08); β session would surface as permission-
+    denied across continuous-loop iterations.
+    """
+    cfg = load_agent_config(REPO_CONFIG_DIR / "pm.yaml")
+    allowed = cfg.allowed_tools
+
+    expected_builtins = ["Read", "Bash", "Glob", "Grep"]
+    for tool in expected_builtins:
+        assert tool in allowed, (
+            f"pm.yaml allowed_tools missing {tool!r} — PM-continuous "
+            "supervisor would surface permission-denied on this "
+            "subprocess operation."
+        )
+
+    # Role-asymmetry invariant: no Playwright (PM doesn't verify in
+    # browser; Tester does)
+    playwright_entries = [t for t in allowed if t.startswith("mcp__playwright__")]
+    assert playwright_entries == [], (
+        f"pm.yaml allowed_tools contains Playwright entries "
+        f"{playwright_entries!r} — violates role-asymmetry: PM "
+        "coordinates via MCP tools, not browser-driven verification."
+    )
+
+
+def test_engineer_yaml_allowed_tools_contains_supervisor_set_no_playwright() -> None:
+    """M5-acceptance commit 3.6 contract test (Convention 17 sub-type
+    (b) Presence enforcement): engineer.yaml's ``allowed_tools`` MUST
+    contain the supervisor-side built-in tool set (Read, Bash, Glob,
+    Grep) and MUST NOT contain Playwright entries (Engineer coordinates
+    via dispatch_implementer / dispatch_tester MCP calls; doesn't run
+    browser-driven verification).
+
+    Without these entries, the Engineer-supervisor subprocess fails
+    closed on Bash + outside-cwd reads at β session.
+    """
+    cfg = load_agent_config(REPO_CONFIG_DIR / "engineer.yaml")
+    allowed = cfg.allowed_tools
+
+    expected_builtins = ["Read", "Bash", "Glob", "Grep"]
+    for tool in expected_builtins:
+        assert tool in allowed, (
+            f"engineer.yaml allowed_tools missing {tool!r} — Engineer-"
+            "supervisor would surface permission-denied on this "
+            "subprocess operation."
+        )
+
+    playwright_entries = [t for t in allowed if t.startswith("mcp__playwright__")]
+    assert playwright_entries == [], (
+        f"engineer.yaml allowed_tools contains Playwright entries "
+        f"{playwright_entries!r} — violates role-asymmetry: Engineer "
+        "coordinates via dispatch_implementer/dispatch_tester MCP calls, "
+        "not browser-driven verification."
+    )
+
+
 def test_implementer_yaml_allowed_tools_contains_full_filesystem_set() -> None:
     """M5-acceptance commit 3 contract test (Convention 17 sub-type (b)
     Presence enforcement): implementer.yaml's ``allowed_tools`` MUST

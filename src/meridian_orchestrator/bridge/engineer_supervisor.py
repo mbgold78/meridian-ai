@@ -37,6 +37,7 @@ from pathlib import Path
 
 from meridian_orchestrator.agents.registry import AgentRegistry
 from meridian_orchestrator.auth import TokenStore
+from meridian_orchestrator.bridge.mcp_config import resolve_allowed_tools_for_role
 from meridian_orchestrator.bridge.supervisor_base import (
     LongRunningSupervisor,
     SupervisorSubprocessLauncher,
@@ -77,6 +78,7 @@ class EngineerSupervisor(LongRunningSupervisor):
         respawn_window_seconds: int = 3600,
         grace_seconds: float = 10.0,
         dispatches_root: Path | None = None,
+        daemon_url: str | None = None,
     ) -> None:
         engineer = registry.get("engineer")
         if engineer is None:
@@ -109,6 +111,10 @@ class EngineerSupervisor(LongRunningSupervisor):
             # SupervisorLaunchContext. main.py wires
             # settings.dispatches_root.
             dispatches_root=dispatches_root,
+            # Orchestrator daemon URL for per-spawn mcp_config.json's
+            # meridian-orchestrator HTTP MCP entry. main.py wires
+            # f"http://{settings.mcp_host}:{settings.mcp_port}/mcp".
+            daemon_url=daemon_url,
         )
 
     # ---- LongRunningSupervisor hooks -------------------------------------
@@ -137,6 +143,15 @@ class EngineerSupervisor(LongRunningSupervisor):
 
     def _token_label(self) -> str:
         return "engineer-supervisor"
+
+    def _subprocess_allowed_tools(self) -> list[str]:
+        """Engineer's ``--allowedTools`` argv list — built-in tools (yaml
+        ``allowed_tools``: Read, Bash, Glob, Grep) + prefixed orchestrator
+        MCP tools (yaml ``mcp_tools_allowed``: dispatch_implementer,
+        dispatch_tester, signal_compaction, etc.). Resolved fresh on each
+        spawn so a yaml hot-reload picks up the new list at next respawn.
+        """
+        return resolve_allowed_tools_for_role(self._registry, "engineer")
 
     def _supervisor_agent_id(self) -> str:
         """The engineer agent_id resolved by the registry from the keyring

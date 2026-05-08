@@ -1,13 +1,27 @@
-"""Per-dispatch MCP server configuration JSON for subprocess launchers.
+"""Per-dispatch / per-spawn MCP server configuration JSON + allowed-tools
+resolver for subprocess launchers.
 
-The dispatcher writes a per-dispatch JSON config under
-``<dispatches_root>/<dispatch_id>/mcp_config.json`` containing the
-orchestrator HTTP MCP entry (with ``Authorization: Bearer <token>``
-header carrying the dispatch's per-dispatch token) plus, for tester
-dispatches only, the Playwright stdio MCP entry. The launcher emits
-``--mcp-config <path> --strict-mcp-config`` so the subprocess uses ONLY
-this config — hermetic; user-scope and local-scope MCP registrations
-cannot leak in.
+Two launcher-composition concerns live here, both of which the dispatcher
+(:mod:`bridge.dispatcher`) and the supervisors
+(:mod:`bridge.supervisor_base`) need:
+
+1. The per-dispatch JSON config (``<dispatches_root>/<dispatch_id>/
+   mcp_config.json``) containing the orchestrator HTTP MCP entry (with
+   ``Authorization: Bearer <token>`` header) plus, for tester dispatches
+   only, the Playwright stdio MCP entry. The launcher emits
+   ``--mcp-config <path> --strict-mcp-config`` so the subprocess uses
+   ONLY this config — hermetic; user-scope and local-scope MCP
+   registrations cannot leak in.
+
+2. The ``--allowedTools`` argv list resolver (built-in Claude Code tools
+   + prefixed orchestrator MCP tools), keyed off the registry's
+   ``AgentConfig`` for the role. Combines yaml ``allowed_tools`` (built-in
+   + non-orchestrator MCP) with prefixed yaml ``mcp_tools_allowed``
+   (orchestrator MCP) at launcher composition time — single-source-of-
+   truth (no yaml duplication of the orchestrator tool set).
+
+Both concerns are shared between dispatcher (per-dispatch lifecycle) and
+supervisor (per-spawn lifecycle); the helpers here are lifecycle-agnostic.
 
 Why this layer exists: standard ``claude --print`` does NOT translate
 ``MERIDIAN_ORCHESTRATOR_TOKEN`` (set by :mod:`bridge.launch_env`) into
@@ -58,19 +72,76 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import structlog
 
+if TYPE_CHECKING:
+    from meridian_orchestrator.agents.registry import AgentRegistry
+
 logger = structlog.get_logger(__name__)
 
-DispatchRole = Literal["implementer", "tester"]
+# Roles whose subprocess launchers consume the helpers in this module.
+# Dispatcher launches implementer + tester; supervisor launches pm +
+# engineer. Tester is the only role that gets the Playwright stdio MCP
+# entry in :func:`write_mcp_config`; pm + engineer + implementer omit it.
+SubprocessRole = Literal["implementer", "tester", "pm", "engineer"]
+
+# Canonical Claude Code MCP tool name prefix for the orchestrator's
+# FastMCP server (registered as ``name="meridian-orchestrator"`` at
+# ``server.py:368``). Hyphen preserved per the canonical Claude Code
+# MCP tool naming convention (verified empirically 2026-05-08:
+# subprocess permission-denial messages name tools as
+# ``mcp__meridian-orchestrator__list_agents``). Spaces and dots in
+# server names normalize to underscore (e.g.,
+# ``mcp__claude_ai_Gmail__<tool>`` from ``claude.ai Gmail``); hyphens
+# are valid identifier chars and preserved verbatim.
+_ORCHESTRATOR_MCP_TOOL_PREFIX = "mcp__meridian-orchestrator__"
 
 _PLAYWRIGHT_MCP_ENTRY: dict[str, object] = {
     "type": "stdio",
     "command": "npx",
     "args": ["@playwright/mcp@latest"],
 }
+
+
+def resolve_allowed_tools_for_role(
+    registry: AgentRegistry | None, role: str
+) -> list[str]:
+    """Resolve a role's ``claude --allowedTools`` argv list.
+
+    Combines two yaml fields with single-source-of-truth at launcher
+    composition time (no yaml duplication of the orchestrator tool set):
+
+    - ``AgentConfig.allowed_tools`` — built-in Claude Code tools (Read,
+      Edit, Write, Bash, Glob, Grep) + non-orchestrator MCP tools (e.g.,
+      Playwright tools for tester) with already-prefixed shape.
+    - ``AgentConfig.mcp_tools_allowed`` — orchestrator MCP tools (bare
+      names like ``update_task_status``, ``complete_dispatch``); this
+      helper prefixes each with ``mcp__meridian-orchestrator__``.
+
+    Returns ``[]`` when ``registry`` is None or the role has no
+    registered config — empty result causes the launcher (dispatcher
+    or supervisor) to omit ``--allowedTools`` entirely, preserving the
+    test-fixture argv shape per ``feedback_optional_dependency_in_helpers``
+    precedent. Production paths always pass a populated registry.
+
+    Output ordering: built-in/external tools first (yaml literal order),
+    orchestrator tools second (yaml literal order with prefix). Stable
+    across runs so test fixtures asserting on the exact list don't
+    flap.
+    """
+    if registry is None:
+        return []
+    agent = registry.get(role)  # type: ignore[arg-type]
+    if agent is None:
+        return []
+    builtin_and_external = list(agent.config.allowed_tools)
+    orchestrator_prefixed = [
+        _ORCHESTRATOR_MCP_TOOL_PREFIX + tool
+        for tool in agent.config.mcp_tools_allowed
+    ]
+    return builtin_and_external + orchestrator_prefixed
 
 
 def mcp_config_path(dispatches_root: Path, dispatch_id: str) -> Path | None:
@@ -113,16 +184,16 @@ def write_mcp_config(
     *,
     daemon_url: str,
     token: str,
-    role: DispatchRole,
+    role: SubprocessRole,
 ) -> bool:
-    """Write the per-dispatch mcp_config.json file.
+    """Write the per-dispatch / per-spawn mcp_config.json file.
 
     Returns ``True`` on success; ``False`` and emits a structlog WARNING
     on :class:`OSError`. ``False`` matches the :func:`mcp_config_path`
-    None-return semantic at the caller level — dispatcher treats either
-    failure as "omit ``--mcp-config`` flag" so the dispatch proceeds with
-    the same auth-failure-at-MCP-call-time consequence rather than
-    failing the dispatch lifecycle outright.
+    None-return semantic at the caller level — launcher (dispatcher or
+    supervisor) treats either failure as "omit ``--mcp-config`` flag" so
+    the lifecycle proceeds with the same auth-failure-at-MCP-call-time
+    consequence rather than failing outright.
 
     JSON shape::
 
@@ -142,9 +213,9 @@ def write_mcp_config(
             }
         }
 
-    Implementer dispatches do NOT include the Playwright entry — Tester
-    does browser-driven verification, Implementer does code changes
-    (role-asymmetry intentional).
+    Only ``role == "tester"`` includes the Playwright entry. Implementer,
+    PM, and Engineer omit it — Tester does browser-driven verification,
+    the others don't.
 
     JSON-key naming preserves hyphens in server names: the orchestrator's
     canonical FastMCP server name is ``meridian-orchestrator`` (hyphen,
@@ -179,4 +250,9 @@ def write_mcp_config(
     return True
 
 
-__all__ = ["mcp_config_path", "write_mcp_config"]
+__all__ = [
+    "SubprocessRole",
+    "mcp_config_path",
+    "resolve_allowed_tools_for_role",
+    "write_mcp_config",
+]
