@@ -536,3 +536,241 @@ where the source-of-truth structure is itself dynamic (e.g.,
 operator-supplied at company instantiation); programmatic Cartesian
 would need to read the dynamic source. Surface as exception when
 encountered.
+
+---
+
+## 12. Adjacent-hygiene-during-touch
+
+**Rule:** When a commit's primary work touches a file or domain,
+fix small adjacent drift opportunistically (stale comments, version
+drift, past-tense corrections, docstring rot). Tight cap: only
+directly-adjacent drift; surfaced drift outside the commit's primary
+scope routes to BACKLOG or a separate hygiene commit, NOT folded.
+
+**Reasoning:** stale comments + tense drift accumulate silently;
+fixing at touch time costs cents per instance + collapses to zero
+when the touched file isn't entered for unrelated reasons. Tight
+cap prevents scope creep — the rule is "while you're here, fix
+adjacent drift," not "open arbitrary refactors during touch."
+
+**Established at:** M5-subscription-routing commit 2 (2026-05-02)
+UTC-coercion utility extraction is the first instance; M4d commit 1
+Task model drift fix is the second; M5-flag-flips F3 docstring
+update + F4 module docstrings + commit 5 config.py:42 comment
+past-tense + commit 6 config.py:48 + conftest.py docstring/body +
+BACKLOG Entry 1 PM-symmetry expansion are the threshold-of-three
+instances. **Convention 12 also fired DURING the M5-flag-flips
+closeout commit 7 authoring itself**: BACKLOG Entry 2's
+`(this file's tail)` cross-reference became stale after V2 #9
+migration to the consolidated `## Phase 2 architectural-evolution
+candidates` section; fixed in-flight per adjacent-hygiene discipline.
+Convention operates at multiple meta-levels — within-commit hygiene
+AND during-closeout-authoring hygiene. Promoted at M5-flag-flips
+closeout (commit 7).
+
+**Known exception cases:** drift outside commit's primary scope —
+route to BACKLOG or separate hygiene commit. The rule is a
+threshold-tight discipline, not a license for arbitrary refactors.
+
+---
+
+## 13. Finally-as-cleanup-anchor
+
+**Rule:** Lifecycle cleanup operations leverage the existing
+`dispatch()` / supervisor finally + cleanup-path anchors rather than
+introducing parallel cleanup lifecycles. New cleanup operations
+(token revoke, subprocess termination, drain task cancellation, etc.)
+attach to the existing anchor's pre-existing structure.
+
+**Reasoning:** parallel cleanup lifecycles fragment the dispatch /
+supervisor lifecycle reasoning surface — future-Claude reading the
+code has to understand multiple finally clauses + their interaction
+with timing semantics. Single-anchor discipline keeps cleanup logic
+co-located with the lifecycle it protects, preserving ordering
+guarantees + audit chain integrity.
+
+**Established at:** M5-flag-flips F3 (commit 2; 2026-05-07) +
+F4 (commit 3; 2026-05-07). Threshold-of-two fired at F4. F3:
+`dispatch()` finally clause's race-protection re-check after
+`asyncio.timeout` leverages existing `_await_terminal` pattern.
+F4: drain task cancellation lives in 5 EXISTING cleanup paths
+(`dispatch()` finally + LongRunningSupervisor's `shutdown` /
+`_handle_heartbeat_timeout` / `_handle_subprocess_unexpected_exit` /
+`_handle_compaction_completed`); no new finally introduced for
+drain task management. Promoted at M5-flag-flips closeout (commit 7).
+
+**Known exception cases:** none yet. Possible exception shape:
+cleanup with fundamentally different lifetime than dispatch / supervisor
+lifecycle (e.g., process-wide cleanup that spans multiple dispatches).
+Surface as exception when encountered.
+
+---
+
+## 14. Production-code-surface-for-testability (with production-correctness justification)
+
+**Rule:** Expand production-code surface for testability **when the
+same surface serves a production-correctness purpose**. Reject
+expansions that exist purely for test-only purposes.
+
+**Reasoning:** test-only seams accumulate as production-code complexity
+without serving production users; the resulting surface confuses
+future-Claude who reads it and asks "what's this for?" When a seam
+serves both testability AND a production-correctness purpose
+(graceful degradation, optional-dependency injection, fail-fast
+guard), the seam is justified. Convention frames the question
+explicitly: not "is this surface needed for testability?" but "does
+this surface serve a production-correctness purpose alongside
+testability?"
+
+**Established at:** threshold-of-three reached at M5-flag-flips F4
+(commit 3; 2026-05-07). Three empirical instances:
+- M5-pm-mode-and-window-state commit 5: `token_store=None` defensive
+  handling in `server._observe_caller` and 6 `_register_*` helpers —
+  accommodates test fixtures that don't construct a TokenStore;
+  production-correctness purpose: graceful degradation when token
+  validation isn't needed for a given tool.
+- M5-pm-mode-and-window-state commit 7: `_run() → _run() +
+  _run_lifespan_body(settings, shutdown)` refactor — accommodates
+  tests passing an external shutdown event without OS signals;
+  production-correctness purpose: clean separation of signal-handling
+  vs lifespan-body concerns.
+- M5-flag-flips F4 (commit 3): `DrainingSubprocess` wrapper as
+  public-shape concrete class + `dispatches_root: Path | None = None`
+  constructor parameter on `BridgeDispatcher` + `LongRunningSupervisor` —
+  accommodates 11 integration test fixtures; production-correctness
+  purpose: best-effort degradation per F4 guardrail #4 (None-fallback
+  to DEVNULL when stderr drain path can't be created).
+
+Promoted at M5-flag-flips closeout (commit 7).
+
+**Known exception cases:** test-only seams that don't serve a
+production-correctness purpose — reject; route the testability need
+to a different injection pattern (test fixtures with full production
+graph; dependency-injection container; conftest helpers).
+
+---
+
+## 15. Operational-verification-before-config-flip (detection-mode)
+
+**Rule:** When promoting a config flag from default-False to
+default-True at sub-milestone close, run the operational
+verification checklist at prep time before drafting the flip;
+commit-time scaffolding is smoke + yaml content-assertion +
+production-default contracts.
+
+**Reasoning:** config flag flips are operational gates with broader
+blast radius than typical code commits — the same change ships to
+production via daemon restart and activates dormant code paths +
+validators. Verification-before-flip catches drift between what the
+flag gates AND what the code currently does. Detection-mode methodology:
+verification before commit catches drift; flag flip lands cleanly.
+
+**Established at:** M5-flag-flips commits 5+6 (2026-05-07 / 2026-05-08).
+Threshold-of-two fired:
+- Commit 5 (`enable_engineer_supervisor`): three-behavior verification
+  checklist closed at prep (subscription_5h attribution + compaction-at-80% +
+  heartbeat calibration); commit landed cleanly with smoke test +
+  yaml content-assertion test + 4 production-default contracts.
+- Commit 6 (`enable_pm_supervisor`): same three-behavior checklist
+  applied symmetrically; CQ-D fired at prep (pm.yaml structural
+  divergence — already wired); commit landed without yaml amendment +
+  smoke test + yaml content-assertion test + 2 production-default
+  contracts.
+
+Promoted at M5-flag-flips closeout (commit 7). **Pairs with Convention 16
+(prevention-mode)** — together encode methodology for high-impact config
+changes: verify before (15), mitigate after (16).
+
+**Known exception cases:** none yet. Possible exception shape: feature
+flags whose flip doesn't activate dormant code paths (e.g., logging-only
+flag; routing-percentage flag with no validator side effect). Surface
+as exception when encountered.
+
+---
+
+## 16. Feature-flag-flip cascade (prevention-mode)
+
+**Rule:** Anticipate flag-flip cascade. When production default flips
+activate validators previously dormant in test surfaces, add autouse
+fixture pre-emptively at first cascade. Future flag flips with same
+validator pattern then require zero test-side churn.
+
+**Reasoning:** flag-flip cascades emerge when a flipped default
+activates a validator (or subprocess construction, or other
+runtime-only code path) that test fixtures previously bypassed.
+Detection-mode (Convention 15) catches the cascade at gate-run time
+of the flipping commit; prevention-mode anticipates the recurrence
+of the same cascade pattern at adjacent flag flips and inoculates
+test surfaces pre-emptively. Companion to Convention 15:
+verify before (15), mitigate after (16).
+
+**Established at:** M5-flag-flips commit 5 (2026-05-07) — conftest
+autouse fixture (`tests/conftest.py:_default_supervisor_flags_off_for_tests`)
+absorbs cascade for both `enable_engineer_supervisor` AND
+`enable_pm_supervisor`. **Pre-emptive coverage at commit 5 meant zero
+test-side churn at commit 6** — pattern stayed at threshold-of-two
+via prevention, NOT detection. Architectural success: methodology-as-moat
+operating in prevention mode rather than detection mode. Existing
+precedent for autouse-fixture cascade absorption: `keyring_memory`
+fixture at session-isolating Windows-Credential-Manager divergence
+from test defaults.
+
+**Known exception cases:** cascades whose triggering condition
+varies per-commit (e.g., a flip activates different validator
+depending on commit context) — fall back to detection-mode at
+each commit. Surface as exception when encountered.
+
+Promoted at M5-flag-flips closeout (commit 7).
+
+---
+
+## 17. Methodology-encoded-as-test (three sub-types)
+
+**Rule:** Architectural decisions encoded in source-controlled
+artifacts (function signatures, yaml prompts, settings defaults)
+are protected against silent drift by tests that read those
+artifacts and assert on load-bearing properties. Three sub-types
+distinguish mechanism by artifact shape:
+
+- **(a) Contract enforcement:** introspect function signatures via
+  `inspect.signature` and assert on parameter shape (e.g.,
+  keyword-only contract; required-parameter set). Mechanism reads
+  the function definition itself.
+- **(b) Presence enforcement:** read text artifacts (yaml, markdown,
+  spec docs) and assert load-bearing substring presence. Mechanism
+  reads source-controlled text and asserts content invariants.
+- **(c) Invariant enforcement:** assert defaults / validators behave
+  per spec; negative-invariant tests verifying absence of unexpected
+  behavior. Mechanism constructs the artifact (e.g., `Settings()`)
+  and asserts post-construction invariants.
+
+**Reasoning:** architectural decisions live in many surfaces beyond
+production code — yaml prompts, settings defaults, function signatures.
+Encoding the decision as a test surface protects against silent drift:
+the test fails when the decision is accidentally undone (deletion,
+rename, default change). Different artifact shapes need different
+mechanisms; convention names the three with a shared underlying
+thesis (encode methodology as test surface).
+
+**Established at:** M5-flag-flips chain (2026-05-07 to 2026-05-08).
+Nine instances across the chain establish the three sub-types
+empirically:
+- Sub-type (a) Contract: 1 instance — F5 keyword-only contract test
+  via `inspect.signature` (commit 4).
+- Sub-type (b) Presence: 2 instances — engineer.yaml content-assertion
+  test (commit 5); pm.yaml content-assertion test (commit 6).
+- Sub-type (c) Invariant: 6+ instances — production-default contract
+  tests at commit 5 (default-True / validator-fires / kwarg-bypass /
+  env-var-bypass = 4); commit 6 (default-True / no-validator-dependency
+  = 2; the negative-invariant test in particular is substantive
+  architectural encoding).
+
+Promoted at M5-flag-flips closeout (commit 7). Mechanism follows
+artifact shape; future fourth instance with a new mechanism extends
+sub-type list within Convention 17 rather than spawning Convention 18+.
+
+**Known exception cases:** when the methodology-encoding cost
+exceeds the drift-detection value — e.g., trivial defaults that
+change rarely + don't carry architectural weight. Surface as
+exception when encountered. The discipline is "encode load-bearing
+methodology," not "encode every detail."

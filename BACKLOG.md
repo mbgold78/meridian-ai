@@ -71,7 +71,7 @@ Sketched in `docs/kickoff/12-phase-two-engineering-team.md`.
 - Retrofit supervisor respawn paths to single-SQL-transaction atomicity (M4c-compaction +). Both the heartbeat-timeout respawn and the compaction-driven respawn currently use the in-process `_current_dispatch_id is None` flag to gate the watchdog during the brief window where the old row is terminal but the new row hasn't been inserted yet. External readers (currently none) see a transient "no active supervisor row" state. When external readers are introduced — likely M5's PMSupervisor lifecycle visualization or M6's `notify_human` surfacing — wrap the old-row-terminal UPDATE and the new-row INSERT in a single SQLite transaction so external queries see consistent state at all times. Spec home: `docs/kickoff/11-engineer-bridge.md` § Engineer compaction (atomicity subsection).
 - Auto-persona review-discipline ingraining (Phase 2 sub-milestone). The metrics-driven quality-signals discipline established in M5-continuous-pm-driver depends on reviewing-Claude + Mike paired-reviewer pattern. Auto-persona mode loses this pairing. Three pattern candidates for ingraining: (1) cross-persona review at architectural decision points; (2) operator spot-check ritual at sub-milestone boundaries with quality-signals pattern audit; (3) persona-prompt-level metrics-format requirement. Sub-milestone scope: design the cross-persona review protocol, define operator-spot-check ritual, bake metrics requirement into persona prompts. Trigger: Phase 2 transition, after first auto-persona sub-milestone has run enough to surface real failure modes.
 - **Operator-tunable heartbeat timeout via environment variable.** The supervisor heartbeat timeout is hardcoded at `bridge/supervisor_base.py:274` (`timeout_seconds: int = 1800`; default 30 minutes) and `bridge/engineer_supervisor.py:75` (matching constructor default), and not exposed as a Settings env var. Pinned at M5-flag-flips commit 5 prep when memory's claimed `MERIDIAN_ORCH_ENGINEER_HEARTBEAT_TIMEOUT_SECONDS=1800` env var was empirically verified to NOT exist (memory drift caught at prep time per bidirectional verification-first discipline). Phase 1 default matches `engineer.yaml`'s "30 minutes silent triggers SIGTERM and respawn" promise; tunability isn't load-bearing pre-operational-data. **Trigger:** first instance of operational data showing the 30min default needs adjustment OR first operator request for shorter/longer timeout. **Fix scope:** add `MERIDIAN_ORCH_ENGINEER_HEARTBEAT_TIMEOUT_SECONDS` field to `config.py:Settings`; thread through `main.py` `EngineerSupervisor` construction; add explicit-default test mirroring the `pm_loop_tick_seconds` / `audit_sample_percentage` precedents (~5-10 LOC + 1 test). PM-supervisor heartbeat empirically verified at M5-flag-flips commit 6 to share the same hardcoded pattern (`bridge/pm_supervisor.py:87` matching constructor default; `main.py` constructs `PMSupervisor` without override, symmetric with `EngineerSupervisor`). Fix scope generalizes to both supervisors: add `MERIDIAN_ORCH_PM_HEARTBEAT_TIMEOUT_SECONDS` symmetric to the engineer field; thread through both `main.py` construction sites; one explicit-default test per supervisor (~10-15 LOC + 2 tests instead of the original ~5-10 LOC + 1 test for engineer-only). Touchpoints: `bridge/supervisor_base.py:274`; `bridge/engineer_supervisor.py:75`; `bridge/pm_supervisor.py:87`; `main.py` (both `EngineerSupervisor(...)` and `PMSupervisor(...)` construction sites in `_run_lifespan_body`'s post-`mcp_ready` block).
-- **Extended stale-snapshot escalation for Engineer compaction trigger.** The `## Compaction trigger` subsection in `config/agents/engineer.yaml` (added at M5-flag-flips commit 5) gates compaction signaling on `snapshot_age_seconds <= 120`. When the snapshot is stale, Engineer continues normal iteration without signaling, rechecking on each iteration. Persistent stale-snapshot windows (snapshot ageing past 120s for many consecutive iterations) currently produce no escalation surface — Engineer keeps iterating with `pace_recommendation='unknown'` until the snapshot freshens. **Trigger:** first instance of stale-snapshot persisting beyond N iterations during real Engineer operation (operational observation post-flag-flip). **Fix scope:** define escalation threshold (N consecutive stale-snapshot iterations); decide escalation mechanism (operator alert via task note? automatic compaction-trigger override regardless of staleness? supervisor restart with diagnostic packet?). Cost: TBD; design decision required at trigger. **Related:** Phase 2 V2 roadmap entry "Degraded-state recovery / operator pacing control loop" (this file's tail) — stale-snapshot escalation likely subsumes under that governance layer's signal-tracking + recovery-mode framework rather than landing as a standalone Engineer-yaml refinement. Touchpoints: `config/agents/engineer.yaml` § Compaction trigger; `tools/budget.py:get_window_state` (snapshot_age_seconds source); future governance-layer module per V2 #9 placement.
+- **Extended stale-snapshot escalation for Engineer compaction trigger.** The `## Compaction trigger` subsection in `config/agents/engineer.yaml` (added at M5-flag-flips commit 5) gates compaction signaling on `snapshot_age_seconds <= 120`. When the snapshot is stale, Engineer continues normal iteration without signaling, rechecking on each iteration. Persistent stale-snapshot windows (snapshot ageing past 120s for many consecutive iterations) currently produce no escalation surface — Engineer keeps iterating with `pace_recommendation='unknown'` until the snapshot freshens. **Trigger:** first instance of stale-snapshot persisting beyond N iterations during real Engineer operation (operational observation post-flag-flip). **Fix scope:** define escalation threshold (N consecutive stale-snapshot iterations); decide escalation mechanism (operator alert via task note? automatic compaction-trigger override regardless of staleness? supervisor restart with diagnostic packet?). Cost: TBD; design decision required at trigger. **Related:** Phase 2 V2 roadmap entry V2 #9 (degraded-state recovery / operator pacing control loop) in the `## Phase 2 architectural-evolution candidates` section above — stale-snapshot escalation likely subsumes under that governance layer's signal-tracking + recovery-mode framework rather than landing as a standalone Engineer-yaml refinement. Touchpoints: `config/agents/engineer.yaml` § Compaction trigger; `tools/budget.py:get_window_state` (snapshot_age_seconds source); future governance-layer module per V2 #9 placement.
 
 ## Conventions
 
@@ -240,6 +240,147 @@ Phase 2 generalization shape: when non-Mike OAuth callers land (multi-operator s
 **Cross-reference**: `tools/tasks.py:_check_can_submit_task_parent_ownership` is the call site; the special-case branch (`if submitter_role is None: submitter_role = HUMAN_LITERAL_ROLE_MAP.get(...)`) is where the generalization lands.
 
 **Phase 1 acceptance**: 4-line special-case (constant + map + branch); two-site-in-same-commit (`submitted_by` populator + clause 2 resolver) was the threshold for module-level extraction at commit 3. Phase 2 trigger threshold is independent — the map exists; generalization is when the map outgrows the dict shape.
+
+## Phase 2 architectural-evolution candidates
+
+Section established 2026-05-08 at M5-flag-flips closeout (commit 7) per CQ-F Reading A disposition. Consolidates 8 codex clean-slate critique candidates surfaced at M5-flag-flips commit 2 close (2026-05-07; original session: codex review session) plus the degraded-state recovery / operator pacing control loop entry that Mike pasted manually at commit 5 (file tail; migrated here as #9 at commit 7 closeout).
+
+These 9 entries are **Phase 2 architectural-evolution roadmap**: each names a designed-shape sketch + concrete trigger condition + spec-home pointer. Distinct from `## Future architectural work` (M4d-spawned designed-but-deferred entries) by provenance — these 9 came from clean-slate critique + governance-layer thinking, not from per-feature M4d work pressure. Sequencing dependency analysis: see `docs/closeouts/M5-flag-flips.md` § Chapter 5 (V2 #7 prereq V2 #9; V2 #1 substrate for V2 #2/#5/#6).
+
+Detail prose: `docs/closeouts/M5-flag-flips.md` Chapter 5 + `project_m5_flag_flips_closeout_carry_forward` memory.
+
+### V2 #1 — Command-handler layer underneath MCP wrappers
+
+The MCP wrapper layer in `server.py` accumulates a recurring shape across handlers: validate input → authorize caller (`_require_role` + per-handler permission check) → transact storage write(s) → write audit row → shape response. Five-phase shape duplicated across `tools/dispatch.py`, `tools/tasks.py`, `tools/budget.py`, `tools/supervisor.py`, `tools/pm_focus.py`, `tools/pm_spin.py`, `tools/pm_loop.py`, `tools/pm_handoff.py`, `audit/sampler.py`. Phase 1 ships duplication; Phase 2 evaluation of `Command` abstraction.
+
+**Designed shape**: extract `Command` abstraction with the five-phase shape; MCP wrappers thin to deserialize → dispatch; each tool's handler becomes a `Command` subclass.
+
+**Trigger**: third instance of `validate + authorize + transact + audit + shape` duplicated across handlers in M6/M7 surfaces (dashboard tools at M6 knowledge surface; deployment tools at M7).
+
+**Cross-reference**: `docs/closeouts/M5-flag-flips.md` § Chapter 5 (Phase 2 sequencing — foundation layer; substrate for V2 #2/#5/#6).
+
+**Cost**: substantial refactor (5+ tool modules; MCP wrapper layer; test fixtures); design decision required at trigger.
+
+### V2 #2 — Policy layer consolidation `can(actor, action, resource)`
+
+Permission checks across tools currently duplicate the `_require_role` + per-handler permission helper pattern. M4d shipped 5+ `_check_can_*` per-tool helpers; M5 added more (e.g., `signal_compaction` engineer-or-pm permission gate at `tools/supervisor.py`). Consolidation to a single `can(actor, action, resource)` policy layer would replace the duplication with a unified permission grammar.
+
+**Designed shape**: extract policy decision point (`PolicyDecisionPoint.can(actor, action, resource) -> bool`) with policy rules driven by per-role + per-resource matrices; tool handlers query the PDP rather than each implementing their own permission check.
+
+**Trigger**: third instance of permission-helper duplication across new tool surfaces post-M5. M4d shipped 5+ `_check_can_*`; M5 added more. At third post-M5 instance, evaluate consolidation.
+
+**Cross-reference**: V2 #1 (Command-handler layer; PDP integrates naturally as one phase of the Command abstraction).
+
+**Cost**: moderate refactor; matrix design + PDP wiring + per-tool handler updates.
+
+### V2 #3 — Event-log-first architecture with audit/projections derived
+
+Current architecture: tools write to state tables AND write audit rows. Two parallel writes; risk of divergence (M4d codex F1 audit-vs-api_usage divergence was the canonical example). Event-log-first inverts: tools emit events; state tables become projections derived from event log.
+
+**Designed shape**: introduce event log as primary write surface; derive `dispatches`, `tasks`, `api_usage`, etc. as projections (materialized views or rebuild-on-demand). Audit log becomes the event log itself.
+
+**Trigger**: SECOND instance of audit-vs-state-table divergence bug class. **F1 commit 8.5 (M4d audit-vs-api_usage divergence) was first.** Threshold-of-two for refactor evaluation. If second instance surfaces at M5/M6, evaluate event-sourcing refactor.
+
+**Cross-reference**: V2 #7 (event emission as separate concern from event log; #7 + #3 may co-evolve as foundational pair).
+
+**Cost**: large architectural refactor; substrate-level change to writer patterns + projection rebuild semantics.
+
+### V2 #4 — Actor uniformity (eliminate `human:mike` literal)
+
+Phase 1 simplification at `tools/tasks.py:HUMAN_LITERAL_ROLE_MAP` maps `"human:mike"` → `"pm"` for OAuth caller resolution. Phase 2 multi-operator scenario or systematic actor-model refactor would eliminate the literal in favor of uniform actor representation.
+
+**Designed shape**: replace `submitted_by="human:<name>"` literals with structured actor records (UUID-shaped `actor_id` referencing a unified `actors` table covering both human operators and agents). M4d shipped two centralization sites at commit 3 (HUMAN_MIKE_LITERAL + HUMAN_LITERAL_ROLE_MAP); threshold-of-three for extraction.
+
+**Trigger**: first instance of multi-operator scenario (Phase 2 multi-tenancy; second OAuth caller other than Mike) OR third instance of `HUMAN_LITERAL_ROLE_MAP` duplication patterns.
+
+**Cross-reference**: BACKLOG `## Future architectural work` § Generalize HUMAN_LITERAL_ROLE_MAP (entry-level pattern-based generalization is interim; V2 #4 is structural unification).
+
+**Cost**: moderate; new `actors` table + migration + caller-resolution updates across tools.
+
+### V2 #5 — Run/dispatch as first-class concept separate from task
+
+Currently `dispatch` is task-anchored (`dispatches.task_id` references `tasks.id`). Retry/replay scenarios force a one-task-multi-dispatch shape, awkward under current schema. First-class run/dispatch separation would model dispatch lifecycle independent of task identity.
+
+**Designed shape**: introduce `runs` table representing a single execution attempt; `dispatches` reference `runs` rather than `tasks` directly; `tasks` may have multiple `runs` over their lifecycle (retries, replays). Audit chains preserved per-run for diagnostic clarity.
+
+**Trigger**: first instance of retry/replay requirement at Phase 2 OR multi-Implementer-per-task scenario where the same task spawns multiple parallel implementer dispatches with distinct lifecycles.
+
+**Cross-reference**: V2 #1 (Command-handler layer; run/dispatch separation may surface naturally as part of Command lifecycle modeling).
+
+**Cost**: moderate; new `runs` table + migration + dispatch lifecycle model updates.
+
+### V2 #6 — Explicit transaction ownership and concurrency contracts at command level
+
+Current pattern: handlers manage transactions inline (`async with storage.transaction()`); atomicity contracts live in handler docstrings, sometimes overstating actual scope. F2 contextvars fix (M5-flag-flips commit 1) was the second instance of "atomicity docstring overstates transaction scope" finding (first: M4d codex F5).
+
+**Designed shape**: command-level transaction declaration (`@transactional` decorator or `Command.transaction_scope` field) makes transaction boundaries explicit at the Command abstraction layer; handlers don't manage transactions inline.
+
+**Trigger**: third instance of "atomicity docstring overstates transaction scope" finding. **F5 codex finding M4d was first; F2 contextvars fix was second.** Threshold-of-three for command-level contract refactor — at next instance, evaluate.
+
+**Cross-reference**: V2 #1 (Command-handler layer; transaction ownership integrates naturally as one phase of Command lifecycle).
+
+**Cost**: moderate; depends on V2 #1 readiness — may co-ship with #1.
+
+### V2 #7 — Observation as structured event emission, not wrapper-side mutation
+
+Current observation pattern: `_observe_caller` in `server.py` wraps every MCP tool wrapper, fans out to writers (`record_mcp_call` for activity; `record_oauth_pm_auto_flip` for PM mode). Wrapper-side mutation creates ordering coupling (F2 wrapper ordering fix was the workstream). Event-emission inverts: handlers emit observation events; subscribers (activity update, OAuth-PM auto-flip, future governance-layer) consume via event bus.
+
+**Designed shape**: introduce internal event bus; tool handlers emit `observation.caller` / `observation.token_id` / etc.; current `_observe_caller` writers become bus subscribers. Decouples observation timing from handler execution.
+
+**Trigger**: F2 wrapper ordering fix workstream 2 post-M4d demonstrated cost; if observation-bug-class recurs at M5/M6, threshold fires. Refactor: handlers emit observation events; subscribers (activity update, OAuth-PM auto-flip) consume via event bus.
+
+**Cross-reference**: V2 #3 (event-log-first; #7 may use #3's event log as the bus substrate). V2 #9 (degraded-state recovery; #9 governance-layer subscribes to #7's event stream — #7 is prerequisite for full #9 implementation).
+
+**Cost**: moderate-large; event bus introduction + subscriber migration + observation pattern across all tools.
+
+### V2 #8 — Project adapter abstraction (project-specific prompts/tools/knowledge as first-class)
+
+Phase 1 is single-project (Meridian/substrate); agent prompts in `config/agents/*.yaml` are substrate-specific; knowledge paths reference `/product/substrate/*`. Phase 2 multi-project would force per-project context as first-class — adapters that resolve agent prompts, tool surfaces, knowledge paths per active project.
+
+**Designed shape**: introduce `ProjectAdapter` interface with hooks for agent-prompt resolution, knowledge-path resolution, tool-permission scoping per project. Companies own one or more projects; agents bind to projects; per-project taxonomies (`work_domain`, etc.) plug in per-project.
+
+**Trigger**: first instance of second project context. Phase 1 is single-project (Meridian/substrate); Phase 2 multi-project would force this.
+
+**Cross-reference**: BACKLOG `## Future architectural work` § Per-product work_domain taxonomy (companion entry — work_domain taxonomy is one of the first per-project surfaces).
+
+**Cost**: large architectural refactor; project-context propagation across all surfaces.
+
+### V2 #9 — Degraded-state recovery / operator pacing control loop
+
+**Phase**: 2 architectural evolution / methodology-as-product
+**Status**: Deferred from M5-flag-flips commit 5 (manual paste at file tail; migrated to V2 roadmap section at commit 7 per CQ-F Reading A consolidation).
+
+**Trigger for prioritization**: First real dogfooding session where the operator becomes the recovery glue after throttle/context rotation fails, OR repeated manual pacing/adjudication is needed to preserve quality.
+
+**Rationale**: Product-relevant but not Phase 1-critical. The correct abstraction is not "take a break" or calendar-time rest. Orchestrator should not depend on "tomorrow" as a primitive. The right model is state-based recovery: detect degraded quality signals, enter a named recovery mode, and exit only when explicit conditions are met.
+
+**Scope**:
+- Soft signaling only by default. No hard paternalistic enforcement.
+- System surfaces quality-risk telemetry and recommended recovery modes.
+- Human remains able to override, continue, pause, or change priority.
+- Goal: reduce decision load and preserve work quality, not moralize rest.
+
+**Signals to track**: context pressure / compaction pressure; budget or subscription-window pressure; repeated correction loops or reversal rate; same issue reopened repeatedly; conflicting reviewer conclusions; test instability or flaky retry behavior; dispatch timeout / heartbeat failures; tool/runtime failures; high unresolved finding count; rapid high-stakes decision cadence; late-stage closeout or post-close fix churn; operator interaction pattern suggesting overloaded decision queue.
+
+**Recovery modes**: compact and resume from handoff; reduce concurrency; downgrade risk (switch from implementation to read-only review/synthesis); split work into smaller tasks; freeze implementation and launch adjudication; spawn independent reviewer/root-cause agents; produce options matrix with exact citations; queue implementation tasks but defer execution until explicit approval; run diagnostic loop / minimal reproduction; roll back to last known good checkpoint when appropriate; mark task blocked with diagnostic packet; continue unrelated safe work around the blocker.
+
+**Escalation rule**: if throttle/reduced-concurrency does not recover, do not stall. Escalate from pacing control to fault isolation:
+1. Identify the binding constraint
+2. Fork recovery paths where safe
+3. Roll back or isolate if needed
+4. Ask the operator for one bounded decision only when required
+5. Preserve diagnostics and continue safe work if blocked
+
+**Exit criteria** (each recovery mode must define): fresh context spawned and handoff accepted; tests stable for N runs; reviewer disagreement adjudicated; human decision recorded; budget window recovered or model route changed; blocker isolated and backlog/fix task opened; last known good checkpoint restored.
+
+**Architectural placement**: lives above individual Engineer/Implementer/Tester as a PM/supervisor governance layer. Not a subprocess "break" feature. Quality-preserving control loop for a human-operated AI delivery system.
+
+**Connection to V2 roadmap**:
+- Connects to **V2 #7** (observation as structured event emission): governance layer subscribes to event stream, doesn't participate in command execution. **V2 #7 is prerequisite for full V2 #9 implementation** (per CQ-E disposition); incremental signal-tracking-via-direct-queries admissible pre-#7.
+- Connects to **methodology-as-moat #11**: pacing discipline + verification-first + closeout discipline are parts of cumulative methodology; this entry extends the methodology into the product as governance-layer feature. The methodology becomes a product surface.
+- State-based recovery vs calendar-time rest is a Phase 2 design principle that generalizes beyond pacing — applies to any quality-protection mechanism in continuously-running systems.
+
+**Refinement sub-entry**: the `## Agent degradation detection and recovery` section at this file's tail (Mike paste 2026-05-09; commit-7 closeout authoring discovery) refines V2 #9 with reasoning-degradation telemetry. Sub-entry of #9, not parallel V2 entry; subsumed under V2 #9's signals + recovery modes per its own framing. Sequencing: V2 #7 ships first (event emission infrastructure), V2 #9 ships governance layer, the Agent degradation section refines #9 with reasoning-degradation telemetry sub-surface.
 
 ## Open questions deferred to later milestones
 
@@ -670,81 +811,52 @@ This applies to future sessions reading this entry: **do not re-open observabili
 
 If a future session feels the urge to refine this design before runtime data exists, that urge IS the failure mode being warned against. The right response is to ship and observe.
 
-## Degraded-state recovery / operator pacing control loop
+## Agent degradation detection and recovery
 
-**Phase**: 2 architectural evolution / methodology-as-product
-**Status**: Deferred from M5-flag-flips disposition 2026-05-09
-**Trigger for prioritization**: First real dogfooding session where the operator becomes the recovery glue after throttle/context rotation fails, OR repeated manual pacing/adjudication is needed to preserve quality.
+**Phase**: 2 / methodology-as-product extension
+**Status**: Pinned 2026-05-09; subsumed under V2 #9 (degraded-state recovery / operator pacing control loop)
+**Trigger for prioritization**: First instance of agent producing degraded output that operator catches manually OR first instance of agent entering reasoning loop / repetition / quality cliff that automated detection should have caught.
 
 ### Rationale
 
-Product-relevant but not Phase 1-critical. The correct abstraction is not "take a break" or calendar-time rest. Orchestrator should not depend on "tomorrow" as a primitive. The right model is state-based recovery: detect degraded quality signals, enter a named recovery mode, and exit only when explicit conditions are met.
+Agents (PM, Engineer, Implementer, Tester) operating continuously through Orchestrator subprocesses can enter degraded reasoning states: context exhaustion, repetition loops, quality cliffs, prediction divergence accumulation, drift from spec. The current Phase 1 architecture detects only mechanical failures (heartbeat timeout, subprocess crash, dispatch timeout) — not reasoning degradation.
+
+Reasoning degradation is observable through telemetry signals the agent itself emits:
+- Context utilization approaching ceiling (subscription_5h ≥ 80% — already triggers compaction in Phase 1)
+- Repeated correction loops on same finding
+- Reversal of prior dispositions without new empirical input
+- Increasing time-per-iteration without proportional output
+- Test pass-rate degradation across iterations
+- Spec-conformance drift (claimed scope vs actual diff)
+- Audit-log pattern anomalies (unusual tool-call cadence; permission-denied accumulation)
+
+When degradation is detected, automated recovery should engage before degraded output propagates to commit. Mechanical compaction at 80% is the existing primitive; this entry generalizes it to non-context-pressure degradation surfaces.
 
 ### Scope
 
-- Soft signaling only by default. No hard paternalistic enforcement.
-- System surfaces quality-risk telemetry and recommended recovery modes.
-- Human remains able to override, continue, pause, or change priority.
-- Goal: reduce decision load and preserve work quality, not moralize rest.
+Soft signaling by default — degradation telemetry surfaces to PM/supervisor governance layer for disposition. Recovery-mode recommendation, not hard enforcement. Operator override preserved.
 
-### Signals to track
+Detection signals (extend V2 #9's 12-signal list):
+- Reasoning-quality signals (loop detection, repetition, reversal-without-input)
+- Output-quality signals (test pass-rate trajectory, spec-conformance drift)
+- Pattern-anomaly signals (cadence, permission patterns, audit irregularities)
 
-- Context pressure / compaction pressure
-- Budget or subscription-window pressure
-- Repeated correction loops or reversal rate
-- Same issue reopened repeatedly
-- Conflicting reviewer conclusions
-- Test instability or flaky retry behavior
-- Dispatch timeout / heartbeat failures
-- Tool/runtime failures
-- High unresolved finding count
-- Rapid high-stakes decision cadence
-- Late-stage closeout or post-close fix churn
-- Operator interaction pattern suggesting overloaded decision queue
-
-### Recovery modes
-
-- Compact and resume from handoff
-- Reduce concurrency
-- Downgrade risk: switch from implementation to read-only review/synthesis
-- Split work into smaller tasks
-- Freeze implementation and launch adjudication
-- Spawn independent reviewer/root-cause agents
-- Produce options matrix with exact citations
-- Queue implementation tasks but defer execution until explicit approval
-- Run diagnostic loop / minimal reproduction
-- Roll back to last known good checkpoint when appropriate
-- Mark task blocked with diagnostic packet
-- Continue unrelated safe work around the blocker
-
-### Escalation rule
-
-If throttle/reduced-concurrency does not recover, do not stall. Escalate from pacing control to fault isolation:
-
-1. Identify the binding constraint
-2. Fork recovery paths where safe
-3. Roll back or isolate if needed
-4. Ask the operator for one bounded decision only when required
-5. Preserve diagnostics and continue safe work if blocked
-
-### Exit criteria
-
-Each recovery mode must define clear exit conditions, such as:
-
-- Fresh context spawned and handoff accepted
-- Tests stable for N runs
-- Reviewer disagreement adjudicated
-- Human decision recorded
-- Budget window recovered or model route changed
-- Blocker isolated and backlog/fix task opened
-- Last known good checkpoint restored
+Recovery actions (extend V2 #9's 12-mode list):
+- Pre-emptive compaction before threshold (forced fresh context if degradation detected pre-80%)
+- Subprocess restart with diagnostic packet
+- Downgrade to read-only review mode
+- Spawn independent reviewer agent to adjudicate
+- Mark subprocess as degraded, freeze new claims, preserve in-flight work
+- Surface to operator with recommended action
 
 ### Architectural placement
 
-Lives above individual Engineer/Implementer/Tester as a PM/supervisor governance layer. Not a subprocess "break" feature. Quality-preserving control loop for a human-operated AI delivery system.
+Lives in PM/supervisor governance layer per V2 #9. Subscribes to V2 #7 (structured event emission) for telemetry stream. Distinct from F4-style mechanical-failure isolation (which catches subprocess crashes); this is reasoning-quality monitoring above the mechanical layer.
 
 ### Connection to V2 roadmap
 
-- Connects to V2 #7 (observation as structured event emission, not wrapper-side mutation): governance layer subscribes to event stream, doesn't participate in command execution.
-- Connects to methodology-as-moat #12: pacing discipline + verification-first + closeout discipline are parts of cumulative methodology; this entry extends the methodology into the product as governance-layer feature. The methodology becomes a product surface.
-- State-based recovery vs calendar-time rest is a Phase 2 design principle that generalizes beyond pacing — applies to any quality-protection mechanism in continuously-running systems.
+Subsumes a subset of V2 #9's signals + recovery modes specifically focused on agent reasoning degradation rather than operational pressure. Sequencing: V2 #7 ships first (event emission infrastructure), V2 #9 ships governance layer, this entry refines #9 with reasoning-degradation telemetry.
+
+### Anti-paternalism framing
+
+Detection produces soft signals + recovery recommendations. Hard pacing enforcement is rejected per V2 #9's design principles. The goal is making degradation observable and recoverable, not constraining agent autonomy. Agent retains ability to continue if degradation is transient and recovery would interrupt productive work; operator retains override.
