@@ -32,6 +32,7 @@ from __future__ import annotations
 import html
 import secrets
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from ipaddress import IPv4Address, IPv6Address, ip_address
@@ -134,9 +135,28 @@ class MeridianOAuthProvider(
     short TTLs — they're transient state. Clients and access tokens live in
     keyring (the existing single source of truth for credentials)."""
 
-    def __init__(self, store: TokenStore, default_role: str = DEFAULT_OAUTH_ROLE) -> None:
+    def __init__(
+        self,
+        store: TokenStore,
+        default_role: str = DEFAULT_OAUTH_ROLE,
+        on_oauth_caller_registered: (
+            Callable[[str, str], Awaitable[None]] | None
+        ) = None,
+    ) -> None:
+        """Construct the OAuth AS provider.
+
+        ``on_oauth_caller_registered`` is invoked from
+        :meth:`exchange_authorization_code` after a successful token issue.
+        Signature ``async (agent_id: str, role: str) -> None``. Production
+        wiring (main.py) passes a closure that registers the OAuth caller
+        in the agent registry + UPSERTs the agents row in storage so
+        FK-bound handlers (submit_task, etc.) accept the OAuth caller's
+        ``agent_id``. ``None`` default keeps the OAuth flow standalone for
+        tests that don't exercise the registry/storage integration.
+        """
         self._store = store
         self._default_role = default_role
+        self._on_oauth_caller_registered = on_oauth_caller_registered
         self._approval_sessions: dict[str, _ApprovalSession] = {}
         self._auth_codes: dict[str, _StoredAuthorizationCode] = {}
 
@@ -338,8 +358,21 @@ class MeridianOAuthProvider(
         expires_at_iso = (
             datetime.now(tz=UTC) + timedelta(seconds=ttl_seconds)
         ).isoformat(timespec="seconds")
+        # alpha persistence: reuse same agent_id across re-authorizations
+        # for the same (client_id, role). Same operator's OAuth
+        # re-authorization flow -> same agent_id -> audit trail consistency
+        # across operator session re-opens. None client_id (defensive;
+        # OAuth dynamic registration always sets it but the SDK type
+        # is Optional) skips the lookup; TokenStore.issue then mints
+        # fresh agent_id. None return from the lookup likewise mints
+        # fresh.
+        existing_agent_id: str | None = None
+        if client.client_id:
+            existing_agent_id = self._store.find_oauth_caller_by_client_id(
+                client.client_id, role
+            )
         issued = self._store.issue(
-            agent_id=None,
+            agent_id=existing_agent_id,
             role=role,
             label=f"oauth:{client.client_name or client.client_id or 'unknown'}",
             source="oauth",
@@ -352,7 +385,25 @@ class MeridianOAuthProvider(
             agent_id=issued.record.agent_id,
             role=role,
             token_id=issued.record.token_id,
+            agent_id_reused=existing_agent_id is not None,
         )
+        if self._on_oauth_caller_registered is not None:
+            try:
+                await self._on_oauth_caller_registered(
+                    issued.record.agent_id, role
+                )
+            except Exception as exc:
+                # Callback failure does NOT block token issuance — operator
+                # already has the bearer; FK validation at handler time
+                # would surface a downstream error, but the OAuth flow
+                # itself completes. Log at error level for operator
+                # diagnostic.
+                logger.error(
+                    "oauth.caller_registered_callback_failed",
+                    agent_id=issued.record.agent_id,
+                    role=role,
+                    error=str(exc),
+                )
         return OAuthToken(
             access_token=issued.token,
             token_type="Bearer",

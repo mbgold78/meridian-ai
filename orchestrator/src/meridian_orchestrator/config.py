@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -29,6 +30,12 @@ class Settings(BaseSettings):
 
     data_dir: Path = Field(default_factory=_default_data_dir)
     log_level: str = Field(default="INFO")
+    # Log output format: "human" (default) for live debugging — operator-
+    # readable single-line shape with EST/EDT millisecond timestamp +
+    # PID + thread ID + level + event + flat key=value tail. "json" for
+    # production / log-shipping — structured JSON dicts with the same
+    # fields. Set MERIDIAN_ORCH_LOG_FORMAT=json in deployed environments.
+    log_format: Literal["human", "json"] = Field(default="human")
 
     mcp_host: str = Field(default="127.0.0.1")
     mcp_port: int = Field(default=8765, ge=1, le=65535)

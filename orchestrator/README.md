@@ -37,6 +37,37 @@ Creates `${MERIDIAN_ORCH_DATA_DIR}/data/orchestrator.db` (default `~/.meridian-o
 
 ## Run the daemon
 
+### One-time operator setup
+
+Before the first daemon start, copy agent yamls from the project repo to
+the runtime data directory:
+
+```powershell
+New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.meridian-orchestrator\config\agents" | Out-Null
+Copy-Item "config\agents\*.yaml" "$env:USERPROFILE\.meridian-orchestrator\config\agents\"
+```
+
+Set the substrate working directory env var (or add to `.env`):
+
+```powershell
+$env:MERIDIAN_ORCH_SUBSTRATE_WORKING_DIRECTORY="C:\path\to\your\substrate"
+```
+
+Issue agent role tokens (one-time per machine):
+
+```powershell
+uv run python -m scripts.issue-token --role pm --label "$env:USERNAME-cd"
+uv run python -m scripts.issue-token --role engineer --label "$env:USERNAME-cd"
+uv run python -m scripts.issue-token --role implementer --label "$env:USERNAME-cd"
+uv run python -m scripts.issue-token --role tester --label "$env:USERNAME-cd"
+```
+
+(Auto-seeding of the runtime yaml dir is pinned in BACKLOG.md
+§ "Agent yaml runtime-dir auto-seeding" — until that ships, the manual
+copy above is operationally required.)
+
+### Start the daemon
+
 ```bash
 uv run python -m meridian_orchestrator.main
 ```
@@ -46,6 +77,22 @@ The daemon connects to the DB, runs migrations, and starts the MCP server on
 `MERIDIAN_ORCH_MCP_PORT`). It refuses non-loopback bind addresses unless
 `MERIDIAN_ORCH_MCP_ALLOW_NON_LOOPBACK=true` is set explicitly. Shuts down
 cleanly on SIGTERM / SIGINT / SIGBREAK.
+
+### Operator wrappers (shortcut for interactive PM / Engineer sessions)
+
+Once the daemon is running and OAuth flow is completed once via
+`/mcp` → Authenticate inside a Claude Code session, you can spawn
+role-disciplined sessions via the wrapper scripts:
+
+```bash
+uv run python -m scripts.operate-as-pm
+uv run python -m scripts.operate-as-engineer
+```
+
+Both load the role's `system_prompt` from `config/agents/<role>.yaml` and
+spawn `claude --dangerously-skip-permissions --append-system-prompt
+<system_prompt>`. Extra command-line args are forwarded to the
+underlying `claude` invocation (e.g., `--resume <session-id>`).
 
 **Why plain HTTP and not TLS?** Phase 1 binds loopback only. There is no
 over-the-wire threat between processes on `127.0.0.1`; an attacker who can

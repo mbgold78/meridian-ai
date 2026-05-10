@@ -194,6 +194,115 @@ async def test_load_authorization_code_rejects_after_expiry() -> None:
     assert await provider.load_authorization_code(client, code_value) is None
 
 
+async def test_exchange_reuses_agent_id_for_same_client_id_alpha_persistence() -> None:
+    """Two successive exchange_authorization_code calls for the same
+    client_id reuse the same agent_id (alpha persistence). Audit trail
+    consistency across operator session re-opens.
+
+    Without alpha persistence: each OAuth flow mints a fresh agent_id;
+    Mike's day-2 session shows up as different agent_id than day-1;
+    audit trail fragments.
+    """
+    store = TokenStore(service="oauth-alpha-test")
+    provider = MeridianOAuthProvider(store)
+    client = _client(["http://127.0.0.1:54321/cb"])
+
+    async def _complete_flow() -> str:
+        url = await provider.authorize(
+            client, _params("http://127.0.0.1:54321/cb")
+        )
+        sid = url.split("session=", 1)[1]
+        session = provider._approval_sessions[sid]
+        redirect = provider.complete_approval(sid, session.csrf_token)
+        assert redirect is not None
+        code_value = redirect.split("code=", 1)[1].split("&", 1)[0]
+        auth_code = await provider.load_authorization_code(client, code_value)
+        assert auth_code is not None
+        token = await provider.exchange_authorization_code(client, auth_code)
+        record = store.lookup(token.access_token)
+        assert record is not None
+        return record.agent_id
+
+    first_agent_id = await _complete_flow()
+    second_agent_id = await _complete_flow()
+    assert first_agent_id == second_agent_id, (
+        "alpha persistence violated: second OAuth flow for same client_id "
+        "minted a different agent_id; audit consistency broken across "
+        "operator session re-opens"
+    )
+
+
+async def test_exchange_invokes_oauth_caller_registered_callback() -> None:
+    """exchange_authorization_code invokes the on_oauth_caller_registered
+    callback after successful issuance with (agent_id, role). Production
+    wiring uses this to register the OAuth caller in the agent registry +
+    UPSERT the agents row in storage so submit_task's FK validation
+    works.
+    """
+    store = TokenStore(service="oauth-callback-test")
+    captured: list[tuple[str, str]] = []
+
+    async def callback(agent_id: str, role: str) -> None:
+        captured.append((agent_id, role))
+
+    provider = MeridianOAuthProvider(
+        store, on_oauth_caller_registered=callback
+    )
+    client = _client(["http://127.0.0.1:54321/cb"])
+    url = await provider.authorize(
+        client, _params("http://127.0.0.1:54321/cb")
+    )
+    sid = url.split("session=", 1)[1]
+    session = provider._approval_sessions[sid]
+    redirect = provider.complete_approval(sid, session.csrf_token)
+    assert redirect is not None
+    code_value = redirect.split("code=", 1)[1].split("&", 1)[0]
+    auth_code = await provider.load_authorization_code(client, code_value)
+    assert auth_code is not None
+    token = await provider.exchange_authorization_code(client, auth_code)
+
+    assert len(captured) == 1
+    agent_id, role = captured[0]
+    record = store.lookup(token.access_token)
+    assert record is not None
+    assert agent_id == record.agent_id
+    assert role == "pm"
+
+
+async def test_exchange_callback_failure_does_not_block_token_issuance() -> None:
+    """Callback raising an exception logs the error but does NOT block
+    the OAuth flow — operator gets the token; downstream FK errors at
+    handler-call time surface the registration gap separately. Token
+    issuance is the contract OAuth must fulfill; registration is a
+    side-effect that fails open.
+    """
+    store = TokenStore(service="oauth-callback-fail-test")
+
+    async def failing_callback(agent_id: str, role: str) -> None:
+        raise RuntimeError("simulated registration failure")
+
+    provider = MeridianOAuthProvider(
+        store, on_oauth_caller_registered=failing_callback
+    )
+    client = _client(["http://127.0.0.1:54321/cb"])
+    url = await provider.authorize(
+        client, _params("http://127.0.0.1:54321/cb")
+    )
+    sid = url.split("session=", 1)[1]
+    session = provider._approval_sessions[sid]
+    redirect = provider.complete_approval(sid, session.csrf_token)
+    assert redirect is not None
+    code_value = redirect.split("code=", 1)[1].split("&", 1)[0]
+    auth_code = await provider.load_authorization_code(client, code_value)
+    assert auth_code is not None
+    # Should not raise despite callback failure
+    token = await provider.exchange_authorization_code(client, auth_code)
+    assert token.token_type == "Bearer"
+    record = store.lookup(token.access_token)
+    assert record is not None
+    assert record.source == "oauth"
+
+
 async def test_revoke_token_marks_record_revoked() -> None:
     store = TokenStore(service="oauth-test")
     provider = MeridianOAuthProvider(store)

@@ -427,3 +427,179 @@ async def test_seed_agents_into_storage_raises_on_missing_company_id(
     # No rows written — the guard fires before any INSERT runs.
     rows = await storage.fetch_all("SELECT id FROM agents")
     assert rows == []
+
+
+# ---------------------------------------------------------------------------
+# OAuth-PM registry binding (Component 1 post-β architectural remediation):
+# OAuth callers join the agent_id-keyed snapshot via _reload_locked picking
+# up active OAuth tokens + via register_oauth_caller for explicit
+# registration-on-issuance paths. registry.get(role) preserves existing
+# semantics (returns static-source supervisor); registry.get_by_agent_id
+# resolves both static and OAuth identities.
+# ---------------------------------------------------------------------------
+
+
+async def test_reload_locked_includes_oauth_tokens_in_snapshot(
+    tmp_path: Path,
+) -> None:
+    """Active OAuth tokens for known roles → registry snapshot includes
+    them keyed by agent_id with source='oauth'. Multiple agents per
+    role coexist (static-source supervisor + OAuth-source operator)."""
+    agents_dir = tmp_path / "agents"
+    _seed_repo_yamls(agents_dir, roles=("pm",))
+    store = TokenStore(service="registry-test-oauth-reload")
+
+    # Static PM (supervisor identity)
+    static_pm = store.issue(agent_id=None, role="pm", label="static-pm")
+    # OAuth PM (operator identity)
+    oauth_pm = store.issue(
+        agent_id=None,
+        role="pm",
+        label="oauth:test",
+        source="oauth",
+        client_id="cid-mike",
+    )
+
+    registry = AgentRegistry(agents_dir, token_store=store)
+    await registry.initial_load()
+
+    # Snapshot includes both agents keyed by agent_id
+    all_agents = registry.all_agents()
+    agent_ids = {ra.agent_id for ra in all_agents}
+    assert static_pm.record.agent_id in agent_ids
+    assert oauth_pm.record.agent_id in agent_ids
+
+    # source field distinguishes them
+    sources_by_agent_id = {ra.agent_id: ra.source for ra in all_agents}
+    assert sources_by_agent_id[static_pm.record.agent_id] == "static"
+    assert sources_by_agent_id[oauth_pm.record.agent_id] == "oauth"
+
+
+async def test_get_role_returns_static_when_oauth_agent_exists_for_same_role(
+    tmp_path: Path,
+) -> None:
+    """get(role) returns the static-source supervisor agent even when
+    an OAuth-source agent exists for the same role. Existing call sites
+    (engineer_supervisor, pm_supervisor, dispatch resolver helpers) all
+    expect supervisor semantics; OAuth callers are only reachable via
+    get_by_agent_id."""
+    agents_dir = tmp_path / "agents"
+    _seed_repo_yamls(agents_dir, roles=("pm",))
+    store = TokenStore(service="registry-test-get-role-static")
+
+    static_pm = store.issue(agent_id=None, role="pm", label="static-pm")
+    oauth_pm = store.issue(
+        agent_id=None,
+        role="pm",
+        label="oauth:operator",
+        source="oauth",
+        client_id="cid-op",
+    )
+
+    registry = AgentRegistry(agents_dir, token_store=store)
+    await registry.initial_load()
+
+    found = registry.get("pm")
+    assert found is not None
+    assert found.source == "static"
+    assert found.agent_id == static_pm.record.agent_id
+    assert found.agent_id != oauth_pm.record.agent_id
+
+
+async def test_get_by_agent_id_resolves_oauth_caller(tmp_path: Path) -> None:
+    """get_by_agent_id resolves both static and OAuth agent_ids — direct
+    dict lookup against the agent_id-keyed snapshot."""
+    agents_dir = tmp_path / "agents"
+    _seed_repo_yamls(agents_dir, roles=("pm",))
+    store = TokenStore(service="registry-test-getby-oauth")
+    static_pm = store.issue(agent_id=None, role="pm", label="static-pm")
+    oauth_pm = store.issue(
+        agent_id=None,
+        role="pm",
+        label="oauth:op",
+        source="oauth",
+        client_id="cid-op",
+    )
+
+    registry = AgentRegistry(agents_dir, token_store=store)
+    await registry.initial_load()
+
+    static_resolved = registry.get_by_agent_id(static_pm.record.agent_id)
+    assert static_resolved is not None
+    assert static_resolved.source == "static"
+
+    oauth_resolved = registry.get_by_agent_id(oauth_pm.record.agent_id)
+    assert oauth_resolved is not None
+    assert oauth_resolved.source == "oauth"
+    # Same yaml config (pm.yaml) regardless of source
+    assert oauth_resolved.config.role == "pm"
+
+
+async def test_register_oauth_caller_adds_snapshot_entry_and_agents_row(
+    tmp_path: Path,
+) -> None:
+    """register_oauth_caller adds an oauth-source RegisteredAgent to the
+    snapshot keyed by agent_id AND UPSERTs the agents row in storage.
+    Idempotent on repeat calls (alpha persistence reuse pattern)."""
+    storage = SqliteStorage(tmp_path / "test.db")
+    await storage.connect()
+    try:
+        await run_migrations(storage)
+        company_id, _project_id = await seed_initial(storage)
+
+        agents_dir = tmp_path / "agents"
+        _seed_repo_yamls(agents_dir, roles=("pm",))
+        store = TokenStore(service="registry-test-register-oauth")
+        # Static PM exists so registry's reload picks up at least one
+        # role; needed for register_oauth_caller's role validation path.
+        store.issue(agent_id=None, role="pm", label="static-pm")
+        registry = AgentRegistry(agents_dir, token_store=store)
+        await registry.initial_load()
+
+        # Simulate OAuth issuance path: caller has an agent_id minted
+        # via TokenStore.issue (or reused via alpha persistence); now
+        # register it.
+        oauth_agent_id = "oauth-caller-uuid-xyz"
+        await registry.register_oauth_caller(
+            storage=storage,
+            company_id=company_id,
+            agent_id=oauth_agent_id,
+            role="pm",
+        )
+
+        # Snapshot entry present with source='oauth'
+        resolved = registry.get_by_agent_id(oauth_agent_id)
+        assert resolved is not None
+        assert resolved.source == "oauth"
+        assert resolved.config.role == "pm"
+
+        # agents table row present with reports_to=NULL (operator
+        # identities aren't org-chart entities)
+        rows = await storage.fetch_all(
+            "SELECT id, role, reports_to FROM agents WHERE id = ?",
+            (oauth_agent_id,),
+        )
+        assert len(rows) == 1
+        assert rows[0]["role"] == "pm"
+        assert rows[0]["reports_to"] is None
+
+        # Idempotent: re-registering same agent_id with same role
+        # doesn't duplicate or fail; snapshot + storage stable.
+        await registry.register_oauth_caller(
+            storage=storage,
+            company_id=company_id,
+            agent_id=oauth_agent_id,
+            role="pm",
+        )
+        rows_after = await storage.fetch_all(
+            "SELECT id FROM agents WHERE id = ?", (oauth_agent_id,)
+        )
+        assert len(rows_after) == 1
+
+        # registry.get('pm') still returns static (preserves supervisor
+        # semantics under existing call sites)
+        static_found = registry.get("pm")
+        assert static_found is not None
+        assert static_found.source == "static"
+    finally:
+        await storage.close()

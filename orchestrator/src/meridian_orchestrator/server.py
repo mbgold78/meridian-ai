@@ -24,7 +24,7 @@ M3 onward registers task/budget/knowledge/etc. tools per ``06-mcp-tools-phase-on
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -336,6 +336,9 @@ def build_server(
     sampler: Sampler | None = None,
     get_pm_loop_tick_seconds: Callable[[], float] | None = None,
     get_pm_handoff_dir: Callable[[], Path] | None = None,
+    on_oauth_caller_registered: (
+        Callable[[str, str], Awaitable[None]] | None
+    ) = None,
 ) -> FastMCP:
     """Construct the FastMCP server with auth + the current tool set.
 
@@ -363,7 +366,10 @@ def build_server(
         ],
     )
 
-    oauth_provider = MeridianOAuthProvider(token_store)
+    oauth_provider = MeridianOAuthProvider(
+        token_store,
+        on_oauth_caller_registered=on_oauth_caller_registered,
+    )
 
     mcp = FastMCP(
         name="meridian-orchestrator",
@@ -1855,6 +1861,9 @@ async def serve(
     sampler: Sampler | None = None,
     get_pm_loop_tick_seconds: Callable[[], float] | None = None,
     get_pm_handoff_dir: Callable[[], Path] | None = None,
+    on_oauth_caller_registered: (
+        Callable[[str, str], Awaitable[None]] | None
+    ) = None,
 ) -> None:
     """Run the MCP HTTP server until cancelled.
 
@@ -1880,6 +1889,7 @@ async def serve(
         sampler=sampler,
         get_pm_loop_tick_seconds=get_pm_loop_tick_seconds,
         get_pm_handoff_dir=get_pm_handoff_dir,
+        on_oauth_caller_registered=on_oauth_caller_registered,
     )
     app = mcp.streamable_http_app()
     config = uvicorn.Config(

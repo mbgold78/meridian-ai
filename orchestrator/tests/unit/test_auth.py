@@ -105,6 +105,75 @@ def test_issue_requires_role() -> None:
         store.issue(agent_id=None, role="", label="x")
 
 
+def test_find_oauth_caller_by_client_id_returns_none_when_no_match() -> None:
+    """No prior OAuth records for (client_id, role) → returns None;
+    caller mints fresh agent_id at issuance time."""
+    store = TokenStore(service="test-find-oauth-empty")
+    assert store.find_oauth_caller_by_client_id("missing-cid", "pm") is None
+
+    # Static-only record exists but doesn't match — alpha persistence is
+    # OAuth-only by design (static tokens have stable agent_ids via
+    # different M2/M3 contract path).
+    store.issue(agent_id=None, role="pm", label="static-pm")
+    assert store.find_oauth_caller_by_client_id("missing-cid", "pm") is None
+
+
+def test_find_oauth_caller_by_client_id_returns_agent_id_for_match() -> None:
+    """One OAuth record for (client_id, role) → returns its agent_id."""
+    store = TokenStore(service="test-find-oauth-match")
+    issued = store.issue(
+        agent_id=None,
+        role="pm",
+        label="oauth:claude",
+        source="oauth",
+        client_id="cid-mike-laptop",
+    )
+    found = store.find_oauth_caller_by_client_id("cid-mike-laptop", "pm")
+    assert found == issued.record.agent_id
+
+
+def test_find_oauth_caller_by_client_id_returns_most_recent_for_alpha_persistence(
+) -> None:
+    """Multiple OAuth records for same (client_id, role) → returns the
+    most-recent agent_id (by issued_at). Alpha-persistence reuse path:
+    re-authorization flows return the same agent_id minted at first
+    issuance via ``store.issue(agent_id=existing_match)``.
+
+    Active vs. revoked is not the discriminator — revoked tokens are
+    still keyed by their original agent_id, and alpha persistence treats
+    revocation as orthogonal to identity continuity. Most-recent
+    issuance is the discriminator.
+    """
+    store = TokenStore(service="test-find-oauth-recent")
+    first = store.issue(
+        agent_id=None,
+        role="pm",
+        label="oauth:first",
+        source="oauth",
+        client_id="cid-stable",
+    )
+    # Re-issue with same agent_id (simulating alpha persistence reuse
+    # by the OAuth provider's exchange_authorization_code path).
+    second = store.issue(
+        agent_id=first.record.agent_id,
+        role="pm",
+        label="oauth:second",
+        source="oauth",
+        client_id="cid-stable",
+    )
+    assert second.record.agent_id == first.record.agent_id
+
+    # Helper returns the agent_id (same in both records since alpha
+    # persistence preserved it).
+    found = store.find_oauth_caller_by_client_id("cid-stable", "pm")
+    assert found == first.record.agent_id
+
+    # Different role for same client_id → no match (role-scoped).
+    assert (
+        store.find_oauth_caller_by_client_id("cid-stable", "engineer") is None
+    )
+
+
 def test_parse_token_returns_components() -> None:
     parsed = _parse_token("mor_abcdef0123456789_thesecret")
     assert parsed == ("abcdef0123456789", "thesecret")

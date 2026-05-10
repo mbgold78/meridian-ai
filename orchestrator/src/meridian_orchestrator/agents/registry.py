@@ -45,7 +45,7 @@ from meridian_orchestrator.agents.config import (
     AgentRole,
     load_all_agent_configs,
 )
-from meridian_orchestrator.auth import TokenStore
+from meridian_orchestrator.auth import TokenSource, TokenStore
 from meridian_orchestrator.storage.interface import Storage
 
 logger = structlog.get_logger(__name__)
@@ -53,24 +53,47 @@ logger = structlog.get_logger(__name__)
 
 @dataclass(frozen=True, slots=True)
 class RegisteredAgent:
-    """An agent's runtime identity = config + resolved UUID."""
+    """An agent's runtime identity = config + resolved UUID + token source.
+
+    ``source`` distinguishes static-token-bound agents (daemon-spawned
+    supervisors + sub-agent dispatches; one per role at a time) from
+    OAuth-bound agents (operator's interactive sessions; multiple
+    possible per role under multi-device or multi-operator scenarios).
+    Same ``config`` (yaml-loaded ``AgentConfig``) for both sources within
+    a role — the role's discipline applies regardless of how the caller
+    authenticated. The source field is what distinguishes them at
+    registry-lookup time so :meth:`AgentRegistry.get` returns the
+    supervisor agent (static-source) for callers asking "who's the
+    PM/Engineer/Implementer/Tester for this role?", while
+    :meth:`AgentRegistry.get_by_agent_id` returns whichever agent
+    (static or OAuth) holds the requested ``agent_id``.
+    """
 
     config: AgentConfig
     agent_id: str
+    source: TokenSource = "static"
 
 
 class AgentRegistry:
-    """In-memory registry of loaded agent configs, keyed by role.
+    """In-memory registry of loaded agent configs, keyed by ``agent_id``.
 
-    Thread-safety: a single asyncio.Lock guards snapshot mutations. All reads
-    return immutable references (the snapshot dict is replaced atomically on
-    reload, never mutated in place).
+    Snapshot is keyed by ``agent_id`` (not role) so multiple agents per role
+    can coexist — most commonly: static-source supervisor + OAuth-source
+    operator session within the same role (e.g., daemon-spawned PM-supervisor
+    + Mike-as-PM-via-OAuth interactive session). :meth:`get` returns the
+    static-source supervisor for a role (existing semantics for callers
+    asking "who's the PM"); :meth:`get_by_agent_id` returns whichever agent
+    (static or OAuth) holds the requested id.
+
+    Thread-safety: a single asyncio.Lock guards snapshot mutations. All
+    reads return immutable references (the snapshot dict is replaced
+    atomically on reload, never mutated in place).
     """
 
     def __init__(self, agents_dir: Path, token_store: TokenStore | None = None) -> None:
         self._agents_dir = agents_dir
         self._token_store = token_store if token_store is not None else TokenStore()
-        self._snapshot: dict[AgentRole, RegisteredAgent] = {}
+        self._snapshot: dict[str, RegisteredAgent] = {}
         self._lock = asyncio.Lock()
         self._watch_task: asyncio.Task[None] | None = None
         self._stop_event = asyncio.Event()
@@ -78,20 +101,46 @@ class AgentRegistry:
     # ----- snapshot accessors ---------------------------------------------
 
     def get(self, role: AgentRole) -> RegisteredAgent | None:
-        return self._snapshot.get(role)
+        """Return the static-source supervisor agent for ``role``, or None.
 
-    def get_by_agent_id(self, agent_id: str) -> RegisteredAgent | None:
+        Filter-and-return-first-static-match preserves existing call-site
+        semantics: callers asking "who's the PM/Engineer/Implementer/Tester
+        for this role?" get the supervisor agent (daemon-spawned, static-
+        token-bound). OAuth-source agents in the snapshot are skipped here
+        — they're operator-session agents reachable only via
+        :meth:`get_by_agent_id`.
+        """
         for agent in self._snapshot.values():
-            if agent.agent_id == agent_id:
+            if agent.config.role == role and agent.source == "static":
                 return agent
         return None
+
+    def get_by_agent_id(self, agent_id: str) -> RegisteredAgent | None:
+        """Return the agent for ``agent_id``, or None if not registered.
+
+        Direct dict lookup against the agent_id-keyed snapshot. Resolves
+        both static-source supervisor agents and OAuth-source operator
+        agents — caller distinguishes via the returned ``source`` field
+        if needed.
+        """
+        return self._snapshot.get(agent_id)
 
     def all_agents(self) -> list[RegisteredAgent]:
         return list(self._snapshot.values())
 
     def configs_by_role(self) -> dict[AgentRole, AgentConfig]:
-        """Snapshot of role → AgentConfig for the permission resolver."""
-        return {role: ra.config for role, ra in self._snapshot.items()}
+        """Snapshot of role → AgentConfig for the permission resolver.
+
+        Returns the static-source supervisor's config per role; OAuth-source
+        agents share the same role yaml so this mapping isn't role-multivalued
+        in practice (per-role config is yaml-driven and identical across
+        same-role agents regardless of token source).
+        """
+        result: dict[AgentRole, AgentConfig] = {}
+        for ra in self._snapshot.values():
+            if ra.source == "static":
+                result[ra.config.role] = ra.config
+        return result
 
     # ----- lifecycle ------------------------------------------------------
 
@@ -211,7 +260,17 @@ class AgentRegistry:
         # up any post-snapshot YAML edits via this same path —
         # consistent with the hot-reload-doesn't-re-seed contract.
         snapshot = list(self._snapshot.values())
-        snapshot_by_role = {ra.config.role: ra for ra in snapshot}
+        # Static-source filter: reports_to chains follow the org-chart
+        # supervisor agents only — OAuth-source operator agents aren't
+        # part of the hierarchy. Without this filter, multiple agents
+        # per role (static-supervisor + OAuth-operator under Component 1)
+        # would last-wins-clobber the role-keyed dict and resolve
+        # reports_to chains against the wrong agent (e.g., Engineer's
+        # reports_to=PM would resolve to an OAuth-PM agent_id rather
+        # than the static-supervisor PM agent_id).
+        snapshot_by_role = {
+            ra.config.role: ra for ra in snapshot if ra.source == "static"
+        }
         agents_dir = self._agents_dir
 
         async with storage.transaction():
@@ -260,10 +319,122 @@ class AgentRegistry:
             roles=sorted(snapshot_by_role.keys()),
         )
 
+    async def register_oauth_caller(
+        self,
+        storage: Storage,
+        company_id: str,
+        agent_id: str,
+        role: AgentRole,
+    ) -> None:
+        """Register an OAuth-issued caller in the registry snapshot + agents
+        table.
+
+        Called from the OAuth exchange callback after
+        :meth:`auth.TokenStore.issue` mints (or reuses, per alpha persistence)
+        an ``agent_id`` for an OAuth caller. Adds the caller to the
+        agent_id-keyed snapshot with ``source='oauth'`` so subsequent
+        :meth:`get_by_agent_id` lookups resolve the OAuth caller's
+        registered config; UPSERTs the agents row in storage so
+        ``submit_task`` (and other handlers with FK constraints to
+        ``agents.id``) accept the OAuth caller's ``agent_id`` without
+        ``FOREIGN KEY CONSTRAINT FAILED``.
+
+        Idempotent on repeat calls for the same ``agent_id`` — alpha persistence
+        reuses the same agent_id across OAuth re-authorization flows for the
+        same ``client_id``; this method's ``ON CONFLICT(id) DO UPDATE``
+        semantics + snapshot dict assignment make repeated registrations
+        safe. ``reports_to`` is set to NULL for OAuth callers — operator
+        agents aren't part of the org-chart hierarchy (the static-source
+        supervisor for the role is what answers "who reports to whom"
+        questions; OAuth callers are operator identities outside that
+        chain).
+
+        ``role`` must be a known agent role with a yaml config; the method
+        no-ops with a warning otherwise (defensive against caller bugs).
+        """
+        async with self._lock:
+            existing = self._snapshot.get(agent_id)
+            cfg: AgentConfig | None
+            if existing is not None and existing.config.role == role:
+                cfg = existing.config
+            else:
+                # Re-read configs to find the matching role's yaml
+                try:
+                    configs = await asyncio.to_thread(
+                        load_all_agent_configs, self._agents_dir
+                    )
+                except AgentConfigError as exc:
+                    logger.error(
+                        "agents.oauth_register_failed_config_load",
+                        agent_id=agent_id,
+                        role=role,
+                        error=str(exc),
+                    )
+                    return
+                cfg = configs.get(role)
+                if cfg is None:
+                    logger.warning(
+                        "agents.oauth_register_unknown_role",
+                        agent_id=agent_id,
+                        role=role,
+                        message=(
+                            f"OAuth caller registration for role {role!r} "
+                            "skipped: no yaml config exists at "
+                            f"{self._agents_dir}. Caller will not resolve "
+                            "to a registered agent."
+                        ),
+                    )
+                    return
+
+            self._snapshot[agent_id] = RegisteredAgent(
+                config=cfg, agent_id=agent_id, source="oauth"
+            )
+
+        config_path = str(self._agents_dir / f"{role}.yaml")
+        async with storage.transaction():
+            await storage.execute(
+                "INSERT INTO agents (id, company_id, role, config_path) "
+                "VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(id) DO UPDATE SET "
+                "config_path = excluded.config_path",
+                (agent_id, company_id, role, config_path),
+            )
+            # OAuth callers have no reports_to — they're operator identities,
+            # not org-chart entities. Set explicitly to NULL so reruns after
+            # any prior state reset clear stale FKs.
+            await storage.execute(
+                "UPDATE agents SET reports_to = NULL WHERE id = ?",
+                (agent_id,),
+            )
+
+        logger.info(
+            "agents.oauth_caller_registered",
+            agent_id=agent_id,
+            role=role,
+        )
+
     # ----- internal -------------------------------------------------------
 
     async def _reload_locked(self) -> None:
-        """Re-read the configs dir under the existing lock."""
+        """Re-read the configs dir under the existing lock.
+
+        Builds the agent_id-keyed snapshot from two sources:
+
+        1. **Static tokens** (one per role): yaml-driven; supervisor agent
+           identities. Existing semantics preserved — orphan-token warnings
+           fire when keyring has a static token whose role lacks a yaml
+           config; unseeded-role warnings fire when yaml exists without a
+           static token (acceptable for PM at runtime since interactive PM
+           is OAuth-issued).
+        2. **OAuth tokens** (multiple possible per role): operator-session
+           identities (Mike-as-PM-via-OAuth at Phase 1; multi-operator or
+           multi-device under future scenarios). Each active OAuth token
+           with a yaml-defined role contributes an entry keyed by its
+           ``agent_id``. OAuth tokens for unconfigured roles surface the
+           orphan-token warning shape (same diagnostic; different message)
+           — operationally rare, but defensive against malformed keyring
+           state.
+        """
         try:
             configs = await asyncio.to_thread(
                 load_all_agent_configs, self._agents_dir
@@ -278,8 +449,15 @@ class AgentRegistry:
             for r in token_records
             if r.source == "static" and r.revoked_at is None and not r.is_expired()
         }
+        active_oauth_tokens = [
+            r
+            for r in token_records
+            if r.source == "oauth" and r.revoked_at is None and not r.is_expired()
+        ]
 
-        new_snapshot: dict[AgentRole, RegisteredAgent] = {}
+        new_snapshot: dict[str, RegisteredAgent] = {}
+
+        # Pass 1: static-source supervisor agents (one per role, yaml-driven)
         for role, cfg in configs.items():
             tok = active_static_tokens_by_role.get(role)
             if tok is None and cfg.id is None:
@@ -298,7 +476,32 @@ class AgentRegistry:
             agent_id = cfg.id or (tok.agent_id if tok is not None else None)
             if agent_id is None:
                 continue
-            new_snapshot[role] = RegisteredAgent(config=cfg, agent_id=agent_id)
+            new_snapshot[agent_id] = RegisteredAgent(
+                config=cfg, agent_id=agent_id, source="static"
+            )
+
+        # Pass 2: OAuth-source operator agents (zero-to-many per role)
+        for tok in active_oauth_tokens:
+            if tok.role not in {"pm", "engineer", "implementer", "tester"}:
+                continue
+            tok_role: AgentRole = tok.role  # type: ignore[assignment]
+            oauth_cfg = configs.get(tok_role)
+            if oauth_cfg is None:
+                logger.warning(
+                    "agents.oauth_orphan_token",
+                    role=tok.role,
+                    token_id=tok.token_id,
+                    message=(
+                        f"keyring has an OAuth token for role {tok.role!r} but no "
+                        f"<role>.yaml config exists at {self._agents_dir}. The "
+                        "OAuth caller will not resolve to a registered agent "
+                        "until the YAML is added."
+                    ),
+                )
+                continue
+            new_snapshot[tok.agent_id] = RegisteredAgent(
+                config=oauth_cfg, agent_id=tok.agent_id, source="oauth"
+            )
 
         for token_role, tok in active_static_tokens_by_role.items():
             if (
@@ -321,8 +524,13 @@ class AgentRegistry:
         if previous != new_snapshot:
             logger.info(
                 "agents.snapshot_updated",
-                roles=sorted(new_snapshot.keys()),
-                count=len(new_snapshot),
+                agent_count=len(new_snapshot),
+                static_count=sum(
+                    1 for ra in new_snapshot.values() if ra.source == "static"
+                ),
+                oauth_count=sum(
+                    1 for ra in new_snapshot.values() if ra.source == "oauth"
+                ),
             )
 
     async def _watch_loop(self) -> None:

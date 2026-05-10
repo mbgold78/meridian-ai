@@ -17,6 +17,11 @@ dependencies = [
     "keyring>=25.0",
     "watchfiles>=0.21",
     "uvicorn>=0.30",
+    # IANA timezone database for zoneinfo. Windows doesn't ship system tz
+    # data in IANA format; macOS/Linux usually do, but we declare it
+    # explicitly so the daemon's operator-local timestamp logging works
+    # cross-platform without environment-detection code paths.
+    "tzdata>=2024.1; sys_platform == 'win32'",
 ]
 
 [dependency-groups]
@@ -63,5 +68,5 @@ files = ["src/meridian_orchestrator"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-pythonpath = ["src"]
+pythonpath = ["src", "."]
 addopts = "-v --strict-markers"

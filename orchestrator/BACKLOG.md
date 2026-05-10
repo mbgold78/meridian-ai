@@ -370,6 +370,105 @@ Pinned 2026-05-08 at M5-acceptance commit 3.5 prep. **Status: Phase 1 immediate 
 
 **Touchpoints at implementation (commit 3.6):** `bridge/supervisor_base.py:_default_launcher` (argv composition: add `--allowedTools` + `--mcp-config <path> --strict-mcp-config`); `bridge/supervisor_base.py:SupervisorLaunchContext` (new `allowed_tools: list[str]` + `mcp_config_path: Path | None = None` fields); `bridge/supervisor_base.py:LongRunningSupervisor.__init__` (new `daemon_url: str | None = None` parameter); `_spawn` method (write per-spawn JSON before launcher); `bridge/mcp_config.py` likely reused (helpers are lifecycle-agnostic; just role-conditional); `src/meridian_orchestrator/main.py` (pass `daemon_url` to PMSupervisor + EngineerSupervisor constructors symmetric to BridgeDispatcher precedent); per-role yaml `allowed_tools` field already exists from commit 3 (PM/Engineer yaml may need `allowed_tools` populated per the helper's read pattern — verify at commit 3.6 prep whether existing pm.yaml + engineer.yaml have the field or need it added).
 
+### Phase 1 PM-tool deferral: `notify_human` (HIGH priority)
+
+Pinned 2026-05-09 at M5-acceptance Component 2 (post-β architectural remediation). pm.yaml's `mcp_tools_allowed` lists `notify_human` but no implementation exists in `tools/` modules. Outbound Telegram (or other operator channel) notification path: PM surfaces decisions back to operator without operator-asking. β-relevant for extended-use scenarios where PM drives autonomous work and needs to surface findings to Mike without a Mike-initiated MCP call.
+
+**Priority: HIGH.** Outbound notification is operationally simpler than inbound (no message store + polling needed) and PM's continuous-mode discipline assumes notify_human is available for `info` / `question` / `urgent` urgency tiers per `pm.yaml` system_prompt § Notification discipline.
+
+**Trigger:** first instance during β / post-β where PM judges a `question`-urgency or `urgent`-urgency notification is warranted and no implementation exists; OR Phase 1 dogfooding session lasting > a few hours where Mike-as-operator is mostly absent and PM needs to surface decisions for asynchronous review.
+
+**Designed shape:** Telegram bot integration via `python-telegram-bot` library; new module `tools/telegram.py` wrapping Bot.send_message; new Settings fields for `MERIDIAN_ORCH_TELEGRAM_BOT_TOKEN` + `MERIDIAN_ORCH_TELEGRAM_CHAT_ID`; FastMCP wrapper at `server.py` registers `notify_human(message, urgency)` MCP tool. Alternative: stdout-only notification or local file append for Phase 1 if Telegram setup is too heavy.
+
+**Cost estimate:** ~150-250 LOC + tests + Telegram bot operator setup (one-time: register bot via @BotFather; obtain bot token + chat_id).
+
+### Phase 1 PM-tool deferral: knowledge tools `read_knowledge` / `list_knowledge` / `write_knowledge` (HIGH priority)
+
+Pinned 2026-05-09 at M5-acceptance Component 2. pm.yaml's `mcp_tools_allowed` lists all three knowledge tools but no implementation exists. Knowledge subsystem provides path-based read/list/write against `knowledge_paths_readable` / `knowledge_paths_writable` (per-role yaml fields) — substrate documentation, decision logs, work-logs, foundation docs.
+
+**Priority: HIGH.** Phase 1 spec deferred these but their absence shaped β unfolding — without knowledge tools, PM and Engineer can't introspect substrate documentation through MCP; they fall back to prose-only context shipped via system_prompt. Methodology-amendment-relevant: closeout chapter pin candidate.
+
+**Trigger:** first instance where PM or Engineer needs to read substrate `/product/substrate/foundation-doc.md` or `/product/substrate/decisions/*.md` mid-session and discovers the path-based read/write tools don't exist; OR Implementer dispatched with a spec that references substrate knowledge paths and surfaces the gap operationally.
+
+**Designed shape:** new module `tools/knowledge.py`; path-based read/list/write helpers gated against per-role `knowledge_paths_readable` / `knowledge_paths_writable` glob patterns from yaml; FastMCP wrappers register `read_knowledge(path)`, `list_knowledge(prefix)`, `write_knowledge(path, content)`. Storage: filesystem at `<knowledge_root>/<path>`; `knowledge_root` configured via Settings (likely under substrate working tree or data_dir).
+
+**Cost estimate:** ~300-500 LOC + tests + per-role yaml `knowledge_paths_*` validation + glob-pattern enforcement at handler.
+
+### Phase 1 PM-tool deferral: `get_dashboard_summary` / `get_utilization_report` (MEDIUM priority)
+
+Pinned 2026-05-09 at M5-acceptance Component 2. pm.yaml's `mcp_tools_allowed` lists both dashboard tools but no implementation exists. Observability quality-of-life for PM session start ritual: `get_dashboard_summary` returns aggregated state (open tasks, recent commits, audit log summary, supervisor health); `get_utilization_report` returns subscription utilization breakdown across the per-window counters (`subscription_5h`, `subscription_7d`, etc.).
+
+**Priority: MEDIUM.** PM can manually query `get_queue` + `get_token_usage` + `get_window_state` + `get_audit_log` to assemble equivalent context; aggregated tools are convenience, not load-bearing.
+
+**Trigger:** PM session-start ritual repeatedly assembles the same multi-tool context manually (operator finds the friction); OR `get_utilization_report` framing in pm.yaml continuous-mode protocol becomes load-bearing for routing decisions that the manual assembly is too slow/error-prone for.
+
+**Designed shape:** new module `tools/dashboard.py`; aggregation queries against existing `audit_log` + `tasks` + `api_usage` + `dispatches` + `oauth_usage_snapshot`; FastMCP wrappers register both tools as read-only PM-tier observability surfaces.
+
+**Cost estimate:** ~150-250 LOC + tests; pure aggregation work, no new subsystems.
+
+### Phase 1 PM-tool deferral: telegram-inbound `get_unread_replies` / `get_message_history` (LOW priority)
+
+Pinned 2026-05-09 at M5-acceptance Component 2. pm.yaml's `mcp_tools_allowed` lists both inbound Telegram tools but no implementation exists. Inbound telegram message handling: Mike replies to a `question`-urgency notification via Telegram; PM polls / consumes those replies on next session start to act on Mike's answers.
+
+**Priority: LOW.** Substantial separate work — requires Telegram bot polling infrastructure (long-poll or webhook), message store schema, reply-to-question correlation. Inbound is asymmetric to outbound (`notify_human` HIGH); Phase 1 can defer until extended dogfooding produces actual operator-reply cadence to design against.
+
+**Trigger:** Mike actually replies to PM Telegram messages and the lack of inbound polling becomes operationally painful (Mike's replies disappear into the void; PM has no way to read them); OR Phase 2 multi-operator scenario where async question/answer becomes load-bearing.
+
+**Designed shape:** Telegram bot polling via `python-telegram-bot` Updater (long-poll) OR webhook (requires public ingress); new `telegram_messages` table schema (sender, recipient, text, timestamp, correlation_id pointing to outbound `notify_human` audit row); FastMCP wrappers register `get_unread_replies()` + `get_message_history(since=<timestamp>)`. Co-ships with outbound `notify_human` if the Telegram subsystem lands as a unit; can be independent if outbound is a separate sub-milestone.
+
+**Cost estimate:** ~400-600 LOC + tests + Telegram bot polling infrastructure + message store migration.
+
+### Multi-device operator identity (post-Component 1 / alpha persistence)
+
+Pinned 2026-05-09 at M5-acceptance Component 1 prep. Component 1's α persistence keys OAuth-PM agent_id off `TokenRecord.client_id`. Each Claude Code install registers as a separate OAuth client (new `client_id` per install) per RFC 7591 dynamic client registration semantics, meaning Mike-on-laptop and Mike-on-desktop produce different `agent_id`s under α.
+
+**Acceptable for β + Phase 1** (single machine, single client_id per operator role). Audit trail is consistent for that one machine's operator sessions; cross-device trail-fragmentation is a future concern.
+
+**Trigger for prioritization:** ANY of —
+- First instance of multi-device operator usage (Mike opens a session from a different machine than usual; observes audit trail fragmentation between the two `agent_id`s)
+- Audit consistency requirement that demands single operator identity across devices (e.g., Phase 2 multi-operator scenarios where "Mike" needs to be one entity regardless of which machine he's at)
+- Operator config explicitly maps multiple `client_id`s to a single canonical operator identity
+
+**Designed shape:** persistence keying needs operator identity abstraction above `client_id`. Candidate primitives:
+- OAuth subject claim if available (RFC 7519 JWT `sub` field; not currently used in this OAuth implementation; adding requires extending the client registration flow)
+- Explicit operator-config mapping at `Settings` level: `operator_client_ids: dict[str, list[str]]` mapping operator name → list of client_ids; first OAuth flow for any client_id in the mapping reuses the operator's canonical agent_id
+- Session-handoff token: operator manually issues a short-lived handoff token from machine A; machine B's first OAuth flow accepts it and inherits agent_id
+
+**Cost estimate:** ~50-100 LOC for explicit-mapping path; ~200-400 LOC for subject-claim path. Out of α scope; re-disposition at trigger.
+
+### Engineer-supervisor continuous-loop discipline (β-chain auto-completion blocker)
+
+Pinned 2026-05-09 at M5-acceptance Component 1 verification. **Severity: β-chain auto-completion blocker.** PM successfully submitted task `a424a35a-...` (Component 1 verified end-to-end). Engineer-supervisor was running with full commit-3.6 wiring (`--allowedTools` + per-spawn `--mcp-config` + `--strict-mcp-config` + agents-table backfill) but the task sat in `pending` state for 2+ minutes with `claimed_by=None`. Empirical: Engineer-supervisor dispatches show `status='failed'` repeatedly; some made `get_queue` / `get_recent_dispatches` calls before failing; the most recent failed spawn made zero MCP calls (`last_tool_called=None`). PM-supervisor by contrast shows `status='running'` with recent `last_tool_called='wait_for_next_tick'` activity — PM has a continuous-loop discipline (per-tick `get_loop_state` → `record_spin_rationale` → `wait_for_next_tick`) that keeps the subprocess alive between work units. Engineer's `engineer.yaml` system_prompt describes the role + workflow but does NOT define an equivalent per-tick keepalive loop. **Engineer subprocess runs, processes its prompt (which has no explicit "wait for next tick / check queue periodically" loop), exits. Supervisor base sees subprocess exit without `complete_dispatch` → marks dispatch `failed` → respawns → loop.** Without continuous-loop discipline, Engineer never has a chance to claim newly-submitted tasks because each spawn's lifetime is too short.
+
+**Asymmetry between PM and Engineer system prompts is the root cause.** PM's continuous mode protocol at `pm.yaml` § "Continuous-mode iteration loop (M5-continuous-pm-driver commit 7)" explicitly drives the loop. Engineer needs analogous protocol — likely a `## Continuous mode` section in `engineer.yaml` referencing `wait_for_next_tick` and a per-tick task-queue check.
+
+**STATUS: TRIGGERED 2026-05-09** — Component 1 verification empirically surfaced the gap. Phase 1 immediate prerequisite for β-chain auto-completion; implementation prep cycle opens at next milestone kickoff. Without the fix, β chains require manual operator intervention to advance past Engineer's pickup.
+
+**Designed shape (sketch; refine at implementation prep):**
+- Option 1 — Add `## Continuous mode` subsection to `engineer.yaml` system_prompt with per-tick discipline analogous to PM's: `get_queue` to check for pending tasks with `agent_role='engineer'`; `claim_task` for the highest-priority pending; if no work: `wait_for_next_tick` and re-iterate. Operator-prompt-only work, ~20 LOC, least invasive.
+- Option 2 — extend `LongRunningSupervisor` lifecycle to handle "subprocess exited cleanly without `complete_dispatch`" as `status='completed'` rather than `status='failed'` (per F3 Engineer compaction precedent — clean exit signals completion, not failure). Then respawn cycle naturally polls. Daemon-architecture work touching lifecycle for all supervisors, ~30-50 LOC plus integration test impact across the supervisor surface.
+- Option 3 — introduce explicit "engineer-loop-driver" MCP tool (analogous to `wait_for_next_tick`) that Engineer's prompt invokes; daemon-side blocking call returns when a new task lands in queue or after timeout. New tool surface, daemon-side blocking call semantics, ~50-80 LOC plus contract work.
+
+Option 1 is least invasive (prompt-only); Options 2 and 3 are architectural changes to be re-disposed at implementation prep based on whether prompt-level discipline alone is sufficient or deeper lifecycle/tool-surface work is warranted.
+
+**Cost estimate:** ~20-50 LOC in engineer.yaml prompt for Option 1; +~30 LOC in `bridge/supervisor_base.py` for Option 2's clean-exit-handling refinement; +~50-80 LOC for Option 3's new tool surface. Tests for the continuous-loop behavior under integration paths in all options.
+
+**Connection to commit history:** asymmetry surfaced empirically post-Component-1 verification. Pre-existing gap; not Component 1's responsibility (Component 1 only addressed PM submit_task auth). Closeout pin candidate: "PM/Engineer continuous-mode discipline asymmetry surfaces as β-chain auto-completion blocker; engineer.yaml needs continuous-mode protocol analogous to pm.yaml's M5-continuous-pm-driver commit 7 + 8 work."
+
+### Agent yaml runtime-dir auto-seeding (operator-setup gap surfaced at Component 1 verification)
+
+Pinned 2026-05-09 at M5-acceptance Component 1 verification close. The orchestrator's `agents/registry.py` module docstring and `bridge/engineer_supervisor.py` docstring reference `<MERIDIAN_ORCH_DATA_DIR>/config/agents/<role>.yaml` as the canonical runtime load location for agent yamls but do not describe how files reach that location from the project repo — no auto-seed mechanism exists in the daemon code. Empirically: at Component 1 verification time, the runtime data dir `~/.meridian-orchestrator/config/agents/` was empty; daemon ran in skeleton mode (no agents loaded; supervisors disabled-by-validator; dispatcher not constructed); `submit_task` couldn't possibly succeed because registry was empty.
+
+**Workaround applied at verification:** manual `Copy-Item` of yamls from project repo to runtime data dir before daemon restart. Operator-setup checklist gap.
+
+**Designed shape:** at daemon startup (`main.py:_run_lifespan_body`), before `AgentRegistry.initial_load`, check `settings.agents_dir` (resolves to `<data_dir>/config/agents/`). If directory doesn't exist OR is empty: copy yamls from `<orchestrator-project-root>/config/agents/` to `<data_dir>/config/agents/`. Source location: identified via package-relative path resolution (`Path(__file__).parents[2] / "config" / "agents"` or via `importlib.resources` for the installed-package case). Idempotent on subsequent boots: if any yaml exists at runtime location, no copy (operator's runtime edits are preserved).
+
+**Trigger:** any future operator setting up the daemon on a fresh machine without the manual yaml copy; OR Phase 2 deployment scenarios where operator-setup discipline can't assume hands-on yaml placement.
+
+**Cost estimate:** ~30-50 LOC + 2-3 unit tests (idempotent on re-boot; first-boot creates; respects runtime edits).
+
+**Pin connection to closeout:** β-readiness checklist Section 2 needs an explicit "verify agent yamls at runtime data dir" step (closeout chapter pin candidate alongside this entry's auto-seed implementation). Documentation-vs-implementation drift caught empirically at Component 1 verification — methodology amendment companion to the pin 8 supervisor-runtime-never-exercised pin.
+
 ## Phase 2 architectural-evolution candidates
 
 Section established 2026-05-08 at M5-flag-flips closeout (commit 7) per CQ-F Reading A disposition. Consolidates 8 codex clean-slate critique candidates surfaced at M5-flag-flips commit 2 close (2026-05-07; original session: codex review session) plus the degraded-state recovery / operator pacing control loop entry that Mike pasted manually at commit 5 (file tail; migrated here as #9 at commit 7 closeout).

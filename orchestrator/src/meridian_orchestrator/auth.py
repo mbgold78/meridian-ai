@@ -300,6 +300,46 @@ class TokenStore:
         """
         return self._read_record(token_id)
 
+    def find_oauth_caller_by_client_id(
+        self, client_id: str, role: str
+    ) -> str | None:
+        """Look up the most-recent OAuth-issued agent_id for (client_id, role).
+
+        OAuth caller's ``client_id`` is stable across re-authorizations for
+        that operator-on-that-machine — inherits M2/M3 contract semantics
+        ("token UUIDs become agents row primary keys; stable across
+        reissues"). Per alpha persistence: same operator's OAuth re-authorization
+        flow reuses the same agent_id; audit trail consistency preserved
+        across operator session re-opens.
+
+        Iterates ``list_records()`` filtered to ``source='oauth'`` AND
+        matching ``client_id`` AND matching ``role``; returns the most-recent
+        matching record's ``agent_id`` (active or revoked — revoked tokens
+        carry the same agent_id; alpha persistence reuses regardless of revoke
+        state). Returns ``None`` if no prior OAuth caller exists for the
+        (client_id, role) pair — caller (typically
+        :meth:`oauth.MeridianOAuthProvider.exchange_authorization_code`)
+        mints a fresh ``agent_id`` via :meth:`issue` with ``agent_id=None``.
+
+        Most-recent by ``issued_at`` ISO string; ties broken by record
+        order in keyring index (effectively first-issued in case of
+        microsecond tie). Multi-device concern (different ``client_id``
+        per Claude Code install): per-device persistence; multi-device
+        operator identity unification is post-alpha scope per BACKLOG entry.
+        """
+        matching: list[TokenRecord] = []
+        for record in self.list_records():
+            if (
+                record.source == "oauth"
+                and record.client_id == client_id
+                and record.role == role
+            ):
+                matching.append(record)
+        if not matching:
+            return None
+        matching.sort(key=lambda r: r.issued_at, reverse=True)
+        return matching[0].agent_id
+
     def revoke(self, token_id: str) -> bool:
         """Mark a token revoked. Returns True if the record existed and was
         flipped, False if the token_id was unknown or already revoked.

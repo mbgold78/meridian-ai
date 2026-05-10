@@ -167,3 +167,31 @@ def test_pm_supervisor_flag_has_no_substrate_validator_dependency(
     assert settings.enable_pm_supervisor is True
     assert settings.enable_engineer_supervisor is False
     assert settings.substrate_working_directory is None
+
+
+def test_log_format_default_human(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``Settings.log_format`` defaults to ``"human"`` — operator-readable
+    single-line shape preferred for live debugging. JSON via env var for
+    production / log-shipping deployments.
+    """
+    _clear_supervisor_flag_overrides(monkeypatch)
+    monkeypatch.setenv("MERIDIAN_ORCH_ENABLE_ENGINEER_SUPERVISOR", "false")
+    monkeypatch.delenv("MERIDIAN_ORCH_LOG_FORMAT", raising=False)
+    settings = Settings(data_dir=tmp_path)
+    assert settings.log_format == "human"
+
+
+def test_log_format_rejects_invalid_value(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``Settings.log_format`` is a closed Literal — values outside
+    {human, json} fail validation at Settings() construction. Closed-enum
+    sentinel pattern prevents typo'd env var values from silently
+    falling back to a default."""
+    _clear_supervisor_flag_overrides(monkeypatch)
+    monkeypatch.setenv("MERIDIAN_ORCH_ENABLE_ENGINEER_SUPERVISOR", "false")
+    monkeypatch.setenv("MERIDIAN_ORCH_LOG_FORMAT", "yaml")
+    with pytest.raises(ValidationError, match=r"(?i)log_format"):
+        Settings(data_dir=tmp_path)

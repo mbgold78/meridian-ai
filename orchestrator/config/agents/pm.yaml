@@ -38,13 +38,22 @@ mcp_tools_allowed:
   - update_task_status
   - set_task_priority
   - get_subtasks
-  # Knowledge
+  # Knowledge tools — DEFERRED from M5; see BACKLOG entry "Phase 1
+  # PM-tool deferral: knowledge tools" (HIGH priority). Listed here for
+  # forward compatibility; PM-as-OAuth caller invoking any of these
+  # currently surfaces a registration-time error since no FastMCP wrapper
+  # exists yet. Trigger condition: first instance where PM/Engineer needs
+  # path-based read/list/write against substrate documentation.
   - read_knowledge
   - list_knowledge
   - write_knowledge
   # Routing & discovery
   - list_agents
   - get_agent_config
+  # Dashboard tools — DEFERRED from M5; see BACKLOG entry "Phase 1
+  # PM-tool deferral: get_dashboard_summary / get_utilization_report"
+  # (MEDIUM priority). PM can manually assemble equivalent context via
+  # get_queue + get_token_usage + get_window_state + get_audit_log.
   - get_dashboard_summary
   - get_org_chart
   # Budget & usage
@@ -54,8 +63,14 @@ mcp_tools_allowed:
   - check_budget_for_task
   - get_window_state
   - set_pm_mode
+  # get_utilization_report — DEFERRED (MEDIUM); see BACKLOG entry above
   - get_utilization_report
-  # Notification (PM-only)
+  # Notification (PM-only) — ALL DEFERRED from M5:
+  # - notify_human (HIGH priority; outbound) — see BACKLOG entry "Phase 1
+  #   PM-tool deferral: notify_human"; β-relevant for PM-driven
+  #   asynchronous decision surfacing
+  # - get_unread_replies + get_message_history (LOW priority; inbound) —
+  #   see BACKLOG entry "Phase 1 PM-tool deferral: telegram-inbound"
   - notify_human
   - get_unread_replies
   - get_message_history

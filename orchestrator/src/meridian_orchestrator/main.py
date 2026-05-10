@@ -9,12 +9,17 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
 import signal
 import sys
+import threading
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, MutableMapping
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
+from typing import Any
+from zoneinfo import ZoneInfo
 
 import structlog
 
@@ -57,16 +62,157 @@ SUPERVISOR_SHUTDOWN_TIMEOUT_SECONDS = 90
 POLLER_SHUTDOWN_TIMEOUT_SECONDS = 30
 
 
+_OPERATOR_TIMEZONE = ZoneInfo("America/New_York")
+
+
+def _format_timestamp_now() -> str:
+    """Operator-local (America/New_York) ISO 8601 timestamp with
+    millisecond precision + numeric offset suffix.
+
+    Format: ``2026-05-08T20:50:12.106-04:00``. Offset suffix changes
+    between ``-05:00`` (EST) and ``-04:00`` (EDT) automatically per
+    DST; ``ZoneInfo("America/New_York")`` is the canonical IANA tz
+    name (preferred over "EST" or "EDT" literals which are
+    DST-unaware).
+    """
+    now = datetime.now(_OPERATOR_TIMEZONE)
+    ms = now.microsecond // 1000
+    base = now.strftime("%Y-%m-%dT%H:%M:%S")
+    offset_raw = now.strftime("%z")  # produces "-0400" or "-0500"
+    offset_fmt = (
+        f"{offset_raw[:3]}:{offset_raw[3:]}" if offset_raw else ""
+    )
+    return f"{base}.{ms:03d}{offset_fmt}"
+
+
+def _add_meta_fields(
+    _logger: Any,
+    _method_name: str,
+    event_dict: MutableMapping[str, Any],
+) -> MutableMapping[str, Any]:
+    """Structlog processor: add timestamp + pid + tid to every event."""
+    event_dict["timestamp"] = _format_timestamp_now()
+    event_dict["pid"] = os.getpid()
+    event_dict["tid"] = threading.get_ident()
+    return event_dict
+
+
+def _human_renderer(
+    _logger: Any,
+    _method_name: str,
+    event_dict: MutableMapping[str, Any],
+) -> str:
+    """Render structlog event_dict as a single line:
+    ``<timestamp> [pid=N tid=M] <level> <event>  key1=v1 key2=v2 ...``
+
+    Pops the canonical fields (timestamp, pid, tid, level, event) into
+    the prefix; remaining structured fields render as flat
+    space-separated ``key=value`` pairs in stable order. Repr uses
+    Python's default formatting — short for primitives, quoted strings.
+    """
+    timestamp = event_dict.pop("timestamp", "")
+    pid = event_dict.pop("pid", "?")
+    tid = event_dict.pop("tid", "?")
+    level = event_dict.pop("level", "info")
+    event = event_dict.pop("event", "")
+    rest_items = " ".join(
+        f"{k}={v!r}" for k, v in event_dict.items()
+    )
+    line = f"{timestamp} [pid={pid} tid={tid}] {level:<7} {event}"
+    if rest_items:
+        line = f"{line}  {rest_items}"
+    return line
+
+
+class _MatchingFormatter(logging.Formatter):
+    """Python logging Formatter that mirrors :func:`_human_renderer`'s
+    output shape. Used for non-structlog logs (uvicorn INFO lines,
+    library warnings) so the daemon's stderr is consistent regardless
+    of which logger emitted the line.
+    """
+
+    def format(self, record: logging.LogRecord) -> str:
+        timestamp = _format_timestamp_now()
+        return (
+            f"{timestamp} [pid={record.process} tid={record.thread}] "
+            f"{record.levelname.lower():<7} {record.name}: "
+            f"{record.getMessage()}"
+        )
+
+
+class _JSONFormatter(logging.Formatter):
+    """Python logging Formatter that emits JSON matching structlog's
+    JSON shape — same field names so log-shippers don't need
+    branch-aware parsing. For non-structlog logs (uvicorn etc.).
+    """
+
+    def format(self, record: logging.LogRecord) -> str:
+        import json
+
+        payload = {
+            "timestamp": _format_timestamp_now(),
+            "pid": record.process,
+            "tid": record.thread,
+            "level": record.levelname.lower(),
+            "event": record.name,
+            "message": record.getMessage(),
+        }
+        return json.dumps(payload)
+
+
 def _configure_logging(settings: Settings) -> None:
-    """Configure structlog with JSON output to stderr."""
+    """Configure structlog + Python logging with operator-local timestamps,
+    PID + thread ID on every line, and human-vs-JSON format toggle via
+    ``settings.log_format``.
+
+    Format ("human" default; "json" for production / log-shipping):
+
+        2026-05-08T20:50:12.106-04:00 [pid=45688 tid=12345] info    \\
+            agents.snapshot_updated  agent_count=6 static_count=4 \\
+            oauth_count=2
+
+    Both structlog (daemon-internal events) and Python logging (uvicorn
+    INFO lines) emit through formatters that share the timestamp/pid/tid
+    shape. Subprocess events appear as structured fields on
+    ``dispatch.subprocess_started`` etc. (existing audit emissions
+    capture ``pid=proc.pid``); subprocess stderr drains to per-dispatch
+    ``stderr.log`` files outside the daemon's main log per F4.
+    """
     level = getattr(logging, settings.log_level.upper(), logging.INFO)
-    logging.basicConfig(level=level, format="%(message)s", stream=sys.stderr)
+
+    # Python logging: configure the root handler with our custom
+    # formatter. basicConfig is a one-shot per process; if invoked
+    # multiple times (test fixtures), only the first call wins. For
+    # the daemon's single _configure_logging entry-point this is fine.
+    handler = logging.StreamHandler(stream=sys.stderr)
+    if settings.log_format == "json":
+        handler.setFormatter(_JSONFormatter())
+    else:
+        handler.setFormatter(_MatchingFormatter())
+    root_logger = logging.getLogger()
+    # Replace any existing handlers (basicConfig defaults) so format
+    # doesn't conflict with the new shape.
+    for h in list(root_logger.handlers):
+        root_logger.removeHandler(h)
+    root_logger.addHandler(handler)
+    root_logger.setLevel(level)
+
+    # structlog: TimeStamper replaced with custom timestamp processor
+    # for operator-local zone + ms precision. Add meta fields (pid, tid)
+    # so JSON renderer sees them as event_dict keys; human renderer
+    # pops them into the prefix.
+    renderer: Any
+    if settings.log_format == "json":
+        renderer = structlog.processors.JSONRenderer()
+    else:
+        renderer = _human_renderer
+
     structlog.configure(
         processors=[
             structlog.contextvars.merge_contextvars,
             structlog.processors.add_log_level,
-            structlog.processors.TimeStamper(fmt="iso", utc=True),
-            structlog.processors.JSONRenderer(),
+            _add_meta_fields,
+            renderer,
         ],
         wrapper_class=structlog.make_filtering_bound_logger(level),
         cache_logger_on_first_use=True,
@@ -324,6 +470,31 @@ async def _run_lifespan_body(
                     else settings.data_dir / "pm-handoffs"
                 )
 
+            # OAuth-caller-registered callback closure: invoked by
+            # MeridianOAuthProvider.exchange_authorization_code after
+            # successful token issuance. Registers the OAuth caller in
+            # the agent registry's snapshot (so submit_task and other
+            # FK-bound handlers resolve the agent_id) + UPSERTs the
+            # agents row in storage. Captures registry + storage +
+            # company_id so the OAuth flow doesn't need to know about
+            # the lifespan-bound dependencies; deterministic ordering
+            # per oauth.py-side explicit-call shape (vs. registry
+            # polling).
+            async def on_oauth_caller_registered(
+                agent_id: str, role: str
+            ) -> None:
+                from meridian_orchestrator.agents.config import AgentRole
+
+                if role not in {"pm", "engineer", "implementer", "tester"}:
+                    return
+                role_typed: AgentRole = role  # type: ignore[assignment]
+                await registry.register_oauth_caller(
+                    storage=storage,
+                    company_id=company_id,
+                    agent_id=agent_id,
+                    role=role_typed,
+                )
+
             mcp_task = asyncio.create_task(
                 serve_mcp(
                     settings,
@@ -337,6 +508,7 @@ async def _run_lifespan_body(
                     sampler=sampler,
                     get_pm_loop_tick_seconds=get_pm_loop_tick_seconds,
                     get_pm_handoff_dir=get_pm_handoff_dir,
+                    on_oauth_caller_registered=on_oauth_caller_registered,
                 ),
                 name="mcp-server",
             )
