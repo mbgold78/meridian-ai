@@ -132,6 +132,14 @@ class _TestSupervisor(LongRunningSupervisor):
     def _subprocess_prompt(self) -> str:
         return "test supervisor prompt"
 
+    def _subprocess_allowed_tools(self) -> list[str]:
+        # Test fixture: empty list; launcher conditionally inserts
+        # --allowedTools only when list is non-empty per F2 wrapper-
+        # ordering precedent. Production path resolves via
+        # bridge.mcp_config.resolve_allowed_tools_for_role; test
+        # surface doesn't exercise the allowlist composition.
+        return []
+
     def _working_directory(self) -> Path:
         return self._wd
 
