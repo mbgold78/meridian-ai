@@ -469,6 +469,47 @@ Pinned 2026-05-09 at M5-acceptance Component 1 verification close. The orchestra
 
 **Pin connection to closeout:** β-readiness checklist Section 2 needs an explicit "verify agent yamls at runtime data dir" step (closeout chapter pin candidate alongside this entry's auto-seed implementation). Documentation-vs-implementation drift caught empirically at Component 1 verification — methodology amendment companion to the pin 8 supervisor-runtime-never-exercised pin.
 
+### Methodology amendment cluster — predictions validate at next operator action (next-closeout pin candidate)
+
+Pinned 2026-05-10 at M5-acceptance Engineer continuous-loop fix session (between hygiene commit `4c0c7a2` and auto-seeding fix work per path δ disposition). **Status: cluster pinned for next-closeout methodology amendment pin set; do NOT reopen M5-acceptance closeout to capture (artifact churn cost > value at this point).**
+
+Four observations sharing the thesis "predictions encoded as methodology amendments validate empirically at the exact next operator action, not at next milestone":
+
+1. **Gates-green-claim verification gap** (Pin 9 generalization). Session-4 Engineer fix probe phase full-suite pytest run surfaced 6 pre-existing `tests/integration/test_supervisor_base.py` failures from commit 3.6 (`666ac14`) onwards: `_TestSupervisor` missing `_subprocess_allowed_tools` abstract method implementation. Gap propagated unsurfaced through commit 5 + restructure + 4 closeout commits (`c9add41` → `363fd22` → `3dc5cb8` → `5a2105e`) + this Engineer fix session probe. M5-acceptance closeout session 2 chapter 1's "All tests pass — 840 tests collected at HEAD; chain landed with gates green per per-commit prep discipline" claim was not pytest-verified at full-suite scope at any commit between 3.6 and this session.
+
+   Methodology amendment: gates-green claims at commit-message-prep cycles must be pytest-verified against full suite, not focused suite or assumed-from-prior-verification. Pin 9 generalization — runtime-exercise discipline extends to "full-suite verification at each commit, not just commit-touched-files subset." Resolved at hygiene commit `4c0c7a2`; methodology amendment pin candidate for next closeout.
+
+2. **Probe-execution pin discipline** (Pin 12 within-session firing). Engineer fix session-4 prereqs probe used `curl -sf -m 2 http://127.0.0.1:8765/mcp ...` and interpreted curl's silent-fail-on-401 as "daemon: NOT REACHABLE". Reality: daemon was running at PID 70228 with 4 ESTABLISHED MCP connections; curl's 401 (unauthenticated, expected since probe had no Bearer token) was suppressed by `-sf` flag. `-i` flag would have shown actual HTTP status code.
+
+   Pin 12's "derive claims from runtime verification not eyeballing" was authored at M5-acceptance closeout session 1 § 3.5; CC4 "re-read pins before authoring new sections" was authored at session-4 self-correction commit (`5a2105e`); Pin 12 fired AGAIN at the probe execution that immediately followed the self-correction commit — within-session pin-prescription-non-internalization.
+
+   Methodology amendment: re-read pins not just before authoring new sections (CC4) but also before executing verification probes — probes are claim-bearing artifacts subject to the same Pin 12 discipline. Sharper than CC4: "re-read pins before all claim-bearing actions including probes."
+
+3. **Within-artifact production-failure-during-authoring** (strongest CC3 / methodology-as-moat #11 anchor yet). Engineer-supervisor at PID 70228 was operationally CAP-HALTED from 2026-05-09 15:01 (heartbeat_timeout_cap fire after 4 failed respawns in 4 minutes) through the entire duration of M5-acceptance closeout authoring sessions 1-4 + session-4 hygiene commit prep (~28 hours total). The β-chain auto-completion blocker described in chapters 1+2+3+4+5+6+7 + 22 pins + CC1 cross-cutting observation was concurrently failing in production at PID 70228 during the artifact's authoring.
+
+   Methodology-as-moat #11 (M5-flag-flips closeout) gains a within-authoring corollary: methodology amendments anchored to concurrent production failure during authoring are empirically the strongest. The closeout artifact described the gap; the gap was active reality at authoring time. Predictions don't just validate at next milestone — they describe present-tense production reality at the moment of authoring. The methodology is moat because it surfaces what is currently broken, not just what will be broken.
+
+4. **Pinned-predictions compose into next-fix implementation spec.** Engineer fix runtime exercise (session-4, this session) was blocked by the agent yaml runtime-dir auto-seeding gap pinned at M5-acceptance closeout session 2 chapter 2 § 2.2 as TRIGGERED BACKLOG entry (`BACKLOG.md:458` above). Runtime data dir's `engineer.yaml` was the OLD version (last manual `Copy-Item` was 2026-05-09 per Component 1 verification workaround); my session-4 repo edits to `config/agents/engineer.yaml` did NOT propagate to `~/.meridian-orchestrator/config/agents/engineer.yaml`. Engineer subprocess ran the OLD pre-fix prompt → predictably failed per Pin 9 (`dispatch.subprocess_unexpected_exit` at 2026-05-11 00:33:37 UTC; transcript at `C:/Users/mbgol/.meridian-orchestrator/transcripts/engineer-runtime-exercise-2026-05-10.log`).
+
+   The auto-seeding BACKLOG entry's "Designed shape" section is now the implementation spec for the next operator-side commit (auto-seeding fix per path δ disposition). Closeout-pinned BACKLOG entries with "designed shape" sections function as implementation specs for follow-on fixes; the artifact's pinned predictions compose forward into next-fix work.
+
+**Aggregate methodology framing**: closeout artifact's predictive accuracy (observations 1, 2, 4) + within-authoring-concurrent-reality (observation 3) + designed-shape-composes-forward (observation 4) = methodology-as-moat operating at three distinct empirical anchors at one session. Strongest empirical anchor for the artifact-chain-composes thesis (#11 / CC3) the chain has produced.
+
+**Empirical anchors**:
+- Test fixture hygiene commit `4c0c7a2` (observation 1; 6 supervisor_base tests fail → pass)
+- Session-4 probe transcript at runtime-exercise prep (observation 2; curl `-sf` 401 misinterpretation)
+- Engineer-supervisor PID 70228 cap-halt at 2026-05-09 15:01 → daemon restart 2026-05-10 20:30:36 by session-4 runtime exercise → kill at 2026-05-10 ~20:35 (observation 3; ~28 hours concurrent production failure during authoring)
+- Engineer runtime exercise transcript `C:/Users/mbgol/.meridian-orchestrator/transcripts/engineer-runtime-exercise-2026-05-10.log` (observation 4; runtime-dir auto-seeding gap manifesting at next operator action)
+
+**Routing**: pin cluster as discipline-pattern observations at next closeout (M6 milestone close OR auto-seeding sub-milestone close, whichever comes first). M5-acceptance closeout stays closed (artifact-churn-cost > value disposition). The cluster's four observations remain in this BACKLOG entry as canonical reference until next closeout authoring pulls them into a pin set.
+
+**Cost estimate**: 0 LOC (methodology amendment, not implementation work). Estimated ~40-80 lines at next closeout authoring time to pin as discipline-pattern observations across 1-2 sub-sections.
+
+**Triggers**:
+- M6 milestone close → pin the cluster as discipline-pattern observations in M6 closeout chapter 3 (or equivalent section)
+- Sub-milestone close between M5-acceptance and M6 (e.g., auto-seeding fix sub-milestone if it grows beyond a single commit) → pin the cluster at that sub-milestone's close
+- Closeout-pin-discipline review at M-level acceptance boundary → cluster fires as Phase 1 acceptance methodology amendment
+
 ## Phase 2 architectural-evolution candidates
 
 Section established 2026-05-08 at M5-flag-flips closeout (commit 7) per CQ-F Reading A disposition. Consolidates 8 codex clean-slate critique candidates surfaced at M5-flag-flips commit 2 close (2026-05-07; original session: codex review session) plus the degraded-state recovery / operator pacing control loop entry that Mike pasted manually at commit 5 (file tail; migrated here as #9 at commit 7 closeout).
