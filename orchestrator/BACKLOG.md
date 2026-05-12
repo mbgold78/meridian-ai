@@ -469,6 +469,32 @@ Pinned 2026-05-09 at M5-acceptance Component 1 verification close. The orchestra
 
 **Pin connection to closeout:** β-readiness checklist Section 2 needs an explicit "verify agent yamls at runtime data dir" step (closeout chapter pin candidate alongside this entry's auto-seed implementation). Documentation-vs-implementation drift caught empirically at Component 1 verification — methodology amendment companion to the pin 8 supervisor-runtime-never-exercised pin.
 
+### Windows daemon clean-shutdown discipline gap
+
+Pinned 2026-05-11 at auto-seeding runtime exercise close (commit `8365e98`). Daemon shutdown path (`shutdown.begin` → `shutdown.complete` events in `main.py:_run_lifespan_body`) is wired through `signal.SIGINT` + `signal.SIGBREAK` handlers on Windows per the platform branch in `_run` (line ~265). Empirically: PowerShell `Stop-Process -Id <pid>` from a non-interactive context (e.g., a script-driven kill, or any caller that isn't a console with the daemon as a child process) sends `TerminateProcess`, not SIGINT — the OS terminates the daemon process abruptly without invoking the Python signal handler.
+
+**Empirical anchor:** auto-seeding runtime exercise 2026-05-11 (PID 41084; daemon ran ~95 seconds; processed multiple `CallToolRequest` MCP traffic against the auto-seeded yamls; killed via `Stop-Process -Id 41084` from non-interactive PowerShell context). Stderr capture at `~/.meridian-orchestrator/transcripts/auto-seeding-runtime-exercise-2026-05-11.log` shows `startup.complete` + supervisor `started` events fired cleanly, then MCP request lines, then abrupt log truncation — no `shutdown.begin`, no `shutdown.complete`, no supervisor `shutdown_force_close` or successful-shutdown event lines.
+
+**Why this matters:** the auto-seed verification was unaffected (seed fires pre-shutdown; the gap manifests purely at shutdown). But the SAME kill mechanism will be used at session 6's Engineer fix runtime exercise to stop the daemon between cycles, and there the supervisor lifecycle (`engineer_supervisor.shutdown` traversal; subprocess `terminate` → `grace` → `SIGKILL` sequence; per-dispatch stderr drain flush; OAuth poller graceful stop ordering) is exactly the surface that needs verification per chapter 7 § 7.12 CC1 I-NR acceptance items. A `TerminateProcess` kill bypasses every line of that lifecycle — operator can't verify the supervisor's graceful-shutdown contract empirically with the current kill mechanism.
+
+**Designed-shape options:**
+
+- **(a) Operator-side:** restrict the daemon-stop mechanism to `Ctrl+C` in an interactive shell context (sends the actual Win32 `CTRL_C_EVENT` which Python translates to SIGINT); script `GenerateConsoleCtrlEvent` calls for non-interactive shutdown (requires the caller share a console with the daemon, or use `kernel32!AttachConsole` to attach to the daemon's console before sending). Operator workflow change only; zero daemon-side code.
+
+- **(b) Daemon-side:** register a Windows-specific handler via `win32api.SetConsoleCtrlHandler` (or `ctypes`-driven equivalent) that catches `CTRL_CLOSE_EVENT`, `CTRL_LOGOFF_EVENT`, `CTRL_SHUTDOWN_EVENT` and sets the same `shutdown` event the existing `_on_signal` handler sets. Daemon gracefully shuts down regardless of how the killer process delivers the terminate signal (within Windows console-control discipline; doesn't help with `TerminateProcess` from outside the console-control surface, but covers the common case). ~10-15 LOC + 1 test (mocking the Windows-specific call).
+
+- **(c) Both:** ship (b) as the daemon-side safety net; document (a) as the recommended operator workflow for routine debugging. Belt-and-suspenders.
+
+**Designed-shape decision deferred.** Entry surfaces the gap and design-decision-needed flag. Option (c) is the conservative end-state; option (b) alone may be sufficient if operator workflow naturally settles on `Ctrl+C` in interactive contexts; option (a) alone leaves the script-driven kill gap unaddressed.
+
+**Triggered:** session 5 auto-seeding runtime exercise (2026-05-11). Operator-side discovery (PowerShell-driven daemon kill in non-interactive context) is the canonical reproduction.
+
+**Will fire again at:** session 6 daemon restart cycle. Engineer fix runtime exercise needs clean shutdown to verify Engineer-supervisor lifecycle properly — the supervisor's graceful-shutdown contract (per `SUPERVISOR_SHUTDOWN_TIMEOUT_SECONDS = 90` wall-clock framing at `main.py:56`) can't be exercised under a `TerminateProcess` kill. Operator-side disposition needed at session 6 open: pick (a) workaround (Ctrl+C in interactive shell) for session-6 scope, OR ship (b)/(c) before runtime exercise.
+
+**Cost estimate:** (a) 0 LOC daemon-side + operator-workflow doc; (b) ~10-15 LOC + 1 test in `tests/unit/test_signal_handlers.py` (new file) or `tests/integration/test_daemon_lifecycle.py`; (c) sum of (a) + (b).
+
+**Pin connection to closeout:** companion to the auto-seeding entry's "runtime exercise discipline must verify designed-shape behavior empirically" methodology amendment. Both entries trace to the same empirical session: auto-seeding fired correctly; shutdown discipline did not. Surface together at next closeout (whichever closes first — Engineer fix sub-milestone OR M6).
+
 ### Methodology amendment cluster — predictions validate at next operator action (next-closeout pin candidate)
 
 Pinned 2026-05-10 at M5-acceptance Engineer continuous-loop fix session (between hygiene commit `4c0c7a2` and auto-seeding fix work per path δ disposition). **Status: cluster pinned for next-closeout methodology amendment pin set; do NOT reopen M5-acceptance closeout to capture (artifact churn cost > value at this point).**
