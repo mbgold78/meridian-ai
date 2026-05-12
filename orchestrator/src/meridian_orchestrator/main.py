@@ -10,6 +10,7 @@ import asyncio
 import contextlib
 import logging
 import os
+import shutil
 import signal
 import sys
 import threading
@@ -63,6 +64,65 @@ POLLER_SHUTDOWN_TIMEOUT_SECONDS = 30
 
 
 _OPERATOR_TIMEZONE = ZoneInfo("America/New_York")
+
+
+# Source path for the agent yaml runtime auto-seed. Resolves to
+# ``<orchestrator-repo-root>/config/agents/`` via the package-relative
+# ``parents[2]`` walk: ``main.py`` → ``meridian_orchestrator/`` → ``src/``
+# → ``<orchestrator-repo-root>/``. Editable installs (the M5 development
+# shape) hit this path directly; the installed-package case is deferred
+# until a Phase 2 deployment scenario surfaces it per BACKLOG entry
+# "Agent yaml runtime-dir auto-seeding" trigger #2.
+_SEED_AGENT_YAMLS_SOURCE_DIR = (
+    Path(__file__).resolve().parents[2] / "config" / "agents"
+)
+
+
+def _seed_agent_yamls_if_runtime_empty(settings: Settings) -> None:
+    """Copy agent yamls from the repo's ``config/agents/`` into
+    ``settings.agents_dir`` if the runtime directory doesn't exist or
+    is empty. Idempotent on subsequent boots: any pre-existing entry
+    in the runtime directory skips the copy, preserving operator
+    runtime edits.
+
+    Designed-shape policy per BACKLOG entry "Agent yaml runtime-dir
+    auto-seeding" (pinned 2026-05-09 at M5-acceptance Component 1
+    verification close): "if directory doesn't exist OR is empty →
+    copy; respect operator's runtime edits." Operator-clear of the
+    runtime directory (e.g., ``rm -rf
+    ~/.meridian-orchestrator/config/agents/``) is the explicit
+    re-seed action; no env-var override path ships at this commit
+    (deferred per session-5 (α) disposition).
+
+    Emits one of two structlog events:
+
+    - ``agents_dir.seeded`` on copy, with ``source_dir``,
+      ``target_dir``, ``files_copied`` (sorted list of yaml names).
+    - ``agents_dir.seed_skipped`` on non-empty runtime directory,
+      with ``target_dir``, ``files_observed`` (count of pre-existing
+      entries).
+    """
+    target = settings.agents_dir
+    if target.exists() and any(target.iterdir()):
+        files_observed = sum(1 for _ in target.iterdir())
+        logger.info(
+            "agents_dir.seed_skipped",
+            target_dir=str(target),
+            files_observed=files_observed,
+        )
+        return
+    target.mkdir(parents=True, exist_ok=True)
+    source = _SEED_AGENT_YAMLS_SOURCE_DIR
+    copied: list[str] = []
+    for yaml_path in sorted(source.glob("*.yaml")):
+        shutil.copy2(yaml_path, target / yaml_path.name)
+        copied.append(yaml_path.name)
+    logger.info(
+        "agents_dir.seeded",
+        source_dir=str(source),
+        target_dir=str(target),
+        files_copied=copied,
+    )
 
 
 def _format_timestamp_now() -> str:
@@ -292,6 +352,7 @@ async def _run_lifespan_body(
         # initialization but is no longer required for first boot. The
         # returned company_id is required by the agents-table seed below.
         company_id, _project_id = await seed_initial(storage)
+        _seed_agent_yamls_if_runtime_empty(settings)
         registry = AgentRegistry(settings.agents_dir)
         async with registry.lifespan():
             # M5-wrapper-closure: provision the canonical clone and
