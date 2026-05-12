@@ -45,3 +45,9 @@ Thumbs.db
 # Session-bridging handoff prompts (transient; saved as artifacts when
 # clearing context between Code sessions, not durable repo history).
 meridian-orchestrator-handoff-*.md
+
+# Cowork local workspace dir — design-state exports and other local
+# artifacts surfaced during parallel Cowork evaluation. Preserved on
+# disk for forensics; excluded from git so the artifacts don't pollute
+# repo history. Pinned at session 6 open 2026-05-12.
+cowork/
