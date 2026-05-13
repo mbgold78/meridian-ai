@@ -10,21 +10,46 @@ session as PM; submits one substrate work item; PM-supervisor composes
 and submits to Engineer; Engineer-supervisor dispatches Implementer +
 Tester; chain reports back. Bounded HITL per CQ-E E-2.
 
+## Session 7 refresh banner (2026-05-12)
+
+This doc was authored pre-session-5; refreshed at session 7 open to
+reflect:
+
+- Auto-seeding fix (commit `8365e98`, session 5) — daemon now
+  auto-deploys yaml configs from repo source to runtime dir at startup;
+  manual `Copy-Item` no longer required.
+- Engineer continuous-loop fix (commit `fd36f37`, session 6) — Engineer
+  subprocess sustained in continuous mode across 9 cycle boundaries at
+  session 6 runtime exercise; β5/β6 wiring assumptions still hold.
+- Windows shutdown gap (a) workaround validated at session 6 — Ctrl+C
+  in interactive PowerShell shell traverses clean shutdown sequence
+  (`shutdown.begin` → `subprocess_terminated` (both supervisors) →
+  `token_revoked` (both) → `storage.closed` → `shutdown.complete`).
+- Threshold rule advanced 0 of 3 → 2 of 3 at session 5 + session 6
+  feat commits.
+- CF1-CF4 session 6 carry-forwards routed to session 8 β re-execution
+  per session-6 close handoff doc `docs/working/session-6-close-2026-05-12.md`.
+
+This refresh updates β-row state markers (Section 1), operator-setup
+checklist empirical contexts (Section 2), threshold count (Section 4),
+and adds methodology postscript to Section 5. β execution remains
+operator-driven at session 8.
+
 ## Section 1 — β1–β11 pre-condition verification
 
 | # | Pre-condition | State | Empirical anchor |
 |---|---|---|---|
-| β1 | Daemon running locally; FastMCP at `127.0.0.1:8765/mcp` reachable | ✗ Not running | `claude mcp list` shows `meridian-orchestrator: ✗ Failed to connect` |
-| β2 | PM/Engineer-supervisor wiring (`--allowedTools` + `--mcp-config` + `--strict-mcp-config` + per-spawn JSON; no `--append-system-prompt`) | ✓ Verified at code level | Commit 3.6 (666ac14): `bridge/supervisor_base.py` argv composition + `_subprocess_allowed_tools` hook + `_spawn` JSON write |
-| β3 | Implementer/Tester dispatch wiring (`--append-system-prompt` + `--allowedTools` + `--mcp-config` + `--strict-mcp-config` + per-dispatch JSON) | ✓ Verified at code level | Commits 2 + 3 + 3.5 (8b15611 + a7d974a + 28cd760): `bridge/dispatcher.py` argv composition |
-| β4 | All 4 yaml files have `allowed_tools` content | ✓ Verified at code level | tester.yaml + implementer.yaml (commit 3); pm.yaml + engineer.yaml (commit 3.6) |
-| β5 | Per-dispatch JSON materializes correctly under `<dispatches_root>/<dispatch_id>/mcp_config.json` (Playwright entry for tester only) | ⚠ Wiring verified; not exercised end-to-end | Unit tests at commit 3.5 + 3.6 confirm shape via mocked subprocess; real materialization requires real dispatch run |
-| β6 | Per-spawn JSON materializes correctly under `<dispatches_root>/<spawn_dispatch_id>/mcp_config.json` (no Playwright) | ⚠ Wiring verified; not exercised end-to-end | Unit tests at commit 3.6 confirm shape; real materialization requires real supervisor spawn |
-| β7 | FastMCP auth chain validates per-token Bearer headers; revoked tokens return None from `auth.TokenStore.lookup` | ⚠ Wiring verified; not exercised end-to-end | `server.py:198,219,222` enforces; `auth.TokenStore.revoke` + `lookup` semantics confirmed at unit-test level |
-| β8 | Audit trail captures dispatch lifecycle | ⚠ Wiring exists; only real run populates rows | `dispatch.token_created` / `dispatch.subprocess_started` / `dispatch.complete_called` / `dispatch.token_revoked` audit emissions in `bridge/dispatcher.py` + `bridge/supervisor_base.py` |
-| β9 | stderr.log + mcp_config.json both retained at terminal state | ⚠ Wiring exists; only real run produces files | F4 stderr drain + commit 3.5 + 3.6 retention semantics |
-| β10 | Substrate work item selected | ✗ Not selected | Operator's choice; not made yet |
-| β11 | Bounded HITL per CQ-E E-2 | N/A pre-execution | Depends on Mike's intervention discipline during β |
+| β1 | Daemon running locally; FastMCP at `127.0.0.1:8765/mcp` reachable | ✓ Verified at session 5 + 6 runtime exercises (operator-driven daemon spinup) | Session 5 (2026-05-11): daemon PID 41084 ran ~95s with auto-seeded yamls + `startup.complete` not skeleton mode. Session 6 (2026-05-12): daemon PID 16960 ran ~18 min through Ctrl+C clean shutdown; transcripts at `~/.meridian-orchestrator/transcripts/auto-seeding-runtime-exercise-2026-05-11.log` + `~/.meridian-orchestrator/transcripts/engineer-fix-runtime-exercise-2026-05-12.log`. β1 must be re-probed at β open since daemon doesn't auto-start across sessions. |
+| β2 | PM/Engineer-supervisor wiring (`--allowedTools` + `--mcp-config` + `--strict-mcp-config` + per-spawn JSON; no `--append-system-prompt`) | ✓ Verified at code level + runtime | Code: commit 3.6 (666ac14) `bridge/supervisor_base.py`. Runtime: session 6 daemon spinup observed `pm_supervisor.started` (dispatch `f98ce3df`) + `engineer_supervisor.started` (dispatch `5b8c4b33`) with explicit dispatch_ids in startup log; both supervisors transitioned `running` → `cancelled` cleanly at Ctrl+C. |
+| β3 | Implementer/Tester dispatch wiring (`--append-system-prompt` + `--allowedTools` + `--mcp-config` + `--strict-mcp-config` + per-dispatch JSON) | ✓ Verified at code level | Commits 2 + 3 + 3.5 (8b15611 + a7d974a + 28cd760): `bridge/dispatcher.py` argv composition. Runtime exercise still pending — sessions 4-6 exercised supervisor paths only; Implementer/Tester per-dispatch paths await β execution. |
+| β4 | All 4 yaml files have `allowed_tools` content | ✓ Verified at code level + auto-seed-deployed at runtime | tester.yaml + implementer.yaml (commit 3); pm.yaml + engineer.yaml (commit 3.6 + commit `fd36f37` session-6 extension adding `get_loop_state` + `wait_for_next_tick` to engineer.yaml `mcp_tools_allowed`). Session 6 verified `agents_dir.seeded files_copied=['engineer.yaml','implementer.yaml','pm.yaml','tester.yaml']` at daemon start. |
+| β5 | Per-dispatch JSON materializes correctly under `<dispatches_root>/<dispatch_id>/mcp_config.json` (Playwright entry for tester only) | ⚠ Wiring verified; not exercised end-to-end | Unit tests at commit 3.5 + 3.6 confirm shape via mocked subprocess. Real materialization requires actual Implementer/Tester dispatch — first exercise at session 8 β execution. |
+| β6 | Per-spawn JSON materializes correctly under `<dispatches_root>/<spawn_dispatch_id>/mcp_config.json` (no Playwright) | ✓ Verified at code level + runtime | Unit tests at commit 3.6 confirm shape. Session 6 daemon spinup spawned PM-supervisor + Engineer-supervisor subprocesses with full wiring; subprocess_started audit events fired with dispatch_ids — per-spawn JSON materialization is implicit in successful subprocess spawn. |
+| β7 | FastMCP auth chain validates per-token Bearer headers; revoked tokens return None from `auth.TokenStore.lookup` | ⚠ Wiring verified; partial runtime exercise | `server.py:198,219,222` enforces; `auth.TokenStore.revoke` + `lookup` semantics confirmed at unit-test level. Session 6 exercised `dispatch.token_created` + `dispatch.token_revoked` audit emission at shutdown; revoked-token rejection path at MCP layer remains unexercised. |
+| β8 | Audit trail captures dispatch lifecycle | ✓ Verified at runtime | Session 6 audit_log entries: `dispatch.issued` / `dispatch.subprocess_started` / `dispatch.token_created` / `dispatch.token_revoked` / `dispatch.subprocess_unexpected_exit` (PM rc=0 carry-forward CF1) / `dispatch.subprocess_terminated` with `reason='shutdown'` (clean Ctrl+C path). Full lifecycle coverage minus `dispatch.complete_called` (requires Implementer/Tester dispatch end-to-end at β). |
+| β9 | stderr.log + mcp_config.json both retained at terminal state | ⚠ Wiring exists; only real Implementer/Tester run produces files | F4 stderr drain + commit 3.5 + 3.6 retention semantics. Supervisor exercises (sessions 5-6) don't write to per-dispatch dirs; this is dispatcher-path specific. First exercise at session 8 β execution. |
+| β10 | Substrate work item selected | ✗ Not selected | Operator's choice; not made yet. Selection criteria per Section 2 unchanged. |
+| β11 | Bounded HITL per CQ-E E-2 | N/A pre-execution | Depends on Mike's intervention discipline during β. |
 
 ## Section 2 — Operator-setup checklist (probe-then-act)
 
@@ -32,14 +57,13 @@ Sequenced. Each item is a concrete command + expected output anchor.
 Probe state before acting; do not assume.
 
 - [ ] **Set `MERIDIAN_ORCH_SUBSTRATE_WORKING_DIRECTORY` env var.** Set in
-  `.env` at orchestrator root or in shell env. Path should point to the
-  substrate clone (e.g., `C:\Users\mbgol\dev\meridian-homepoc` per
-  current substrate location).
+  `.env` at orchestrator root or inline in the interactive PowerShell
+  session before daemon start. Path should point to the substrate clone
+  (e.g., `C:\Users\mbgol\dev\meridian-homepoc` per current substrate
+  location).
   - Expected: env var visible to daemon at startup.
-  - Empirical context: never set in any prior session; daemon validation
-    raised `MERIDIAN_ORCH_SUBSTRATE_WORKING_DIRECTORY must be set when
-    MERIDIAN_ORCH_ENABLE_ENGINEER_SUPERVISOR=true` at the auth-probe
-    daemon-start in commit 3 prep cycle.
+  - Empirical context: session 6 used inline PowerShell-shell-set
+    pattern: `$env:MERIDIAN_ORCH_SUBSTRATE_WORKING_DIRECTORY = "C:/Users/mbgol/dev/meridian-homepoc"` before `uv run python -m meridian_orchestrator.main`. Both `.env` and inline-shell paths work; inline is simpler for single-session β execution. Required because Engineer-supervisor enabled; daemon validation raises `ValidationError` on missing var.
 
 - [ ] **Probe existing keyring tokens (do not assume state).**
   ```
@@ -47,12 +71,16 @@ Probe state before acting; do not assume.
   ```
   - Expected: full table including revoked rows.
   - Inspection criteria: are `engineer` / `implementer` / `tester` rows
-    present with `status=active`? At β-readiness audit time (2026-05-08)
-    only `pm` rows visible (1 static + 2 OAuth); engineer/implementer/
-    tester absent. If absent → proceed to issuance steps below; if
-    present with mismatched agent_id → investigate before re-issuing
-    (revoking + re-issuing changes agent_id and breaks audit-row FK
-    references).
+    present with `status=active`? Sessions 5 + 6 daemon spinups
+    succeeded with all four roles configured, so tokens were active at
+    those points. State may have drifted since (token revocation at
+    daemon shutdown is observed at session 6 shutdown traversal:
+    `dispatch.token_revoked` for both PM + Engineer supervisor
+    dispatches). Re-probe at β open; if active rows present for
+    `engineer` / `implementer` / `tester`, proceed directly to daemon
+    start. If absent → proceed to issuance steps below. If present with
+    mismatched agent_id → investigate before re-issuing (revoking +
+    re-issuing changes agent_id and breaks audit-row FK references).
 
 - [ ] **(Conditional on probe) Issue static engineer token.**
   ```
@@ -71,27 +99,43 @@ Probe state before acting; do not assume.
   uv run python -m scripts.issue-token --role tester --label mike-cd
   ```
 
-- [ ] **Start daemon with supervisors enabled.**
+- [ ] **Start daemon with supervisors enabled in interactive PowerShell.**
   ```
   uv run python -m meridian_orchestrator.main
   ```
-  - Expected log lines (in order): `startup.begin`;
-    `migration.applying` / `migration.applied` (any pending migrations);
-    `canonical.provisioning_begin` (substrate clone provisioning;
-    first-boot is slow); `canonical.provisioning_complete` with
-    `elapsed_seconds`; `agents.seeded` with all four roles in `roles`;
+  - **Critical: run in interactive PowerShell context.** Required for
+    Ctrl+C → clean shutdown path per Windows shutdown gap (a)
+    workaround (BACKLOG `a3562e2`). Validated at session 6 runtime
+    exercise — `taskkill`/`Stop-Process` is the unmitigated Windows
+    shutdown gap that (a) workaround avoids.
+  - Expected log lines (in order, per session 5 + 6 observations):
+    `startup.begin`; `migration.applying` / `migration.applied` (any
+    pending migrations); `canonical.provisioning_begin` (substrate
+    clone provisioning; first-boot is slow);
+    `canonical.provisioning_complete` with `elapsed_seconds`;
+    **`agents_dir.seeded`** with `files_copied=['engineer.yaml','implementer.yaml','pm.yaml','tester.yaml']` (auto-seeding fix `8365e98`); `agents.seeded` with all four roles in `roles`;
     `pm_supervisor.started` with `dispatch_id`;
     `engineer_supervisor.started` with `dispatch_id`; `startup.complete`
     with `engineer_supervisor_enabled=true` + `pm_supervisor_enabled=true`
     + `dispatcher_constructed=true` + `agents_loaded` listing all four
     roles; `Uvicorn running on http://127.0.0.1:8765`.
+  - **Side observation (informational; non-blocker per session 6)**:
+    `oauth_usage_poller.skipped_no_token` fires if
+    `CLAUDE_CODE_OAUTH_TOKEN` not set — budget-aware routing falls back
+    to per-role defaults; `fallback_active=True` appears in
+    `routing_factors` on `check_budget_for_task` calls;
+    `get_window_state` returns `pace_recommendation='unknown'`. Doesn't
+    block β execution but affects routing-decision verbosity in audit
+    trail. Set token if budget-aware routing visibility is wanted at β.
   - Failure modes to watch: `ValidationError` on
     `MERIDIAN_ORCH_SUBSTRATE_WORKING_DIRECTORY` (preceding step missed);
     `agents.unseeded_role` warnings for any role missing a token
     (preceding token-issuance steps missed); `EngineerSupervisor
     requires a registered 'engineer' agent` (registry resolution
     failed); canonical-provisioning errors (substrate path wrong or
-    not a git repo).
+    not a git repo); auto-seeding regression — `agents_dir.seeded`
+    fails to fire OR `files_copied` count != 4 (session 5 fix
+    `8365e98` regression — investigate before β).
 
 - [ ] **Verify daemon reachable via MCP.**
   ```
@@ -169,7 +213,19 @@ doc β findings capture shape:
 
 ## Section 4 — Threshold rule status
 
-Count: **0 of 3** post-commit-4.
+Count: **2 of 3** post-session-6-close.
+
+Advances since β-readiness audit (commit 4, pre-session-5):
+- Session 5 commit `8365e98` (`feat(daemon): runtime config auto-seeding`) advanced 0 of 3 → 1 of 3
+- Session 6 commit `fd36f37` (`feat(engineer): continuous-loop scope-amended fix per BACKLOG Option 1`) advanced 1 of 3 → 2 of 3
+
+Doc-only commits in sessions 5-7 (BACKLOG Windows shutdown entry
+`a3562e2`, cowork .gitignore `9b1c36f`, session 5-7 close handoff
+docs) do NOT count against threshold rule.
+
+Session 8 β execution: operator-acceptance work; does NOT advance
+threshold rule by itself. If CF1 investigation surfaces architectural
+fix shipped at session 8, that commit advances 2 of 3 → 3 of 3.
 
 Reading 2 (charitable) disposition recorded: β-as-readiness vs.
 β-as-execution split is operational clarification of what β-the-commit
@@ -206,3 +262,38 @@ Sharpened pin for M5-acceptance closeout chapter (commit 5):
 
 Pin as standalone item in commit 5 closeout chapter, NOT folded into
 other pins. Methodology amendment, not just an observation.
+
+### Session 7 postscript (2026-05-12): pin operationalized across sessions 4-6
+
+The methodology amendment above has been operationalized across the
+M5-acceptance arc:
+
+- **Session 4** runtime exercise (Engineer fix authoring): surfaced
+  Pin 9 firing — runtime exercise revealed `_supervisor_kwargs` field
+  drift that unit tests didn't catch. Methodology amendment validated
+  empirically: runtime smoke test catches what wiring tests miss.
+- **Session 5** auto-seeding runtime exercise (commit `8365e98`):
+  Mike's (α) operator-clear path exercised the runtime against the
+  shipped fix; surfaced Finding 2 pm.yaml drift as a side effect.
+- **Session 6** Engineer fix runtime exercise (commit `fd36f37`):
+  Engineer-supervisor sustained continuous mode across 9 cycle
+  boundaries; surfaced 4 carry-forwards (CF1-CF4) routed to session 8
+  β re-execution.
+
+Companion methodology pin candidates surfaced session 6 (route to M6
+closeout pin set):
+
+- **Pin 9 generalization** (CF3): runtime exercise surface area
+  extends beyond the fix under test. Side-findings deserve disposition
+  discipline even when fix verification is clean. Two empirical anchors
+  (session 5 pm.yaml drift; session 6 PM rc=0-no-compaction pattern).
+- **Observability-bounded-by-schema-reality sub-observation** (CF3
+  fold-in): when designed-behavior surface doesn't intersect observable
+  surface (e.g., `get_loop_state` called per prompt but no per-MCP-call
+  audit_log ledger), fix can be correctness-verified at intersect
+  surfaces but design-fidelity verified only by indirect evidence.
+
+Both candidates compose with the original 8th pin rather than
+superseding it. M5-acceptance closeout chapter 5 retains the 8th pin
+as authored; M6 closeout chapter can pin the generalization with
+sessions 4-6 as multi-anchor empirical evidence.
