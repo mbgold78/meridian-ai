@@ -35,11 +35,12 @@ checklist empirical contexts (Section 2), threshold count (Section 4),
 and adds methodology postscript to Section 5. β execution remains
 operator-driven at session 8.
 
-## Section 1 — β1–β11 pre-condition verification
+## Section 1 — β0–β11 pre-condition verification
 
 | # | Pre-condition | State | Empirical anchor |
 |---|---|---|---|
-| β1 | Daemon running locally; FastMCP at `127.0.0.1:8765/mcp` reachable | ✓ Verified at session 5 + 6 runtime exercises (operator-driven daemon spinup) | Session 5 (2026-05-11): daemon PID 41084 ran ~95s with auto-seeded yamls + `startup.complete` not skeleton mode. Session 6 (2026-05-12): daemon PID 16960 ran ~18 min through Ctrl+C clean shutdown; transcripts at `~/.meridian-orchestrator/transcripts/auto-seeding-runtime-exercise-2026-05-11.log` + `~/.meridian-orchestrator/transcripts/engineer-fix-runtime-exercise-2026-05-12.log`. β1 must be re-probed at β open since daemon doesn't auto-start across sessions. |
+| β0 | PM-role-loaded Claude Code CLI session exists + connected to daemon MCP | ✗ Not established | Operator must run `scripts/operate-as-pm.py` in a fresh PowerShell window (separate from build-executor session) after one-time `claude mcp add --transport http -s user meridian-orchestrator http://127.0.0.1:8765/mcp` registration. The script reads `config/agents/pm.yaml`'s `system_prompt` and spawns `claude --dangerously-skip-permissions --append-system-prompt <yaml.system_prompt>` (per `scripts/_operator_wrapper.py:75-95`). Within that session, `/mcp` shows `meridian-orchestrator` connected after OAuth flow (one-time; subsequent sessions reuse the OAuth token from keyring). Closes session 8 CF7 gap: β-readiness checklist now sequences operator-PM bridge setup before declaring β2-β11 acceptance work ready. Verification anchor at β open: PM-role session can invoke read-only MCP tool (e.g., `get_queue`) and the call appears in `dispatches.last_tool_called` for an active PM dispatch row. |
+| β1 | Daemon running locally; FastMCP at `127.0.0.1:8765/mcp` reachable | ✓ Verified at session 5 + 6 runtime exercises (operator-driven daemon spinup) | Session 5 (2026-05-11): daemon PID 41084 ran ~95s with auto-seeded yamls + `startup.complete` not skeleton mode. Session 6 (2026-05-12): daemon PID 16960 ran ~18 min through Ctrl+C clean shutdown; transcripts at `~/.meridian-orchestrator/transcripts/auto-seeding-runtime-exercise-2026-05-11.log` + `~/.meridian-orchestrator/transcripts/engineer-fix-runtime-exercise-2026-05-12.log`. Session 8 (2026-05-12): daemon PID 51188 ran ~16 min idle through Ctrl+C clean shutdown. β1 must be re-probed at β open since daemon doesn't auto-start across sessions. |
 | β2 | PM/Engineer-supervisor wiring (`--allowedTools` + `--mcp-config` + `--strict-mcp-config` + per-spawn JSON; no `--append-system-prompt`) | ✓ Verified at code level + runtime | Code: commit 3.6 (666ac14) `bridge/supervisor_base.py`. Runtime: session 6 daemon spinup observed `pm_supervisor.started` (dispatch `f98ce3df`) + `engineer_supervisor.started` (dispatch `5b8c4b33`) with explicit dispatch_ids in startup log; both supervisors transitioned `running` → `cancelled` cleanly at Ctrl+C. |
 | β3 | Implementer/Tester dispatch wiring (`--append-system-prompt` + `--allowedTools` + `--mcp-config` + `--strict-mcp-config` + per-dispatch JSON) | ✓ Verified at code level | Commits 2 + 3 + 3.5 (8b15611 + a7d974a + 28cd760): `bridge/dispatcher.py` argv composition. Runtime exercise still pending — sessions 4-6 exercised supervisor paths only; Implementer/Tester per-dispatch paths await β execution. |
 | β4 | All 4 yaml files have `allowed_tools` content | ✓ Verified at code level + auto-seed-deployed at runtime | tester.yaml + implementer.yaml (commit 3); pm.yaml + engineer.yaml (commit 3.6 + commit `fd36f37` session-6 extension adding `get_loop_state` + `wait_for_next_tick` to engineer.yaml `mcp_tools_allowed`). Session 6 verified `agents_dir.seeded files_copied=['engineer.yaml','implementer.yaml','pm.yaml','tester.yaml']` at daemon start. |
@@ -143,17 +144,13 @@ Probe state before acting; do not assume.
   ```
   - Expected: `meridian-orchestrator: http://127.0.0.1:8765/mcp (HTTP) - ✓ Connected`.
 
-- [ ] **(Optional) Re-register meridian-orchestrator at user scope per
-  PM session cwd preference.**
+- [ ] **One-time MCP registration at user scope (required for operator-PM bridge).**
   ```
   claude mcp add --transport http -s user meridian-orchestrator http://127.0.0.1:8765/mcp
   ```
-  - Empirical context: only needed if Mike's interactive PM session
-    opens from non-home cwd. Per ε-3 Surface 1 + Surface 2
-    consolidation, subprocess auth path uses per-dispatch `--mcp-config`
-    + `--strict-mcp-config` (hermetic) and does NOT depend on user-scope
-    registration; this re-registration is operator convenience for
-    Mike's interactive PM Claude Code session only.
+  - **Required, not optional**: PM-role Claude Code CLI session needs `meridian-orchestrator` registered at user scope to invoke MCP tools regardless of cwd. Without `-s user` the registration binds to local scope (current cwd), making the server invisible to sessions launched from other directories. Per `README.md:119-138` empirical verification at M5-acceptance commit 3 prep.
+  - Empirical context: per ε-3 Surface 1 + Surface 2 consolidation, daemon-launched subprocess auth path uses per-dispatch `--mcp-config` + `--strict-mcp-config` (hermetic) and does NOT depend on user-scope registration. The user-scope registration is for the **operator-PM bridge specifically** — Mike's interactive PM-role Claude Code session.
+  - Verification: `claude mcp list` from any cwd should show `meridian-orchestrator` registered. ✓ Connected requires daemon running; ✗ Failed pre-daemon-start is expected.
 
 - [ ] **Select substrate work item per β10 framing.**
   - Criterion: mechanically simple but architecturally non-trivial.
@@ -161,7 +158,30 @@ Probe state before acting; do not assume.
     endpoint mirror of existing one; refactor touching 3-5 files.
   - Operator discretion.
 
-- [ ] **Open interactive PM Claude Code session; β execution begins.**
+- [ ] **Open PM-role Claude Code CLI session via `operate-as-pm.py` (CF7 fix anchor).**
+  ```
+  uv run python -m scripts.operate-as-pm
+  ```
+  - **Critical: run in a SEPARATE PowerShell window from the daemon's PowerShell.** Build-executor / Code session that's doing dispositions and running the daemon is one process; the PM-role session is a distinct `claude` CLI process spawned by `operate-as-pm.py`. Without separation, β10 task submission goes to the wrong instance (session 8 mis-routing pattern — CF7 anchor).
+  - Implementation per `scripts/_operator_wrapper.py:75-95`: reads `config/agents/pm.yaml` `system_prompt` field and spawns `claude --dangerously-skip-permissions --append-system-prompt <yaml.system_prompt>`. The operator's interactive session inherits PM's behavioral discipline at session start.
+  - Pre-conditions documented in `scripts/operate-as-pm.py` docstring:
+    1. Daemon running locally (prior step)
+    2. `meridian-orchestrator` MCP registered at user scope (prior step)
+    3. OAuth flow completed — first session triggers `/mcp` → Authenticate flow; subsequent sessions reuse OAuth token from keyring.
+  - Verification: within the PM-role session, `/mcp` shows `meridian-orchestrator` connected. PM acknowledges instructions per `pm.yaml` system_prompt discipline.
+
+- [ ] **Instance-targeting discipline (CF8 anchor).**
+  - Operator workflow now spans **two interactive PowerShell windows**:
+    - **Window 1 (build-executor / daemon)**: PowerShell running `uv run python -m meridian_orchestrator.main`. Receives operator dispositions for daemon lifecycle (Ctrl+C shutdown, env-var changes). Code session is in this window's conversation context.
+    - **Window 2 (operator-PM bridge)**: PowerShell running `uv run python -m scripts.operate-as-pm`. Receives β-execution task submissions from operator to PM.
+  - Mike must distinguish target window before each input. The β10 task submission goes to Window 2 PM-role; daemon lifecycle commands stay in Window 1.
+  - Visual cue recommendations (operator discretion):
+    - Different PowerShell color profiles per window
+    - Window titles set explicitly (`$Host.UI.RawUI.WindowTitle = "Daemon"` vs `"PM Bridge"`)
+    - Position windows on different monitor halves
+  - Session 8 mis-routing finding: build-executor Claude Code session received the β10 task instead of PM-role session. CF8 captures the operator-experience gap — multi-instance addressing semantics need explicit discipline since Claude Code itself has no instance-role indicator.
+
+- [ ] **β execution begins.** Submit β10 work item to Window 2 PM-role session in natural conversational framing (don't pre-format as spec dump).
 
 ## Section 3 — Recommended β execution sequencing
 
@@ -297,3 +317,29 @@ Both candidates compose with the original 8th pin rather than
 superseding it. M5-acceptance closeout chapter 5 retains the 8th pin
 as authored; M6 closeout chapter can pin the generalization with
 sessions 4-6 as multi-anchor empirical evidence.
+
+### Session 9 postscript (2026-05-13): CF7 framing correction + Pin 12 firing #9 cataloged
+
+**CF7 framing correction**: session 8 close handoff doc authored CF7 as "β-readiness operator-capability gap" with empirical anchor "β10 task submitted to Claude Code window not PM Claude Desktop". That framing is **incorrect** — per `README.md:119-130`, Claude Desktop's GUI Custom Connectors are explicitly **not supported** (cloud-mediated; can't reach localhost daemon). The supported operator-PM bridge is **Claude Code CLI** spawned via `scripts/operate-as-pm.py` (per `README.md:81-95` + `scripts/_operator_wrapper.py:75-95`).
+
+Corrected framing:
+- ✗ "β10 task submitted to Code (build-executor) instead of PM Claude Desktop"
+- ✓ "β10 task submitted to build-executor Claude Code CLI session instead of a PM-role-loaded Claude Code CLI session via `operate-as-pm.py`"
+
+Both source + target are Claude Code CLI sessions; the difference is which `--append-system-prompt` was loaded at session spawn (build-executor: none / generic; PM-role: `pm.yaml` system_prompt). CF7's underlying gap still holds (β-readiness Section 2 didn't sequence operator-PM bridge setup before declaring β2-β11 ready), but the procedural mechanism is `operate-as-pm.py` workflow + instance-separation discipline, not Claude Desktop config.
+
+**Pin 12 firing #9**: stale-state-recall in disposition-layer authoring. Two firings of identical Pin 12 shape across two sessions:
+
+- **Session 8 close (2026-05-12, 23:00 EDT)**: CF7 authored with "Claude Desktop" terminology by Code without grepping repo to verify procedure.
+- **Session 9 open (2026-05-13, ~01:00 EDT)**: Mike's directive carried "Claude Desktop PM setup" framing into Phase 1-3 prompt, inheriting session 8 close's terminology error.
+
+Both caught at Phase 1 first-probe of session 9 (Step 1.1 documentation probe surfaced `README.md` explicit "not supported" anchor + `scripts/operate-as-pm.py` existing wrapper). Same author chain (operator disposition layer drafting from session memory + Code disposition replies); same probe-discoverable claim drafted without probe-verification.
+
+**Pin 12 generalization candidate #2 framing**: Pin 12 was originally about artifact-count claim discipline. Sessions 7 + 8 + 9 firings extend the shape to all probe-discoverable claims:
+- Sessions 5 + 7 firings: artifact-count claims (test count, baseline-eyeball)
+- Sessions 6 + 7 firings #6/#7: external-system-state claims (Opus 4.7 addendum existence; Anthropic quota landscape)
+- Session 8 + 9 firings #9: repo-state claims (Claude Desktop vs Claude Code CLI procedure)
+
+Generalization: **stale-state-recall in disposition-layer authoring compounds across sessions when not anchored against repo verification.** Pin 12's prescription ("derive claims from verification, not eyeballing") generalizes to disposition-layer authoring, not just artifact-count claims.
+
+M6 closeout pin candidate as **Pin 12 generalization #2** (first generalization was Pin 9 → runtime exercise surface area extends beyond fix surface; second generalization is Pin 12 → claim-verification discipline applies to all probe-discoverable claims at disposition-layer authoring).
