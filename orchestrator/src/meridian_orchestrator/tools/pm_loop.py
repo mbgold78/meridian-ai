@@ -134,7 +134,11 @@ async def wait_for_next_tick(
     get_tick_seconds: Callable[[], float],
     caller_role: str,
 ) -> WaitForNextTickOutput:
-    """PM-only handler for the ``wait_for_next_tick`` MCP tool.
+    """PM/Engineer-permitted handler for the ``wait_for_next_tick`` MCP tool.
+
+    Both PM continuous-mode loop driver (M5-continuous-pm-driver
+    commit 7) and Engineer-supervisor continuous-mode loop driver
+    (M5-acceptance follow-on) call this for per-tick keepalive.
 
     Server-side blocking: sleeps for the configured tick interval
     then returns. PM's prompt instructs the call at end of each
@@ -161,7 +165,7 @@ async def wait_for_next_tick(
     to review): first server-side blocking MCP tool in Phase 1.
     Pattern review triggers when second instance lands.
     """
-    _require_role(caller_role, "pm")
+    _require_role(caller_role, "pm", "engineer")
     tick_seconds = get_tick_seconds()
     await asyncio.sleep(tick_seconds)
     return WaitForNextTickOutput(slept_seconds=tick_seconds)
@@ -174,7 +178,12 @@ async def get_loop_state(
     caller_agent_id: str,
     caller_role: str,
 ) -> GetLoopStateOutput:
-    """PM-only handler for the ``get_loop_state`` MCP tool.
+    """PM/Engineer-permitted handler for the ``get_loop_state`` MCP tool.
+
+    Both PM continuous-mode loop driver (M5-continuous-pm-driver
+    commit 7) and Engineer-supervisor continuous-mode loop driver
+    (M5-acceptance follow-on) call this for aggregated per-tick
+    iteration state.
 
     Aggregates four per-iteration reads into one MCP response.
     Each underlying read is delegated to its existing handler:
@@ -199,7 +208,7 @@ async def get_loop_state(
     pm_focus.py within the same tools/ layer). Bridge → tools watch
     is unaffected.
     """
-    _require_role(caller_role, "pm")
+    _require_role(caller_role, "pm", "engineer")
 
     subscription_5h_state = await get_window_state(
         storage=storage,

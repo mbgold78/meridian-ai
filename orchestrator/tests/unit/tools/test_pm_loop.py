@@ -142,18 +142,43 @@ async def test_wait_for_next_tick_resolves_cadence_at_call_time(
     assert captured == [60.0, 5.0]
 
 
-@pytest.mark.parametrize(
-    "non_pm_role", ["engineer", "implementer", "tester"]
-)
-async def test_wait_for_next_tick_non_pm_role_rejected(
-    non_pm_role: str,
+async def test_wait_for_next_tick_engineer_role_allowed(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Engineer, Implementer, Tester callers rejected at handler's
-    _require_role check. No sleep called."""
-    with pytest.raises(OrchestratorPermissionError, match=non_pm_role):
+    """Engineer caller passes _require_role check (M5-acceptance
+    follow-on; BACKLOG Option 1 — Engineer-supervisor continuous-loop
+    discipline). Sleep is called same as PM path."""
+    captured: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        captured.append(seconds)
+
+    monkeypatch.setattr("meridian_orchestrator.tools.pm_loop.asyncio.sleep", fake_sleep)
+
+    out = await wait_for_next_tick(
+        get_tick_seconds=lambda: 60.0,
+        caller_role="engineer",
+    )
+    assert isinstance(out, WaitForNextTickOutput)
+    assert out.slept_seconds == 60.0
+    assert captured == [60.0]
+
+
+@pytest.mark.parametrize(
+    "rejected_role", ["implementer", "tester"]
+)
+async def test_wait_for_next_tick_non_pm_non_engineer_role_rejected(
+    rejected_role: str,
+) -> None:
+    """Implementer, Tester callers rejected at handler's _require_role
+    check. No sleep called. Engineer was widened to allowed at
+    M5-acceptance follow-on per BACKLOG Option 1; remaining non-pm
+    roles stay rejected (no silent permission inheritance per Pin 13
+    discipline)."""
+    with pytest.raises(OrchestratorPermissionError, match=rejected_role):
         await wait_for_next_tick(
             get_tick_seconds=lambda: 60.0,
-            caller_role=non_pm_role,
+            caller_role=rejected_role,
         )
 
 
@@ -230,21 +255,43 @@ async def test_get_loop_state_cold_start_propagates_unknown(
     assert out.current_focus is None
 
 
-@pytest.mark.parametrize(
-    "non_pm_role", ["engineer", "implementer", "tester"]
-)
-async def test_get_loop_state_non_pm_role_rejected(
+async def test_get_loop_state_engineer_role_allowed(
     storage: SqliteStorage,
-    non_pm_role: str,
 ) -> None:
-    """Engineer, Implementer, Tester callers rejected at handler's
-    _require_role check before any read happens."""
-    with pytest.raises(OrchestratorPermissionError, match=non_pm_role):
+    """Engineer caller passes _require_role check (M5-acceptance
+    follow-on; BACKLOG Option 1). Aggregate read returns
+    subscription_5h + subscription_7d_opus + burn_rate + current_focus
+    same as PM path; Engineer consumes subscription_5h_state for
+    self-pacing per engineer.yaml § Continuous mode."""
+    out = await get_loop_state(
+        storage=storage,
+        get_snapshot=_fake_snapshot_with_buckets,
+        caller_agent_id="engineer-agent",
+        caller_role="engineer",
+    )
+    assert isinstance(out, GetLoopStateOutput)
+    assert out.subscription_5h_state.bucket == "subscription_5h"
+    assert out.subscription_7d_opus_state.bucket == "subscription_7d_opus"
+
+
+@pytest.mark.parametrize(
+    "rejected_role", ["implementer", "tester"]
+)
+async def test_get_loop_state_non_pm_non_engineer_role_rejected(
+    storage: SqliteStorage,
+    rejected_role: str,
+) -> None:
+    """Implementer, Tester callers rejected at handler's _require_role
+    check before any read happens. Engineer was widened to allowed at
+    M5-acceptance follow-on per BACKLOG Option 1; remaining non-pm
+    roles stay rejected (no silent permission inheritance per Pin 13
+    discipline)."""
+    with pytest.raises(OrchestratorPermissionError, match=rejected_role):
         await get_loop_state(
             storage=storage,
             get_snapshot=_fake_snapshot_with_buckets,
             caller_agent_id="some-agent",
-            caller_role=non_pm_role,
+            caller_role=rejected_role,
         )
 
 

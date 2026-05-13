@@ -192,16 +192,44 @@ async def test_pm_token_wait_for_next_tick_returns_slept_seconds(
     assert out["slept_seconds"] == 0.01
 
 
-@pytest.mark.parametrize(
-    "non_pm_role", ["engineer", "implementer", "tester"]
-)
-async def test_non_pm_token_wait_for_next_tick_rejected(
+async def test_engineer_token_wait_for_next_tick_allowed(
     settings: Settings,
     storage: SqliteStorage,
-    non_pm_role: str,
 ) -> None:
+    """Engineer token → wait_for_next_tick wrapper → handler succeeds
+    (M5-acceptance follow-on; BACKLOG Option 1 — Engineer-supervisor
+    continuous-loop discipline). Production MCP path round-trip
+    verification."""
+    issued = await _issue_role_token(storage, "engineer", "engineer-tick")
+    base_url = f"http://{settings.mcp_host}:{settings.mcp_port}"
+
+    async with _running_server(settings, storage):
+        result = await _call_tool(
+            base_url=base_url,
+            token=issued.token,
+            tool_name="wait_for_next_tick",
+            args={},
+        )
+
+    assert getattr(result, "isError", False) is False
+    out = _structured(result)
+    assert out["slept_seconds"] >= 0.0
+
+
+@pytest.mark.parametrize(
+    "rejected_role", ["implementer", "tester"]
+)
+async def test_non_pm_non_engineer_token_wait_for_next_tick_rejected(
+    settings: Settings,
+    storage: SqliteStorage,
+    rejected_role: str,
+) -> None:
+    """Implementer/Tester tokens rejected at production MCP path.
+    Engineer was widened to allowed at M5-acceptance follow-on per
+    BACKLOG Option 1; remaining non-pm roles stay rejected (Pin 13
+    discipline — no silent permission inheritance)."""
     issued = await _issue_role_token(
-        storage, non_pm_role, f"non-pm-{non_pm_role}-tick"
+        storage, rejected_role, f"non-pm-{rejected_role}-tick"
     )
     base_url = f"http://{settings.mcp_host}:{settings.mcp_port}"
 
@@ -251,16 +279,44 @@ async def test_pm_token_get_loop_state_returns_aggregated_response(
     assert out["current_focus"] is None  # no focus declared in this test
 
 
-@pytest.mark.parametrize(
-    "non_pm_role", ["engineer", "implementer", "tester"]
-)
-async def test_non_pm_token_get_loop_state_rejected(
+async def test_engineer_token_get_loop_state_allowed(
     settings: Settings,
     storage: SqliteStorage,
-    non_pm_role: str,
 ) -> None:
+    """Engineer token → get_loop_state wrapper → handler succeeds
+    (M5-acceptance follow-on; BACKLOG Option 1). Engineer consumes
+    subscription_5h_state for self-pacing per engineer.yaml
+    § Continuous mode."""
+    issued = await _issue_role_token(storage, "engineer", "engineer-loop")
+    base_url = f"http://{settings.mcp_host}:{settings.mcp_port}"
+
+    async with _running_server(settings, storage):
+        result = await _call_tool(
+            base_url=base_url,
+            token=issued.token,
+            tool_name="get_loop_state",
+            args={},
+        )
+
+    assert getattr(result, "isError", False) is False
+    out = _structured(result)
+    assert "subscription_5h_state" in out
+
+
+@pytest.mark.parametrize(
+    "rejected_role", ["implementer", "tester"]
+)
+async def test_non_pm_non_engineer_token_get_loop_state_rejected(
+    settings: Settings,
+    storage: SqliteStorage,
+    rejected_role: str,
+) -> None:
+    """Implementer/Tester tokens rejected at production MCP path.
+    Engineer was widened to allowed at M5-acceptance follow-on per
+    BACKLOG Option 1; remaining non-pm roles stay rejected (Pin 13
+    discipline)."""
     issued = await _issue_role_token(
-        storage, non_pm_role, f"non-pm-{non_pm_role}-loop"
+        storage, rejected_role, f"non-pm-{rejected_role}-loop"
     )
     base_url = f"http://{settings.mcp_host}:{settings.mcp_port}"
 

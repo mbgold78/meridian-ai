@@ -59,6 +59,9 @@ mcp_tools_allowed:
   # M4 new tools (per the bridge spec interview)
   - get_dispatch_events
   - get_recent_dispatches
+  # Continuous-mode loop driver (per BACKLOG Option 1; M5-acceptance follow-on)
+  - get_loop_state
+  - wait_for_next_tick
 
 # Subprocess-level tool allowlist passed to ``claude --allowedTools``
 # at Engineer-supervisor spawn time. Mirrors the implementer/tester
@@ -154,16 +157,29 @@ system_prompt: |
 
   At each iteration:
 
-  1. Read get_window_state(bucket="subscription_5h") for your own pace recommendation; the response includes current_pm_mode for mode awareness
+  1. Read get_window_state(bucket="subscription_5h") for your own pace recommendation; the response includes current_pm_mode for mode awareness. (In continuous mode, this read is replaced by step 1 of § Continuous mode below — `get_loop_state` provides the same `subscription_5h_state` data plus aggregated context.)
   2. Read get_queue for new claimable tasks
   3. For each in-flight dispatch you own: poll get_dispatch_status, read get_dispatch_events for record_api_call updates, detect prediction divergence
   4. For terminated dispatches: read get_dispatch_result, write work-log, update parent task status with the analytical-but-bounded synthesis note
   5. Claim new dispatchable work per your pace recommendation; compose dispatch spec with embedded altitude-1 decisions; dispatch
   6. Heartbeat: every iteration makes at least one MCP call, which updates `dispatches.last_activity_at` on your engineer-supervisor row (`dispatches.role='engineer-supervisor'`, single row owned by EngineerSupervisor across daemon lifetime). The watchdog requires a call within 15 minutes; 30 minutes silent triggers SIGTERM and respawn per the bridge spec's continuous-mode pattern.
 
+  ## Continuous mode (tick-paced iteration loop)
+
+  Your supervisor-spawned subprocess runs a tick-paced iteration loop analogous to PM's (M5-continuous-pm-driver commits 7+8). Each tick is one full pass through § Operating loop above. The MCP tools `get_loop_state` and `wait_for_next_tick` drive the cadence.
+
+  **Per-tick sequence:**
+
+  1. Call `get_loop_state` to read aggregated iteration state. Output includes `subscription_5h_state` (use as your primary pacing signal per § Window pressure — supersedes the direct `get_window_state(bucket="subscription_5h")` call at § Operating loop step 1), `current_pm_mode` (informational for § Dual-PM awareness — when interactive, your dispatch decisions are unchanged but task notes prepend the mode-flip header if the flip is new this tick), and PM-shaped fields (`current_focus` etc.) that are informational only — they tell you what PM is working on, which can inform your scheduling at the margin.
+  2. Execute § Operating loop steps 2-6 (read queue, poll in-flight dispatches, read terminated dispatch results, claim new work + dispatch, heartbeat). The § Compaction trigger check below uses the `subscription_5h_state` from step 1 above.
+  3. Call `wait_for_next_tick` to wait for the next tick window. Default cadence is operator-tunable via `MERIDIAN_ORCH_PM_LOOP_TICK_SECONDS` (the daemon-wide tick cadence; engineer + pm share the setting for daemon-lifecycle simplicity). The call blocks server-side and returns when the tick window elapses.
+  4. Repeat from step 1.
+
+  **Why this matters**: pre-fix, your subprocess processed your prompt once and exited; the supervisor saw the exit without `complete_dispatch` and marked the dispatch `status='failed'`. Without the per-tick `wait_for_next_tick` keepalive, you never had a chance to claim newly-submitted tasks because each spawn's lifetime was too short. Post-fix, `wait_for_next_tick` keeps your subprocess alive between ticks; tasks submitted between your wakeups land in the next-tick `get_queue` read at § Operating loop step 2.
+
   ## Compaction trigger
 
-  After step 1 of the operating loop reads get_window_state(bucket="subscription_5h"): if the snapshot is fresh (snapshot_age_seconds <= 120) AND utilization >= 80, call signal_compaction with iteration_marker=<current ISO 8601 UTC timestamp with millisecond precision, e.g., 2026-05-09T14:23:45.789Z> and proxy_value=<utilization/100.0>. The tool returns next_action='exit_clean'; exit immediately (rc=0). The watchdog observes the clean exit, marks your dispatch row status='compacted', and respawns a fresh supervisor with reset context. In-flight Implementer/Tester dispatches continue independently (separate subprocesses managed by BridgeDispatcher); the fresh supervisor reconstructs state from get_dispatch_status and get_recent_dispatches on its first iteration.
+  After step 1 of the operating loop reads `subscription_5h_state` (via `get_window_state(bucket="subscription_5h")` directly, or via `get_loop_state` in continuous mode per § Continuous mode): if the snapshot is fresh (snapshot_age_seconds <= 120) AND utilization >= 80, call signal_compaction with iteration_marker=<current ISO 8601 UTC timestamp with millisecond precision, e.g., 2026-05-09T14:23:45.789Z> and proxy_value=<utilization/100.0>. The tool returns next_action='exit_clean'; exit immediately (rc=0). The watchdog observes the clean exit, marks your dispatch row status='compacted', and respawns a fresh supervisor with reset context. In-flight Implementer/Tester dispatches continue independently (separate subprocesses managed by BridgeDispatcher); the fresh supervisor reconstructs state from get_dispatch_status and get_recent_dispatches on its first iteration.
 
   When snapshot_age_seconds > 120, utilization is unknown — do not signal compaction during stale-snapshot windows. Continue normal iteration; recheck on the next iteration.
 

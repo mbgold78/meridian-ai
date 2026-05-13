@@ -33,6 +33,57 @@ def test_load_engineer_yaml_from_repo() -> None:
     assert cfg.system_prompt.startswith("You are Engineer at Meridian AI.")
 
 
+def test_engineer_yaml_system_prompt_contains_continuous_mode() -> None:
+    """M5-acceptance follow-on contract test (BACKLOG Option 1 fix):
+    engineer.yaml's system_prompt MUST contain the ``## Continuous
+    mode`` subsection wiring tick-paced iteration via `get_loop_state`
+    + `wait_for_next_tick`.
+
+    Convention 17 sub-type (b) presence-enforcement: asserts on
+    load-bearing semantic strings (subsection header, MCP tool names,
+    tick-cadence env var, per-tick step structure) rather than
+    full-text equality so minor wording refinements don't break the
+    test while structural deletions do.
+
+    Companion to the permission-widening contract at pm_loop.py:164
+    + :202 (`_require_role(caller_role, "pm", "engineer")` widening).
+    Without the ## Continuous mode subsection AND the permission
+    widening AND the mcp_tools_allowed allowlist extension, the
+    β-chain auto-completion blocker re-surfaces — Engineer subprocess
+    processes prompt, exits, supervisor marks dispatch failed.
+    """
+    cfg = load_agent_config(REPO_CONFIG_DIR / "engineer.yaml")
+    prompt = cfg.system_prompt
+
+    # Subsection header
+    assert "## Continuous mode" in prompt
+    # MCP tools widened at this commit
+    assert "get_loop_state" in prompt
+    assert "wait_for_next_tick" in prompt
+    # Tick cadence env var (shared with PM per daemon-lifecycle simplicity)
+    assert "MERIDIAN_ORCH_PM_LOOP_TICK_SECONDS" in prompt
+    # Per-tick sequence anchor (load-bearing structural marker)
+    assert "Per-tick sequence" in prompt
+
+
+def test_engineer_yaml_mcp_tools_allowed_contains_continuous_loop_tools() -> None:
+    """M5-acceptance follow-on contract test (BACKLOG Option 1 fix):
+    engineer.yaml's mcp_tools_allowed MUST include `get_loop_state`
+    and `wait_for_next_tick` so the supervisor launcher passes them
+    via `--allowedTools` to the Engineer subprocess.
+
+    Convention 17 sub-type (b) presence-enforcement. Companion to
+    ``test_engineer_yaml_system_prompt_contains_continuous_mode``
+    above: prompt instructs subprocess to call these tools; allowlist
+    extension enables the calls; permission framework widening at
+    pm_loop.py:164 + :202 accepts the calls server-side. All three
+    surfaces required for the β-chain auto-completion fix to land.
+    """
+    cfg = load_agent_config(REPO_CONFIG_DIR / "engineer.yaml")
+    assert "get_loop_state" in cfg.mcp_tools_allowed
+    assert "wait_for_next_tick" in cfg.mcp_tools_allowed
+
+
 def test_engineer_yaml_system_prompt_contains_compaction_trigger() -> None:
     """M5-flag-flips commit 5 contract test: engineer.yaml's system_prompt
     MUST contain the ``## Compaction trigger`` subsection wiring
