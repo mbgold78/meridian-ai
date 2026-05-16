@@ -27,10 +27,8 @@ import structlog
 from meridian_orchestrator.agents.registry import AgentRegistry
 from meridian_orchestrator.audit.sampler import Sampler
 from meridian_orchestrator.auth import TokenStore
-from meridian_orchestrator.bridge.canonical import (
-    CanonicalClone,
-    discover_upstream_url,
-)
+from meridian_orchestrator.bridge.canonical import discover_upstream_url
+from meridian_orchestrator.bridge.canonical_registry import CanonicalCloneRegistry
 from meridian_orchestrator.bridge.dispatcher import BridgeDispatcher
 from meridian_orchestrator.bridge.engineer_supervisor import EngineerSupervisor
 from meridian_orchestrator.bridge.oauth_usage import (
@@ -450,7 +448,8 @@ async def _run_lifespan_body(
                 upstream_url = await discover_upstream_url(
                     settings.substrate_working_directory
                 )
-                canonical = CanonicalClone(
+                canonical_registry = CanonicalCloneRegistry(storage=storage)
+                canonical = await canonical_registry.ensure_default(
                     path=settings.substrate_canonical_dir,
                     upstream_url=upstream_url,
                 )
