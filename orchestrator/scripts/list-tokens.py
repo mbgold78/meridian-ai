@@ -1,4 +1,23 @@
-"""List all MCP auth tokens (active and revoked) without revealing secrets.
+"""List indexed MCP auth tokens (active and revoked) without revealing secrets.
+
+**Intentional exclusion**: high-churn transient credentials issued by the
+daemon — per-dispatch Implementer/Tester tokens and per-spawn PM/Engineer
+supervisor tokens — are **NOT** surfaced by this command. They authenticate
+normally via MCP Bearer flow and revoke normally on dispatch terminal
+cleanup, but they are not registered in the keyring ``_index`` aggregator
+to prevent unbounded keyring blob growth (β-S11-5 / β-S11-6 root cause:
+Windows Credential Manager's per-credential blob limit is ~2560 bytes;
+exceeding it causes ``CredWrite`` to return ``WinError 1783`` and
+boot-blocks the daemon). For visibility into transient-token lifecycle,
+query the orchestrator ``audit_log`` and ``dispatches`` tables instead —
+``dispatch.token_created`` / ``dispatch.token_revoked`` audit rows carry
+the full per-token timeline.
+
+What this command DOES show:
+- Static seed tokens issued via ``scripts/issue-token.py`` (mike-cd label
+  for PM/Engineer/Implementer/Tester roles).
+- OAuth tokens issued via Claude Code's connector flow (long-lived,
+  one per operator-on-machine; alpha persistence).
 
 Usage:
     uv run python scripts/list-tokens.py
@@ -18,7 +37,11 @@ def main() -> int:
     store = TokenStore()
     records = store.list_records()
     if not records:
-        print("No tokens issued yet.")
+        print("No indexed tokens issued yet.")
+        print(
+            "(Transient per-dispatch and per-spawn supervisor tokens are "
+            "intentionally excluded; see module docstring.)"
+        )
         return 0
     header = (
         f"{'token_id':<18} {'role':<10} {'source':<8} {'status':<10} "

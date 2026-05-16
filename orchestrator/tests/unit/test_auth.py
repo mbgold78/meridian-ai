@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from meridian_orchestrator.auth import (
+    INDEX_USERNAME,
     TOKEN_PREFIX,
     TokenStore,
     _hash_secret,
     _parse_token,
+    _record_key,
 )
 
 
@@ -177,3 +181,256 @@ def test_find_oauth_caller_by_client_id_returns_most_recent_for_alpha_persistenc
 def test_parse_token_returns_components() -> None:
     parsed = _parse_token("mor_abcdef0123456789_thesecret")
     assert parsed == ("abcdef0123456789", "thesecret")
+
+
+# ---- β-S11-5 / β-S11-6 fix: indexed kwarg + unindexed transient tokens ----
+#
+# Root cause of the boot-blocking bug: TokenStore._write_index serialized the
+# full list of every token_id ever issued (active + revoked) to a single
+# keyring entry on every issue() call. Windows Credential Manager's per-
+# credential blob limit (~2560 bytes) is exceeded once a few hundred token
+# cycles accumulate, after which CredWrite returns WinError 1783 and the
+# daemon cannot boot because pm_supervisor.start() → _spawn() → token_issue
+# → _write_index fails.
+#
+# Fix (per operator disposition): add `indexed: bool = True` to issue(); pass
+# `indexed=False` for high-churn transient credentials (per-dispatch +
+# per-spawn supervisor tokens) so the index doesn't grow unbounded. lookup
+# and revoke continue to work because they read the per-token entry at
+# token:<id> directly without consulting _index. list_records intentionally
+# returns only indexed tokens (visibility tradeoff documented in
+# scripts/list-tokens.py prose).
+#
+# Rollback semantics: when indexed=True and the index-update sequence fails
+# AFTER token:<id> was written, the orphan token record is deleted before
+# re-raising so list_records remains the truthful enumeration of indexed
+# tokens.
+
+
+def test_issue_indexed_true_writes_both_record_and_index(
+    keyring_memory: object,
+) -> None:
+    """Default behavior (indexed=True): writes the per-token record AND
+    appends the token_id to _index. Preserves prior shape for static/OAuth
+    long-lived credentials."""
+    store = TokenStore(service="test-indexed-true")
+    issued = store.issue(agent_id=None, role="pm", label="static-pm")
+
+    # Per-token record present
+    record_raw = keyring_memory._store.get(  # type: ignore[attr-defined]
+        ("test-indexed-true", _record_key(issued.record.token_id))
+    )
+    assert record_raw is not None
+
+    # Index contains the token_id
+    index_raw = keyring_memory._store.get(  # type: ignore[attr-defined]
+        ("test-indexed-true", INDEX_USERNAME)
+    )
+    assert index_raw is not None
+    assert issued.record.token_id in json.loads(index_raw)["token_ids"]
+
+
+def test_issue_indexed_false_writes_record_but_not_index(
+    keyring_memory: object,
+) -> None:
+    """indexed=False writes the per-token record but does NOT touch _index.
+    This is the high-churn-transient-token path used by per-dispatch and
+    per-spawn supervisor tokens to prevent unbounded keyring blob growth."""
+    store = TokenStore(service="test-indexed-false")
+    issued = store.issue(
+        agent_id=None,
+        role="implementer",
+        label="dispatch:abc123",
+        indexed=False,
+    )
+
+    # Per-token record present (token still works for auth)
+    record_raw = keyring_memory._store.get(  # type: ignore[attr-defined]
+        ("test-indexed-false", _record_key(issued.record.token_id))
+    )
+    assert record_raw is not None
+
+    # Index entry was never created — verifies _write_index never fired
+    # for this issuance, which is the load-bearing property: even at
+    # arbitrary issuance rates the index blob stays at zero bytes for
+    # services that only issue unindexed tokens.
+    assert (
+        keyring_memory._store.get(  # type: ignore[attr-defined]
+            ("test-indexed-false", INDEX_USERNAME)
+        )
+        is None
+    )
+
+
+def test_lookup_works_for_unindexed_tokens() -> None:
+    """lookup() reads token:<id> directly and verifies the secret hash
+    constant-time. It does NOT consult _index, so unindexed tokens
+    authenticate identically to indexed ones."""
+    store = TokenStore(service="test-lookup-unindexed")
+    issued = store.issue(
+        agent_id=None,
+        role="implementer",
+        label="dispatch:xyz789",
+        indexed=False,
+    )
+
+    rec = store.lookup(issued.token)
+    assert rec is not None
+    assert rec.role == "implementer"
+    assert rec.label == "dispatch:xyz789"
+    assert rec.token_id == issued.record.token_id
+
+
+def test_revoke_works_for_unindexed_tokens() -> None:
+    """revoke() reads/writes token:<id> directly. Works for unindexed
+    tokens because the per-token record carries the revoked_at field;
+    _index is not consulted on the revocation path."""
+    store = TokenStore(service="test-revoke-unindexed")
+    issued = store.issue(
+        agent_id=None,
+        role="tester",
+        label="dispatch:def456",
+        indexed=False,
+    )
+
+    # First revoke succeeds (record exists + was not previously revoked)
+    assert store.revoke(issued.record.token_id) is True
+    # lookup now returns None (revoked_at is set)
+    assert store.lookup(issued.token) is None
+    # Idempotency: second revoke is a no-op
+    assert store.revoke(issued.record.token_id) is False
+
+
+def test_list_records_excludes_unindexed_tokens(
+    keyring_memory: object,
+) -> None:
+    """list_records iterates _index and reads each token:<id>. Unindexed
+    tokens are intentionally absent from _index so they don't appear here.
+
+    Visibility tradeoff: per-dispatch + per-spawn supervisor tokens
+    authenticate normally but are NOT operator-listable via the CLI.
+    Their lifecycle is recorded in audit_log (dispatch.token_created /
+    dispatch.token_revoked) and the dispatches table token_id column."""
+    store = TokenStore(service="test-list-mixed")
+    indexed_token = store.issue(
+        agent_id=None, role="pm", label="static-pm"
+    )
+    unindexed_token = store.issue(
+        agent_id=None,
+        role="implementer",
+        label="dispatch:hidden",
+        indexed=False,
+    )
+
+    records = store.list_records()
+    assert len(records) == 1
+    assert records[0].token_id == indexed_token.record.token_id
+
+    # The unindexed token still EXISTS in keyring at token:<id>...
+    assert (
+        keyring_memory._store.get(  # type: ignore[attr-defined]
+            ("test-list-mixed", _record_key(unindexed_token.record.token_id))
+        )
+        is not None
+    )
+    # ...and still authenticates via lookup...
+    assert store.lookup(unindexed_token.token) is not None
+    # ...but list_records intentionally does not surface it.
+
+
+def test_indexed_write_failure_rolls_back_token_record(
+    monkeypatch: pytest.MonkeyPatch, keyring_memory: object
+) -> None:
+    """If _write_index fails AFTER token:<id> has been written, the
+    just-written per-token record is deleted before re-raising. Without
+    rollback, the keyring would be left with an orphan record that
+    list_records can never surface (since _write_index failed, the id
+    never entered the index) — which would mean every list_records call
+    permanently undercounts and re-issues against the same token_id
+    could return mismatched metadata.
+
+    This simulates the exact β-S11-5 / β-S11-6 production failure shape:
+    Windows CredentialBlob size limit causing CredWrite to return
+    WinError 1783 on _write_index even though _write_record succeeded
+    for the smaller per-token blob."""
+    store = TokenStore(service="test-rollback")
+
+    def failing_write_index(token_ids: list[str]) -> None:
+        # Simulates the boot-blocking failure mode observed in production:
+        # token:<id> blob writes succeed (smaller), index blob exceeds
+        # limit and CredWrite raises WinError 1783.
+        raise OSError(1783, "CredWrite", "The stub received bad data")
+
+    monkeypatch.setattr(store, "_write_index", failing_write_index)
+
+    with pytest.raises(OSError):
+        store.issue(agent_id=None, role="pm", label="static-pm")
+
+    # After rollback, no token:* record should remain for this service.
+    # We don't know the failed token_id (issue raised before returning),
+    # so verify the absence by scanning the in-memory keyring for any
+    # entry whose username starts with "token:".
+    orphan_entries = [
+        (svc, user)
+        for (svc, user) in keyring_memory._store  # type: ignore[attr-defined]
+        if svc == "test-rollback" and user.startswith("token:")
+    ]
+    assert orphan_entries == [], (
+        f"rollback should have deleted orphaned token record(s); "
+        f"found: {orphan_entries}"
+    )
+
+
+def test_indexed_write_failure_does_not_mask_original_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If the cleanup delete itself raises, the original _write_index
+    failure must still propagate to the caller. Cleanup is best-effort;
+    silently masking the real error would hide root cause."""
+    import keyring as keyring_module
+
+    store = TokenStore(service="test-cleanup-also-fails")
+
+    def failing_write_index(token_ids: list[str]) -> None:
+        raise OSError(1783, "CredWrite", "The stub received bad data")
+
+    def failing_delete(service: str, username: str) -> None:
+        raise RuntimeError("simulated cleanup-delete failure")
+
+    monkeypatch.setattr(store, "_write_index", failing_write_index)
+    monkeypatch.setattr(keyring_module, "delete_password", failing_delete)
+
+    # The OSError from _write_index propagates, NOT the RuntimeError
+    # from the failing cleanup. Root cause is preserved.
+    with pytest.raises(OSError, match="The stub received bad data"):
+        store.issue(agent_id=None, role="pm", label="static-pm")
+
+
+def test_indexed_false_skips_rollback_path_entirely(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """indexed=False never calls _write_index, so even if _write_index
+    would fail, an indexed=False issuance succeeds. Verifies the
+    high-churn-transient-token path is fully isolated from index
+    failures — load-bearing for daemon boot reliability when the index
+    is already at/over the CredentialBlob limit from prior cycles."""
+    store = TokenStore(service="test-unindexed-skips-rollback")
+
+    def always_failing_write_index(token_ids: list[str]) -> None:
+        # Would always fail if called — but indexed=False shouldn't call it.
+        raise OSError(1783, "CredWrite", "The stub received bad data")
+
+    monkeypatch.setattr(
+        store, "_write_index", always_failing_write_index
+    )
+
+    # No exception — _write_index is never invoked for indexed=False.
+    issued = store.issue(
+        agent_id=None,
+        role="implementer",
+        label="dispatch:safe",
+        indexed=False,
+    )
+    assert issued.record.role == "implementer"
+    # Token still authenticates via lookup.
+    assert store.lookup(issued.token) is not None

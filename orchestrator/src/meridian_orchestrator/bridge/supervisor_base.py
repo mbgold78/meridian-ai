@@ -632,11 +632,22 @@ class LongRunningSupervisor(ABC):
             },
         )
 
+        # β-S11-5/6 fix: indexed=False for high-churn per-spawn supervisor
+        # tokens. Same reasoning as bridge/dispatcher.py — the keyring
+        # `_index` blob would otherwise grow unbounded across supervisor
+        # respawn cycles and trip Windows Credential Manager's
+        # ~2560-byte CredentialBlob limit, boot-blocking the daemon.
+        # Per-token `token:<id>` record is still written, so the
+        # subprocess's MCP Bearer auth and the cleanup-path revocations
+        # both work normally; tradeoff is that supervisor per-spawn
+        # tokens don't surface in `scripts/list-tokens.py` (visibility
+        # via audit_log / dispatches instead).
         issued = await asyncio.to_thread(
             self._token_store.issue,
             self._supervisor_agent_id(),
             self._token_role(),
             self._token_label(),
+            indexed=False,
         )
         await self._storage.execute(
             "UPDATE dispatches SET token_id = ? WHERE id = ?",

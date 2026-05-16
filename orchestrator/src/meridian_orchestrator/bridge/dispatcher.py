@@ -531,11 +531,22 @@ class BridgeDispatcher:
         proc: SubprocessHandle | None = None
         terminate_reason = "completed"
         try:
+            # β-S11-5/6 fix: indexed=False for high-churn per-dispatch tokens
+            # so the keyring `_index` aggregator doesn't grow unbounded and
+            # exceed the underlying backend's per-credential blob limit
+            # (Windows Credential Manager: ~2560 bytes; CredWrite returns
+            # WinError 1783 above that, boot-blocking the daemon). The
+            # per-token record at `token:<id>` is still written, so MCP
+            # Bearer auth (lookup) and revocation work normally; the
+            # tradeoff is that per-dispatch tokens don't appear in
+            # `scripts/list-tokens.py` — their lifecycle is visible via
+            # audit_log + dispatches table queries instead.
             issued_token = await asyncio.to_thread(
                 self._token_store.issue,
                 role_agent_id,
                 role,
                 f"dispatch:{dispatch_id}",
+                indexed=False,
             )
             await self._storage.execute(
                 "UPDATE dispatches SET token_id = ? WHERE id = ?",

@@ -235,6 +235,7 @@ class TokenStore:
         source: TokenSource = "static",
         client_id: str | None = None,
         expires_at: str | None = None,
+        indexed: bool = True,
     ) -> IssuedToken:
         """Issue a new token for ``role`` and bind it to ``agent_id``.
 
@@ -243,6 +244,40 @@ class TokenStore:
 
         ``source`` distinguishes static (CLI-issued) from OAuth-issued tokens.
         ``client_id`` and ``expires_at`` are only meaningful for OAuth tokens.
+
+        ``indexed`` controls whether the issued ``token_id`` is appended to the
+        keyring ``_index`` aggregator. Default ``True`` preserves prior
+        behavior for static/OAuth long-lived credentials and keeps them
+        visible via :meth:`list_records` / ``scripts/list-tokens.py``. Pass
+        ``False`` for high-churn transient credentials (per-dispatch
+        Implementer/Tester tokens; per-spawn PM/Engineer supervisor
+        tokens). Unindexed tokens still authenticate normally via
+        :meth:`lookup` because the per-token record at
+        ``token:<token_id>`` is always written, and they revoke normally
+        via :meth:`revoke` for the same reason — both code paths read
+        the per-token entry directly without going through ``_index``.
+        Unindexed tokens are intentionally excluded from
+        :meth:`list_records` so the keyring ``_index`` blob does not grow
+        unbounded and exceed the underlying keyring backend's
+        per-credential size limit (Windows Credential Manager:
+        ~2560 bytes; β-S11-5 / β-S11-6 root cause — once the limit was
+        reached, ``CredWrite`` returned ``WinError 1783`` and the daemon
+        could no longer boot because ``pm_supervisor.start()`` failed in
+        ``_write_index`` on every spawn).
+
+        **Rollback semantics** (``indexed=True`` only): if any step in
+        the index-update sequence fails after the ``token:<token_id>``
+        record has been written, the just-written record is deleted
+        before re-raising. Without rollback, the keyring would be left
+        with an orphan record that :meth:`list_records` would never
+        surface (since the failed index write means the id never entered
+        the index) but whose secret-hash would still pass
+        :meth:`lookup` for the in-process ``IssuedToken`` returned to
+        the caller — and any subsequent re-issue with the same
+        ``token_id`` (vanishingly unlikely but not impossible) would
+        return a record with mismatched metadata. The cleanup delete is
+        best-effort: if it itself raises, the original error still
+        propagates so the caller is never silently masked.
         """
         if not role:
             raise ValueError("role must be non-empty")
@@ -261,10 +296,25 @@ class TokenStore:
             expires_at=expires_at,
         )
         self._write_record(record)
-        index = self._read_index()
-        if token_id not in index:
-            index.append(token_id)
-            self._write_index(index)
+        if indexed:
+            try:
+                index = self._read_index()
+                if token_id not in index:
+                    index.append(token_id)
+                    self._write_index(index)
+            except Exception:
+                # Rollback the just-written per-token record so we don't
+                # leave an orphan that list_records() would never surface
+                # (the failed index write means the id never entered the
+                # index). Best-effort: suppress cleanup errors so the
+                # original write failure is what propagates to the caller.
+                try:
+                    keyring.delete_password(
+                        self._service, _record_key(token_id)
+                    )
+                except Exception:
+                    pass
+                raise
         token = f"{TOKEN_PREFIX}_{token_id}_{secret}"
         return IssuedToken(token=token, record=record)
 
