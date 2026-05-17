@@ -1854,6 +1854,7 @@ async def serve(
     ready: asyncio.Event | None = None,
     registry: AgentRegistry | None = None,
     storage: Storage | None = None,
+    store: TokenStore | None = None,
     get_engineer_supervisor: Callable[[], LongRunningSupervisor | None] | None = None,
     get_pm_supervisor: Callable[[], LongRunningSupervisor | None] | None = None,
     get_dispatcher: Callable[[], BridgeDispatcher | None] | None = None,
@@ -1876,10 +1877,16 @@ async def serve(
     dispatch-row state. Pass ``get_dispatcher`` to register the M5
     dispatch-initiation wrappers (dispatch_implementer, dispatch_tester);
     ``None`` keeps those tools unregistered for tests that don't need
-    them.
+    them. Pass ``store`` to supply a TokenStore with transient_store
+    wired (β-S11-15 fix: required when supervisors/dispatcher issue
+    per-spawn tokens via TransientTokenStore — without this the auth
+    lookup falls back to keyring-only and silently rejects Bearer auth
+    for SQLite-stored tokens); ``None`` preserves the test-fixture
+    default (vanilla keyring-only TokenStore).
     """
     mcp = build_server(
         settings,
+        store=store,
         registry=registry,
         storage=storage,
         get_engineer_supervisor=get_engineer_supervisor,

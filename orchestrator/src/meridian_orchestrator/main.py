@@ -349,19 +349,28 @@ async def _run_lifespan_body(
     pointing at a temp data dir.
     """
     async with _lifespan(settings) as storage:
-        # M5-sqlite-transient-token-store slice 1b commit 6: construct
-        # the SQLite-backed transient-token store + wire it into all
-        # TokenStore() instances created in this lifespan. Per the slice
-        # 1b spec § Lifespan ordering table, steps 2-3: construct
-        # transient_store immediately after migrations are applied so
-        # downstream TokenStore() constructions (BridgeDispatcher,
-        # PMSupervisor, EngineerSupervisor) all get the SQLite-routed
-        # backend. The single transient_store instance is shared across
-        # all TokenStore() constructions in this lifespan — the store is
-        # stateless beyond its Storage-backed write surface, so sharing
-        # is correct and avoids the keyring-only fallback shape per
-        # slice 1a's `transient_store=None` regression-guard tests.
+        # M5-sqlite-transient-token-store slice 1b commit 6 + β-S11-15
+        # refactor: construct the SQLite-backed transient-token store + a
+        # single lifespan-scoped TokenStore instance that wraps it. The
+        # same `token_store` is passed to all downstream constructions
+        # (BridgeDispatcher, PMSupervisor, EngineerSupervisor) AND to
+        # serve_mcp() so the MCP server's auth-lookup reader and the
+        # dispatcher/supervisor token writers share one transient-aware
+        # authority. Per slice 1b spec § Lifespan ordering table, steps
+        # 2-3: construct transient_store immediately after migrations.
+        #
+        # β-S11-15 (2026-05-17) root cause + fix: slice 1b commit 6 wired
+        # transient_store at 4 per-site TokenStore(transient_store=...)
+        # constructions but missed serve_mcp(), which fell through to
+        # server.py:`store if store is not None else TokenStore()` —
+        # keyring-only. Result: writer wrote per-spawn supervisor tokens
+        # to SQLite while reader looked up via keyring-only, silent
+        # Bearer-auth rejection, supervisor subprocesses exited rc=0 with
+        # last_tool_called=None, halted at respawn cap. The single
+        # shared instance makes the reader-writer consistency invariant
+        # structural rather than per-call-site discipline.
         transient_store = TransientTokenStore(storage=storage)
+        token_store = TokenStore(transient_store=transient_store)
 
         # Step 4 (per spec § Lifespan ordering): one-shot orphan +
         # double-presence probe. Pure observability (M1=(c) ratified
@@ -376,7 +385,7 @@ async def _run_lifespan_body(
         if settings.transient_token_orphan_probe_on_startup:
             probe = TransientTokenStartupProbe(
                 storage=storage,
-                token_store=TokenStore(transient_store=transient_store),
+                token_store=token_store,
             )
             try:
                 probe_result = await probe.run()
@@ -451,7 +460,7 @@ async def _run_lifespan_body(
                 )
                 dispatcher = BridgeDispatcher(
                     storage=storage,
-                    token_store=TokenStore(transient_store=transient_store),
+                    token_store=token_store,
                     canonical=canonical,
                     worktrees_root=settings.dispatch_worktrees_root,
                     # M5-flag-flips F4: per-dispatch stderr log root.
@@ -623,6 +632,7 @@ async def _run_lifespan_body(
             mcp_task = asyncio.create_task(
                 serve_mcp(
                     settings,
+                    store=token_store,
                     ready=mcp_ready,
                     registry=registry,
                     storage=storage,
@@ -754,9 +764,7 @@ async def _run_lifespan_body(
                                     registry=registry,
                                     working_directory=settings.pm_continuous_dir,
                                     storage=storage,
-                                    token_store=TokenStore(
-                                        transient_store=transient_store
-                                    ),
+                                    token_store=token_store,
                                     # M5-flag-flips F4: stderr drain
                                     # destination for the PM-continuous
                                     # supervisor subprocess.
@@ -793,9 +801,7 @@ async def _run_lifespan_body(
                                     registry=registry,
                                     working_directory=settings.engineer_supervisor_dir,
                                     storage=storage,
-                                    token_store=TokenStore(
-                                        transient_store=transient_store
-                                    ),
+                                    token_store=token_store,
                                     # M5-flag-flips F4: stderr drain
                                     # destination for the Engineer
                                     # supervisor subprocess.
