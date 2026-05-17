@@ -28,12 +28,14 @@ import hashlib
 import hmac
 import json
 import secrets
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal
 
 import keyring
+import structlog
 from keyring.errors import PasswordDeleteError
 
 if TYPE_CHECKING:
@@ -48,6 +50,10 @@ TokenSource = Literal["static", "oauth"]
 
 _HEX = "0123456789abcdef"
 
+logger = structlog.get_logger(__name__)
+
+LOOKUP_LATENCY_METRIC_KIND: str = "auth.lookup.duration_us"
+
 
 def _now_iso() -> str:
     return datetime.now(tz=UTC).isoformat(timespec="seconds")
@@ -55,6 +61,19 @@ def _now_iso() -> str:
 
 def _hash_secret(secret: str) -> str:
     return hashlib.sha256(secret.encode("utf-8")).hexdigest()
+
+
+def _hash_token_id(token_id: str) -> str:
+    """sha256(token_id) hex.
+
+    Used by the lookup-latency observability surface to emit a stable,
+    one-way reference to the looked-up id without exposing the raw
+    ``token_id`` to log readers. The id alone is not the credential
+    (the secret-half of ``mor_<id>_<secret>`` is what authenticates),
+    but the unhashed id can still be correlated against other auth-log
+    surfaces; hashing is defensive against that correlation.
+    """
+    return hashlib.sha256(token_id.encode("utf-8")).hexdigest()
 
 
 def _new_token_id() -> str:
@@ -346,25 +365,52 @@ class TokenStore:
         first; on miss, fall back to keyring. Active-record lookup short-
         circuits on the first hit (returning a real record OR None per the
         SQLite-side semantics — revoked/expired tokens return None from the
-        transient backend just as they do from the keyring path)."""
-        if self._transient_store is not None:
-            record = await self._transient_store.lookup(token)
-            if record is not None:
-                return record
-        parsed = _parse_token(token)
-        if parsed is None:
-            return None
-        token_id, secret = parsed
-        record = self._read_record(token_id)
-        if record is None:
-            return None
-        if record.revoked_at is not None:
-            return None
-        if record.is_expired():
-            return None
-        if not hmac.compare_digest(record.secret_hash, _hash_secret(secret)):
-            return None
-        return record
+        transient backend just as they do from the keyring path).
+
+        Emits one structlog INFO row per call with ``metric_kind=
+        "auth.lookup.duration_us"`` and ``backend`` in ``{"sqlite",
+        "keyring", "miss"}`` (slice 1b commit 7 latency observability;
+        A3=(b) ratified — structlog, not audit log, to avoid
+        per-MCP-call audit bloat). ``token_id_hash`` is sha256-hex; the
+        raw ``token_id`` never leaves the function.
+        """
+        start_ns = time.perf_counter_ns()
+        backend: str = "miss"
+        token_id_for_hash: str = ""
+        try:
+            if self._transient_store is not None:
+                record = await self._transient_store.lookup(token)
+                if record is not None:
+                    backend = "sqlite"
+                    token_id_for_hash = record.token_id
+                    return record
+            parsed = _parse_token(token)
+            if parsed is None:
+                return None
+            token_id, secret = parsed
+            token_id_for_hash = token_id
+            record = self._read_record(token_id)
+            if record is None:
+                return None
+            if record.revoked_at is not None:
+                return None
+            if record.is_expired():
+                return None
+            if not hmac.compare_digest(
+                record.secret_hash, _hash_secret(secret)
+            ):
+                return None
+            backend = "keyring"
+            return record
+        finally:
+            duration_us = (time.perf_counter_ns() - start_ns) // 1000
+            logger.info(
+                "auth.lookup.duration",
+                metric_kind=LOOKUP_LATENCY_METRIC_KIND,
+                backend=backend,
+                duration_us=int(duration_us),
+                token_id_hash=_hash_token_id(token_id_for_hash),
+            )
 
     async def lookup_by_token_id(self, token_id: str) -> TokenRecord | None:
         """Look up a token record by id alone. Used by the OAuth provider when
@@ -381,12 +427,33 @@ class TokenStore:
         R1=(b) routing: try transient first; if hit, return — the SQLite
         backend honors the revoked-record-returned contract too. Else fall
         back to keyring.
+
+        Emits the same structlog INFO latency row as :meth:`lookup`
+        (slice 1b commit 7).
         """
-        if self._transient_store is not None:
-            record = await self._transient_store.lookup_by_token_id(token_id)
+        start_ns = time.perf_counter_ns()
+        backend: str = "miss"
+        try:
+            if self._transient_store is not None:
+                record = await self._transient_store.lookup_by_token_id(
+                    token_id
+                )
+                if record is not None:
+                    backend = "sqlite"
+                    return record
+            record = self._read_record(token_id)
             if record is not None:
-                return record
-        return self._read_record(token_id)
+                backend = "keyring"
+            return record
+        finally:
+            duration_us = (time.perf_counter_ns() - start_ns) // 1000
+            logger.info(
+                "auth.lookup.duration",
+                metric_kind=LOOKUP_LATENCY_METRIC_KIND,
+                backend=backend,
+                duration_us=int(duration_us),
+                token_id_hash=_hash_token_id(token_id),
+            )
 
     def find_oauth_caller_by_client_id(
         self, client_id: str, role: str
