@@ -10,6 +10,51 @@ Sketched in `docs/kickoff/12-phase-two-engineering-team.md`.
 
 ## Deferred
 
+- **β-S11-12 — Agent auto-resolve skill / incident triage policy (operator-ratified 2026-05-17).** Agents escalate tactical uncertainties too readily to the human-in-the-loop or Operator Fix Window. Recent examples: perceived Engineer liveness failure that resolved cleanly via authoritative DB state (operator-perceived ~13min stall was actual ~1min claim latency); duplicate PM lifecycle ownership across windows (β-S11-11, fork BACKLOG); canonical visibility ambiguity (β-S11-9); Engineer commit-boundary gap (β-S11-10). Underlying gap: no role-specific auto-resolve discipline — agents propagate raw confusion upward without first observing authoritative state, classifying the issue, or attempting bounded safe actions within their role envelope.
+
+  **Proposal — role-specific auto-resolve skill.** Each role (PM, Engineer, Implementer, Tester, Operator Fix Window) runs a four-step discipline before any escalation:
+  1. **Observe authoritative state** before escalating. Read the database, query MCP state, check the relevant authoritative surface — never escalate from perception alone.
+  2. **Classify the issue type** against a closed enum (`cadence_normal`, `liveness_suspect`, `ownership_ambiguity`, `spec_ambiguity`, `visibility_gap`, `infrastructure_failure`, `permission_gap`, `pattern_uncertainty`).
+  3. **Apply bounded safe actions** within the role envelope (re-read, sanity-check time arithmetic, retry within cadence window, etc.); never mutate state outside the envelope.
+  4. **Escalate only with a structured incident packet**: symptom, authoritative state checked, actions attempted, classification, why out-of-envelope, exact decision needed, mutations performed (or "no mutation performed").
+
+  **Core rule:** agents must not escalate raw confusion; they escalate classified incidents.
+
+  **Initial PM auto-resolve policy (unclaimed task example, mirrored into pm.yaml § Auto-resolve discipline):**
+  - Check task status, claimed_at, dispatch rows, cadence window, supervisor/loop state if exposed.
+  - Within cadence window → classify `cadence_normal` and continue monitoring.
+  - Claimed → resume monitoring.
+  - Pending beyond threshold → classify `liveness_suspect` and escalate to Operator Fix Window with structured incident packet.
+  - Never redispatch the same scope without checking for duplicate tasks first (β-S11-11 lifecycle ownership rule).
+  - Never ask human tactical questions unless classification requires a policy decision.
+
+  **Trigger:** prompt-level policy lands immediately in `config/agents/pm.yaml` § Auto-resolve discipline and `config/agents/engineer.yaml` § Auto-resolve discipline (this commit). Phase 2 consideration: first-class MCP/tool support (e.g., `report_incident(packet)` wrapper that ratchets through the classification surface) if repeated incidents persist past prompt-level policy.
+
+  **Touchpoint:** `config/agents/pm.yaml` § Auto-resolve discipline; `config/agents/engineer.yaml` § Auto-resolve discipline. Implementer/Tester equivalents deferred until a real instance surfaces. Operator Fix Window discipline lives in operator-side instructions, not agent yaml.
+
+  **Paired with β-S11-13** (PM autonomous telemetry contract): auto-resolve prevents premature escalation; telemetry prevents silent waiting. Together they keep the human out of the glue role.
+
+- **β-S11-13 — PM autonomous telemetry contract (operator-ratified 2026-05-17).** During autonomous execution, PM does not proactively report status; operator has to ask "status?" which creates uncertainty, perceived stalls, and false liveness escalations. When PM does respond, output may be tactical noise rather than structured progress signal.
+
+  **Proposal — PM autonomous telemetry contract.** PM emits periodic structured status without operator prompting during active autonomous workstreams.
+
+  **Cadence:**
+  - Every 15 minutes during active autonomous execution.
+  - Immediately on every major state transition: task submitted; task claimed; dispatch issued; dispatch running; dispatch completed / failed / timed out; tester pass / fail; merge / push complete; blocked / out-of-envelope classification.
+  - Quiet when no active autonomous workstream exists.
+
+  **Format (10-line structured packet):** (1) active workstream; (2) current owner (PM/Engineer/Implementer/Tester/Operator); (3) current task or dispatch id; (4) current state; (5) last transition time (ISO 8601 UTC); (6) expected next transition; (7) time-to-concern threshold; (8) auto-resolve classification per β-S11-12, if relevant; (9) human action required (yes/no); (10) frozen workstreams reminder, if relevant.
+
+  **Example:** "Slice 1b status — Engineer composing spec. Task 20ee1935 claimed at 14:11 UTC. Current owner: Engineer. Expected next transition: staged spec by ~14:50 UTC. Time-to-concern: 14:55 UTC. Auto-resolve classification: cadence_normal. Human action required: no."
+
+  **Escalation discipline (paired with β-S11-12):** PM does not ask tactical questions in telemetry. If action is needed, PM includes a structured incident packet (symptom / authoritative checks / attempted safe actions / why out-of-envelope / exact decision needed) — not a question. Operator decides; PM classifies.
+
+  **Trigger:** prompt-level contract lands immediately in `config/agents/pm.yaml` § Autonomous telemetry contract (this commit).
+
+  **Touchpoint:** `config/agents/pm.yaml` § Autonomous telemetry contract. Engineer telemetry equivalent deferred — Engineer's existing per-dispatch task-note discipline (§ Escalation patterns) already carries the structured-synthesis surface; PM telemetry is the primary operator-facing gap.
+
+  **Paired with β-S11-12.**
+
 - Subscription tier identification (M7+ deployment surface). The `/api/oauth/usage` endpoint exposes utilization normalized 0-100% per counter but does not expose a `plan` field — the absolute capacity ceilings of the operator's subscription are not directly readable. Not blocking M5: routing decisions need normalized utilization, not absolute ceilings, and the `subscription_first_architecture` memory's polled-snapshot mechanism works without tier identification. Becomes relevant if/when the orchestrator surfaces tier info to end-user-facing dashboards, upgrade-path nudges, or absolute-token reporting (none in Phase 1 scope). Spec home: `project_subscription_first_architecture` memory § Subscription tier identification gap.
 - Add direct unit tests for `meridian_orchestrator.server._resolve_agent_id` mirroring `tests/unit/test_server_helpers.py`'s pattern for `_resolve_caller_token_id`. Identity-resolution helpers are load-bearing across every wrapper but currently only exercised via integration tests through the request context. Surfaced at M5-record-api-call commit 4 when its sibling helper got direct unit coverage. Not blocking M5; hygiene work for the next time these helpers are touched.
 - Consider renaming `api_usage.window_start` to `api_usage.call_timestamp` at next migration cycle. Semantic drift since the subscription-first architecture: the column actually holds the call's timestamp (per-counter window membership is reconstructed at query time from the polled `/api/oauth/usage` snapshot's `resets_at` boundaries), but the legacy "window_start" name suggests it's the start of a window. Schema names that lie to future readers compound into archaeology pain. Not blocking M5; hygiene for future schema work. Touchpoint: `tools/budget.py:record_api_call` writes the call timestamp to this column; future query-side aggregation in `tools/budget.py:get_token_usage` interprets it as a per-call timestamp. A rename migration would CREATE-new-column, copy values, drop old column.
