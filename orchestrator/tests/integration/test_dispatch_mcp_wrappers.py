@@ -135,7 +135,7 @@ async def registry_with_tokens(
     _seed_repo_yamls(settings.agents_dir)
     token_store = TokenStore()
     for role in ("engineer", "implementer", "tester"):
-        token_store.issue(agent_id=None, role=role, label=f"{role}-test")
+        await token_store.issue(agent_id=None, role=role, label=f"{role}-test")
     registry = AgentRegistry(settings.agents_dir, token_store=token_store)
     async with registry.lifespan():
         yield registry, token_store
@@ -361,7 +361,7 @@ async def test_engineer_dispatch_implementer_full_lifecycle_over_mcp(
 
     eng = registry.get("engineer")
     assert eng is not None
-    eng_token = token_store.issue(
+    eng_token = await token_store.issue(
         agent_id=eng.agent_id, role="engineer", label="engineer-supervisor"
     )
 
@@ -440,7 +440,7 @@ async def test_record_caller_activity_writer_fires_for_wrappers(
 
     eng = registry.get("engineer")
     assert eng is not None
-    eng_token = token_store.issue(
+    eng_token = await token_store.issue(
         agent_id=eng.agent_id, role="engineer", label="engineer-supervisor"
     )
 
@@ -486,7 +486,7 @@ async def test_dispatcher_not_ready_returns_conflict(
 
     eng = registry.get("engineer")
     assert eng is not None
-    eng_token = token_store.issue(
+    eng_token = await token_store.issue(
         agent_id=eng.agent_id, role="engineer", label="engineer-supervisor"
     )
     spec_path = tmp_path / "phase-spec.md"
@@ -544,7 +544,7 @@ async def test_pm_token_cannot_call_dispatch_implementer(
         poll_interval_seconds=0.02,
     )
 
-    pm_token = token_store.issue(
+    pm_token = await token_store.issue(
         agent_id="pm-uuid", role="pm", label="pm-test"
     )
     spec_path = tmp_path / "phase-spec.md"
@@ -583,7 +583,7 @@ async def test_pm_token_cannot_call_complete_dispatch(
     only)."""
     registry, _token_store = registry_with_tokens
     token_store = TokenStore()
-    pm_token = token_store.issue(
+    pm_token = await token_store.issue(
         agent_id="pm-uuid", role="pm", label="pm-test"
     )
     base_url = f"http://{settings.mcp_host}:{settings.mcp_port}"
@@ -637,7 +637,7 @@ async def test_dispatch_implementer_resolves_model_via_registry(
 
     eng = registry.get("engineer")
     assert eng is not None
-    eng_token = token_store.issue(
+    eng_token = await token_store.issue(
         agent_id=eng.agent_id, role="engineer", label="engineer-supervisor"
     )
 

@@ -537,7 +537,7 @@ async def test_conserve_transition_triggers_compaction_lifecycle(
     agents_dir = tmp_path / "config" / "agents"
     _seed_repo_yamls(agents_dir)
     token_store = TokenStore(service="continuous-loop-conserve")
-    issued = token_store.issue(
+    issued = await token_store.issue(
         agent_id=None, role="pm", label="pm-supervisor-test"
     )
     pm_agent_id = issued.record.agent_id

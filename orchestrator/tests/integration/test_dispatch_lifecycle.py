@@ -233,7 +233,7 @@ async def test_serial_implementer_dispatch_completes(
 
     # The token was revoked.
     assert row["token_id"] is not None
-    revoked = token_store.lookup_by_token_id(row["token_id"])
+    revoked = await token_store.lookup_by_token_id(row["token_id"])
     assert revoked is not None
     assert revoked.revoked_at is not None
 

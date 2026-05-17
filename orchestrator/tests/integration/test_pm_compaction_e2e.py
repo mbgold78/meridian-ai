@@ -161,7 +161,7 @@ async def test_pm_compaction_e2e_handoff_write_signal_respawn_read(
     agents_dir = tmp_path / "config" / "agents"
     _seed_repo_yamls(agents_dir)
     token_store = TokenStore(service="pm-compaction-e2e")
-    issued = token_store.issue(
+    issued = await token_store.issue(
         agent_id=None, role="pm", label="pm-supervisor-test"
     )
     pm_agent_id = issued.record.agent_id

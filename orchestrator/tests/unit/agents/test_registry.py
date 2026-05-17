@@ -46,7 +46,7 @@ async def test_initial_load_resolves_uuids_from_keyring(tmp_path: Path) -> None:
     _seed_repo_yamls(agents_dir)
     store = TokenStore(service="registry-test-resolve")
     issued = {
-        role: store.issue(agent_id=None, role=role, label=f"{role}-test")
+        role: await store.issue(agent_id=None, role=role, label=f"{role}-test")
         for role in ("pm", "engineer", "implementer", "tester")
     }
     registry = AgentRegistry(agents_dir, token_store=store)
@@ -62,8 +62,8 @@ async def test_get_by_agent_id(tmp_path: Path) -> None:
     agents_dir = tmp_path / "agents"
     _seed_repo_yamls(agents_dir, roles=("pm", "engineer"))
     store = TokenStore(service="registry-test-getby")
-    pm_token = store.issue(agent_id=None, role="pm", label="x")
-    store.issue(agent_id=None, role="engineer", label="x")
+    pm_token = await store.issue(agent_id=None, role="pm", label="x")
+    await store.issue(agent_id=None, role="engineer", label="x")
     registry = AgentRegistry(agents_dir, token_store=store)
     await registry.initial_load()
 
@@ -81,8 +81,8 @@ async def test_orphan_token_warning_on_unconfigured_role(tmp_path: Path) -> None
     agents_dir = tmp_path / "agents"
     _seed_repo_yamls(agents_dir, roles=("pm",))
     store = TokenStore(service="registry-test-orphan")
-    store.issue(agent_id=None, role="pm", label="x")
-    store.issue(agent_id=None, role="engineer", label="orphan")
+    await store.issue(agent_id=None, role="pm", label="x")
+    await store.issue(agent_id=None, role="engineer", label="orphan")
     registry = AgentRegistry(agents_dir, token_store=store)
     await registry.initial_load()
 
@@ -103,8 +103,8 @@ async def test_reload_picks_up_new_config(tmp_path: Path) -> None:
     agents_dir = tmp_path / "agents"
     _seed_repo_yamls(agents_dir, roles=("engineer",))
     store = TokenStore(service="registry-test-reload")
-    store.issue(agent_id=None, role="engineer", label="x")
-    store.issue(agent_id=None, role="implementer", label="x")
+    await store.issue(agent_id=None, role="engineer", label="x")
+    await store.issue(agent_id=None, role="implementer", label="x")
     registry = AgentRegistry(agents_dir, token_store=store)
 
     await registry.initial_load()
@@ -133,7 +133,7 @@ async def test_lifespan_starts_watcher(tmp_path: Path) -> None:
     agents_dir = tmp_path / "agents"
     _seed_repo_yamls(agents_dir, roles=("engineer",))
     store = TokenStore(service="registry-test-watcher")
-    store.issue(agent_id=None, role="engineer", label="x")
+    await store.issue(agent_id=None, role="engineer", label="x")
     registry = AgentRegistry(agents_dir, token_store=store)
 
     async with registry.lifespan():
@@ -148,7 +148,7 @@ async def test_lifespan_stops_watcher_cleanly(tmp_path: Path) -> None:
     agents_dir = tmp_path / "agents"
     _seed_repo_yamls(agents_dir, roles=("engineer",))
     store = TokenStore(service="registry-test-stop")
-    store.issue(agent_id=None, role="engineer", label="x")
+    await store.issue(agent_id=None, role="engineer", label="x")
     registry = AgentRegistry(agents_dir, token_store=store)
 
     async with registry.lifespan():
@@ -187,7 +187,7 @@ async def _registry_with_full_roster(
     _seed_repo_yamls(agents_dir)
     store = TokenStore(service=service)
     for role in ("pm", "engineer", "implementer", "tester"):
-        store.issue(agent_id=None, role=role, label=f"{role}-seed-test")
+        await store.issue(agent_id=None, role=role, label=f"{role}-seed-test")
     registry = AgentRegistry(agents_dir, token_store=store)
     await registry.initial_load()
     return registry
@@ -450,9 +450,9 @@ async def test_reload_locked_includes_oauth_tokens_in_snapshot(
     store = TokenStore(service="registry-test-oauth-reload")
 
     # Static PM (supervisor identity)
-    static_pm = store.issue(agent_id=None, role="pm", label="static-pm")
+    static_pm = await store.issue(agent_id=None, role="pm", label="static-pm")
     # OAuth PM (operator identity)
-    oauth_pm = store.issue(
+    oauth_pm = await store.issue(
         agent_id=None,
         role="pm",
         label="oauth:test",
@@ -487,8 +487,8 @@ async def test_get_role_returns_static_when_oauth_agent_exists_for_same_role(
     _seed_repo_yamls(agents_dir, roles=("pm",))
     store = TokenStore(service="registry-test-get-role-static")
 
-    static_pm = store.issue(agent_id=None, role="pm", label="static-pm")
-    oauth_pm = store.issue(
+    static_pm = await store.issue(agent_id=None, role="pm", label="static-pm")
+    oauth_pm = await store.issue(
         agent_id=None,
         role="pm",
         label="oauth:operator",
@@ -512,8 +512,8 @@ async def test_get_by_agent_id_resolves_oauth_caller(tmp_path: Path) -> None:
     agents_dir = tmp_path / "agents"
     _seed_repo_yamls(agents_dir, roles=("pm",))
     store = TokenStore(service="registry-test-getby-oauth")
-    static_pm = store.issue(agent_id=None, role="pm", label="static-pm")
-    oauth_pm = store.issue(
+    static_pm = await store.issue(agent_id=None, role="pm", label="static-pm")
+    oauth_pm = await store.issue(
         agent_id=None,
         role="pm",
         label="oauth:op",
@@ -552,7 +552,7 @@ async def test_register_oauth_caller_adds_snapshot_entry_and_agents_row(
         store = TokenStore(service="registry-test-register-oauth")
         # Static PM exists so registry's reload picks up at least one
         # role; needed for register_oauth_caller's role validation path.
-        store.issue(agent_id=None, role="pm", label="static-pm")
+        await store.issue(agent_id=None, role="pm", label="static-pm")
         registry = AgentRegistry(agents_dir, token_store=store)
         await registry.initial_load()
 

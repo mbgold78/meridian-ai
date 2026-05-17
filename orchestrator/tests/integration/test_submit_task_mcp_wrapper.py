@@ -121,7 +121,7 @@ async def setup(
     # Issue baseline static tokens for the four roles + seed agents
     # rows so registry.lifespan() can resolve reports_to.
     for role in ("pm", "engineer", "implementer", "tester"):
-        issued = token_store.issue(
+        issued = await token_store.issue(
             agent_id=None, role=role, label=f"{role}-baseline"
         )
         await s.execute(
@@ -144,14 +144,14 @@ def tmp_path_for_settings(settings: Settings) -> Path:
     return db_dir / "orchestrator.db"
 
 
-def _issue_test_token(
+async def _issue_test_token(
     token_store: TokenStore,
     role: str,
     label: str,
     *,
     source: str = "static",
 ) -> IssuedToken:
-    return token_store.issue(
+    return await token_store.issue(
         agent_id=None,
         role=role,
         label=label,
@@ -213,7 +213,7 @@ async def test_pm_static_token_submit_task_happy_path(
     (from access.client_id) lands on the audit row's actor column;
     submitted_by=agent_id per CQ3 static path."""
     storage, registry, token_store = setup
-    issued = _issue_test_token(token_store, "pm", "pm-submit-happy")
+    issued = await _issue_test_token(token_store, "pm", "pm-submit-happy")
     await _seed_agent_for_token(storage, issued, "pm")
     base_url = f"http://{settings.mcp_host}:{settings.mcp_port}"
 
@@ -260,7 +260,7 @@ async def test_oauth_pm_self_submit_records_human_mike_literal(
     populates as 'human:mike' literal per CQ3 Reading A. Verifies the
     OAuth-vs-static distinction lands at the data layer."""
     storage, registry, token_store = setup
-    issued = _issue_test_token(
+    issued = await _issue_test_token(
         token_store, "pm", "mike-oauth-self-submit", source="oauth"
     )
     await _seed_agent_for_token(storage, issued, "pm")
@@ -311,7 +311,7 @@ async def test_pm_static_token_cannot_submit_for_implementer(
     transitive PM→Engineer→Implementer reads reject. MCP layer surfaces
     the rejection structurally; no tasks or audit rows written."""
     storage, registry, token_store = setup
-    issued = _issue_test_token(token_store, "pm", "pm-bypass-attempt")
+    issued = await _issue_test_token(token_store, "pm", "pm-bypass-attempt")
     await _seed_agent_for_token(storage, issued, "pm")
     base_url = f"http://{settings.mcp_host}:{settings.mcp_port}"
 
@@ -354,7 +354,7 @@ async def test_engineer_submits_subtask_via_clause_1_claimed_by(
     passes; subtask inherits parent's company_id/project_id without
     re-derivation."""
     storage, registry, token_store = setup
-    issued = _issue_test_token(token_store, "engineer", "eng-subtask")
+    issued = await _issue_test_token(token_store, "engineer", "eng-subtask")
     await _seed_agent_for_token(storage, issued, "engineer")
 
     # PM submits a parent task; engineer claims it.

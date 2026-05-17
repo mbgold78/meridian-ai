@@ -66,7 +66,7 @@ async def _call_ping(url: str, headers: dict[str, str], echo: str) -> object:
 
 async def test_ping_round_trip_with_valid_token(settings: Settings) -> None:
     store = TokenStore()
-    issued = store.issue(agent_id="a-pm-uuid", role="pm", label="integration")
+    issued = await store.issue(agent_id="a-pm-uuid", role="pm", label="integration")
 
     async with _running_server(settings):
         url = f"http://{settings.mcp_host}:{settings.mcp_port}/mcp"
@@ -95,8 +95,8 @@ async def test_ping_rejects_invalid_token(settings: Settings) -> None:
 
 async def test_ping_rejects_revoked_token(settings: Settings) -> None:
     store = TokenStore()
-    issued = store.issue(agent_id=None, role="pm", label="revoked")
-    assert store.revoke(issued.record.token_id) is True
+    issued = await store.issue(agent_id=None, role="pm", label="revoked")
+    assert await store.revoke(issued.record.token_id) is True
 
     async with _running_server(settings):
         url = f"http://{settings.mcp_host}:{settings.mcp_port}/mcp"

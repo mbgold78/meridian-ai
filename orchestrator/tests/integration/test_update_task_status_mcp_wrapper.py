@@ -119,7 +119,7 @@ async def setup(
     token_store = TokenStore()
     baseline_ids: dict[str, str] = {}
     for role in ("pm", "engineer", "implementer", "tester"):
-        issued = token_store.issue(
+        issued = await token_store.issue(
             agent_id=None, role=role, label=f"{role}-baseline"
         )
         baseline_ids[role] = issued.record.agent_id
@@ -135,10 +135,10 @@ async def setup(
     await s.close()
 
 
-def _issue_test_token(
+async def _issue_test_token(
     token_store: TokenStore, role: str, label: str
 ) -> IssuedToken:
-    return token_store.issue(agent_id=None, role=role, label=label)
+    return await token_store.issue(agent_id=None, role=role, label=label)
 
 
 async def _seed_agent_for_token(
@@ -192,7 +192,7 @@ async def test_claimed_by_holder_updates_status_via_clause_1(
     writes. Wrapper-resolved agent_id matches task.claimed_by; clause 1
     of the hierarchy gate passes."""
     storage, registry, token_store, _baseline_ids = setup
-    issued = _issue_test_token(token_store, "engineer", "eng-update-claim")
+    issued = await _issue_test_token(token_store, "engineer", "eng-update-claim")
     await _seed_agent_for_token(storage, issued, "engineer")
 
     # Seed a claimed-by-this-engineer task in 'claimed' state.
@@ -254,7 +254,7 @@ async def test_pm_submitter_cancels_via_clause_2(
     though PM is not claimed_by. Verifies the conditional second
     clause activates only for target_status='cancelled'."""
     storage, registry, token_store, baseline_ids = setup
-    pm_issued = _issue_test_token(token_store, "pm", "pm-cancel")
+    pm_issued = await _issue_test_token(token_store, "pm", "pm-cancel")
     await _seed_agent_for_token(storage, pm_issued, "pm")
 
     # Seed a PM-submitted, Engineer-claimed task.

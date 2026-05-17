@@ -144,7 +144,7 @@ async def _build_supervisor(
     agents_dir = tmp_path / "config" / "agents"
     _seed_repo_yamls(agents_dir)
     token_store = TokenStore(service=service)
-    issued = token_store.issue(
+    issued = await token_store.issue(
         agent_id=None, role="engineer", label="supervisor-test"
     )
     registry = AgentRegistry(agents_dir, token_store=token_store)
@@ -187,7 +187,7 @@ async def _build_pm_supervisor(
     agents_dir = tmp_path / "config" / "agents"
     _seed_repo_yamls(agents_dir)
     token_store = TokenStore(service=service)
-    issued = token_store.issue(
+    issued = await token_store.issue(
         agent_id=None, role="pm", label="pm-supervisor-test"
     )
     registry = AgentRegistry(agents_dir, token_store=token_store)
@@ -376,7 +376,7 @@ async def test_subprocess_exit_after_compaction_signal_marks_compacted(
         assert "engineer.compaction_completed" in actions
 
         # Token revoked with reason='compacted'
-        revoked = token_store.lookup_by_token_id(initial_token_id)
+        revoked = await token_store.lookup_by_token_id(initial_token_id)
         assert revoked is not None
         assert revoked.revoked_at is not None
         revoke_audit = await storage.fetch_all(

@@ -224,7 +224,7 @@ def _resolve_caller_token_id() -> str:
     return token_id
 
 
-def _resolve_caller_source(token_store: TokenStore) -> TokenSource:
+async def _resolve_caller_source(token_store: TokenStore) -> TokenSource:
     """Read the caller's ``TokenRecord.source`` from the request context.
 
     Mirrors :func:`_resolve_caller_token_id` shape but returns the
@@ -253,7 +253,7 @@ def _resolve_caller_source(token_store: TokenStore) -> TokenSource:
     if parsed is None:
         raise AuthError("could not parse bearer token")
     token_id, _ = parsed
-    record = token_store.lookup_by_token_id(token_id)
+    record = await token_store.lookup_by_token_id(token_id)
     if record is None:
         raise AuthError(
             f"could not resolve TokenRecord for token_id={token_id!r}"
@@ -316,7 +316,7 @@ async def _observe_caller(
         return
     token_id, _ = parsed
 
-    record = token_store.lookup_by_token_id(token_id)
+    record = await token_store.lookup_by_token_id(token_id)
 
     async with storage.transaction():
         await record_mcp_call(storage, token_id, tool_name)
@@ -1669,7 +1669,7 @@ def _register_task_tools(
     ) -> SubmitTaskOutput:
         agent_id = _resolve_agent_id()
         caller_role = _resolve_caller_role_via_token()
-        caller_source = _resolve_caller_source(token_store)
+        caller_source = await _resolve_caller_source(token_store)
         resolver = PermissionResolver(registry.configs_by_role())
         resolver.require_tool(caller_role, "submit_task")  # type: ignore[arg-type]
         await _observe_caller(storage, token_store, "submit_task")

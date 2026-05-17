@@ -121,7 +121,7 @@ async def test_record_api_call_inserts_api_usage_row(
     counts, computed cost_usd, optional task_id, and a non-null
     window_start timestamp."""
     token_store = TokenStore(service="record-api-call-test-1")
-    issued = token_store.issue("agent-1", "implementer", "test-1")
+    issued = await token_store.issue("agent-1", "implementer", "test-1")
     await _seed_dispatch(
         storage,
         dispatch_id="d-1",
@@ -171,7 +171,7 @@ async def test_record_api_call_increments_dispatches_actual_tokens(
     increment uses COALESCE-around-zero so a freshly-inserted dispatch
     with NULL actual_tokens initializes correctly to the call's total."""
     token_store = TokenStore(service="record-api-call-test-2")
-    issued = token_store.issue("agent-2", "implementer", "test-2")
+    issued = await token_store.issue("agent-2", "implementer", "test-2")
     await _seed_dispatch(
         storage,
         dispatch_id="d-2",
@@ -207,7 +207,7 @@ async def test_record_api_call_cumulative_increment(
     the last call's total. Verifies COALESCE(actual_tokens, 0) + ?
     rather than SET actual_tokens = ?."""
     token_store = TokenStore(service="record-api-call-test-3")
-    issued = token_store.issue("agent-3", "tester", "test-3")
+    issued = await token_store.issue("agent-3", "tester", "test-3")
     await _seed_dispatch(
         storage,
         dispatch_id="d-3",
@@ -292,7 +292,7 @@ async def test_record_api_call_terminal_dispatch_no_increment(
     the UPDATE no-ops correctly. Mirror of record_mcp_call's
     terminal-state skip."""
     token_store = TokenStore(service="record-api-call-test-4")
-    issued = token_store.issue("agent-4", "implementer", "test-4")
+    issued = await token_store.issue("agent-4", "implementer", "test-4")
     await _seed_dispatch(
         storage,
         dispatch_id="d-4",
@@ -338,7 +338,7 @@ async def test_record_api_call_writes_audit_row(
     filters by target = dispatch_id, so dispatch-bound API calls
     surface there for the iteration loop."""
     token_store = TokenStore(service="record-api-call-test-5")
-    issued = token_store.issue("agent-5", "implementer", "test-5")
+    issued = await token_store.issue("agent-5", "implementer", "test-5")
     await _seed_dispatch(
         storage,
         dispatch_id="d-5",
@@ -481,7 +481,7 @@ async def test_record_api_call_rolls_back_insert_on_update_failure(
     fails this test informatively.
     """
     token_store = TokenStore(service="record-api-call-rollback")
-    issued = token_store.issue("agent-7", "implementer", "rollback-test")
+    issued = await token_store.issue("agent-7", "implementer", "rollback-test")
     await _seed_dispatch(
         storage,
         dispatch_id="d-rollback",
@@ -579,7 +579,7 @@ async def test_audit_target_dispatch_id_emitted_for_no_op_update(
     test makes the contract durably enforced.
     """
     token_store = TokenStore(service="record-api-call-norace")
-    issued = token_store.issue("agent-7", "implementer", "no-op-update-test")
+    issued = await token_store.issue("agent-7", "implementer", "no-op-update-test")
     await _seed_dispatch(
         storage,
         dispatch_id="d-norace",
@@ -883,7 +883,7 @@ async def test_workflow_id_alpha_resolves_chain_root_at_one_hop(
     the canonical 1-hop case.
     """
     token_store = TokenStore(service="workflow-alpha-1hop")
-    issued = token_store.issue("agent-1", "implementer", "alpha-1hop")
+    issued = await token_store.issue("agent-1", "implementer", "alpha-1hop")
     await _seed_dispatch(
         storage,
         dispatch_id="d-alpha-1",
@@ -926,7 +926,7 @@ async def test_workflow_id_alpha_resolves_chain_root_at_three_hops(
         storage, ids=["task-root-3", "task-mid-3", "task-leaf-3"]
     )
     token_store = TokenStore(service="workflow-alpha-3hop")
-    issued = token_store.issue("agent-1", "implementer", "alpha-3hop")
+    issued = await token_store.issue("agent-1", "implementer", "alpha-3hop")
     # Dispatch bound to the leaf (deepest) task; chain walk goes
     # leaf → mid → root.
     await storage.execute(
@@ -974,7 +974,7 @@ async def test_workflow_id_alpha_resolves_at_max_depth_minus_one(
     chain_ids = [f"task-deep-{i:03d}" for i in range(50)]  # 50-hop chain
     await _seed_task_chain(storage, ids=chain_ids)
     token_store = TokenStore(service="workflow-alpha-deep")
-    issued = token_store.issue("agent-1", "implementer", "alpha-deep")
+    issued = await token_store.issue("agent-1", "implementer", "alpha-deep")
     await storage.execute(
         "INSERT INTO dispatches "
         "(id, task_id, role, status, working_directory, timeout_seconds, "
@@ -1051,7 +1051,7 @@ async def test_workflow_id_alpha_server_overrides_caller_supplied(
     only as fallback.
     """
     token_store = TokenStore(service="workflow-alpha-override")
-    issued = token_store.issue("agent-1", "implementer", "alpha-override")
+    issued = await token_store.issue("agent-1", "implementer", "alpha-override")
     await _seed_dispatch(
         storage,
         dispatch_id="d-alpha-ovr",
@@ -1102,7 +1102,7 @@ async def test_workflow_id_alpha_conflict_emits_warning(
     import structlog.testing
 
     token_store = TokenStore(service="workflow-alpha-conflict")
-    issued = token_store.issue("agent-1", "implementer", "alpha-conflict")
+    issued = await token_store.issue("agent-1", "implementer", "alpha-conflict")
     await _seed_dispatch(
         storage,
         dispatch_id="d-alpha-conf",
@@ -1169,7 +1169,7 @@ async def test_workflow_id_alpha_falls_through_for_null_task_id_dispatch(
     NULL task_id surfaces as a test failure.
     """
     token_store = TokenStore(service="workflow-alpha-null-task")
-    issued = token_store.issue(
+    issued = await token_store.issue(
         "agent-1", "engineer", "alpha-null-task"
     )
     # Supervisor-row dispatch with NULL task_id (the M4c-supervisor-base
@@ -1245,7 +1245,7 @@ async def test_workflow_id_alpha_cycle_defense_returns_none(
     )
 
     token_store = TokenStore(service="workflow-alpha-cycle")
-    issued = token_store.issue("agent-1", "implementer", "alpha-cycle")
+    issued = await token_store.issue("agent-1", "implementer", "alpha-cycle")
     await storage.execute(
         "INSERT INTO dispatches "
         "(id, task_id, role, status, working_directory, timeout_seconds, "
@@ -1312,7 +1312,7 @@ async def test_task_type_alpha_resolves_chain_root_when_root_has_task_type(
     populates api_usage.task_type per Reading B precedence (server-
     derived wins; no caller-supplied conflict)."""
     token_store = TokenStore(service="task-type-alpha-1hop")
-    issued = token_store.issue("agent-1", "implementer", "tt-1hop")
+    issued = await token_store.issue("agent-1", "implementer", "tt-1hop")
     # Set task-1's task_type to 'planning' (single-hop chain; task-1
     # IS chain root per fixture's parent_task_id NULL).
     await storage.execute(
@@ -1373,7 +1373,7 @@ async def test_task_type_alpha_falls_through_when_chain_root_task_type_null(
     caller-supplied 'execution' falls through to api_usage.task_type
     per Reading B precedence."""
     token_store = TokenStore(service="task-type-alpha-fallthrough")
-    issued = token_store.issue("agent-2", "implementer", "tt-fallthrough")
+    issued = await token_store.issue("agent-2", "implementer", "tt-fallthrough")
     # task-1 has task_type=NULL by default (fixture seeds without it).
     await _seed_dispatch(
         storage,
@@ -1437,7 +1437,7 @@ async def test_task_type_alpha_conflict_emits_warning(
     import structlog.testing
 
     token_store = TokenStore(service="task-type-alpha-conflict")
-    issued = token_store.issue("agent-3", "implementer", "tt-conflict")
+    issued = await token_store.issue("agent-3", "implementer", "tt-conflict")
     await storage.execute(
         "UPDATE tasks SET task_type = 'planning' WHERE id = 'task-1'"
     )

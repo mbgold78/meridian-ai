@@ -120,7 +120,7 @@ async def setup(
     token_store = TokenStore()
     baseline_ids: dict[str, str] = {}
     for role in ("pm", "engineer", "implementer", "tester"):
-        issued = token_store.issue(
+        issued = await token_store.issue(
             agent_id=None, role=role, label=f"{role}-baseline"
         )
         baseline_ids[role] = issued.record.agent_id
@@ -136,14 +136,14 @@ async def setup(
     await s.close()
 
 
-def _issue_test_token(
+async def _issue_test_token(
     token_store: TokenStore,
     role: str,
     label: str,
     *,
     source: str = "static",
 ) -> IssuedToken:
-    return token_store.issue(
+    return await token_store.issue(
         agent_id=None, role=role, label=label, source=source  # type: ignore[arg-type]
     )
 
@@ -202,10 +202,10 @@ async def test_full_cycle_oauth_submit_static_claim_status_lifecycle(
     real MCP path; cohort coverage (submitted_by='human:mike' for
     OAuth path) lands at the data layer."""
     storage, registry, token_store, _baseline = setup
-    pm_token = _issue_test_token(
+    pm_token = await _issue_test_token(
         token_store, "pm", "cycle-pm-oauth", source="oauth"
     )
-    eng_token = _issue_test_token(token_store, "engineer", "cycle-eng")
+    eng_token = await _issue_test_token(token_store, "engineer", "cycle-eng")
     await _seed_agent_for_token(storage, pm_token, "pm")
     await _seed_agent_for_token(storage, eng_token, "engineer")
     base_url = f"http://{settings.mcp_host}:{settings.mcp_port}"
@@ -296,11 +296,11 @@ async def test_double_claim_within_cycle_raises_conflict(
     surfaces structurally via MCP. Audit chain captures only the
     successful first claim."""
     storage, registry, token_store, _baseline = setup
-    pm_token = _issue_test_token(
+    pm_token = await _issue_test_token(
         token_store, "pm", "double-claim-pm", source="oauth"
     )
-    eng_a = _issue_test_token(token_store, "engineer", "double-claim-eng-a")
-    eng_b = _issue_test_token(token_store, "engineer", "double-claim-eng-b")
+    eng_a = await _issue_test_token(token_store, "engineer", "double-claim-eng-a")
+    eng_b = await _issue_test_token(token_store, "engineer", "double-claim-eng-b")
     await _seed_agent_for_token(storage, pm_token, "pm")
     await _seed_agent_for_token(storage, eng_a, "engineer")
     await _seed_agent_for_token(storage, eng_b, "engineer")
@@ -376,10 +376,10 @@ async def test_decline_propagation_via_update_task_status(
     with from_status='claimed', to_status='declined' in
     details_json."""
     storage, registry, token_store, _baseline = setup
-    pm_token = _issue_test_token(
+    pm_token = await _issue_test_token(
         token_store, "pm", "decline-pm", source="oauth"
     )
-    eng_token = _issue_test_token(token_store, "engineer", "decline-eng")
+    eng_token = await _issue_test_token(token_store, "engineer", "decline-eng")
     await _seed_agent_for_token(storage, pm_token, "pm")
     await _seed_agent_for_token(storage, eng_token, "engineer")
     base_url = f"http://{settings.mcp_host}:{settings.mcp_port}"

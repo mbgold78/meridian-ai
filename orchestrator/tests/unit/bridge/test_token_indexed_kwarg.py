@@ -59,7 +59,7 @@ class _SpyTokenStore:
     def __init__(self) -> None:
         self.issue_calls: list[dict[str, Any]] = []
 
-    def issue(
+    async def issue(
         self,
         agent_id: str | None,
         role: str,

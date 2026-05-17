@@ -145,7 +145,7 @@ async def _build_registry_with_pm(
     agents_dir = tmp_path / "config" / "agents"
     _seed_repo_yamls(agents_dir)
     store = TokenStore(service=service)
-    issued = store.issue(agent_id=None, role="pm", label="supervisor-test")
+    issued = await store.issue(agent_id=None, role="pm", label="supervisor-test")
     registry = AgentRegistry(agents_dir, token_store=store)
     await registry.initial_load()
     pm = registry.get("pm")
@@ -200,7 +200,7 @@ async def test_launcher_receives_registry_loaded_pm_prompt_and_pm_continuous_cwd
         assert ctx.working_directory == settings.pm_continuous_dir
 
         # Token bound to the pm agent_id from the keyring lookup
-        token_record = token_store.lookup_by_token_id(
+        token_record = await token_store.lookup_by_token_id(
             supervisor._current_token.record.token_id  # type: ignore[union-attr]
         )
         assert token_record is not None

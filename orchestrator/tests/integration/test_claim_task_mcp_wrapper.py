@@ -116,7 +116,7 @@ async def setup(
 
     token_store = TokenStore()
     for role in ("pm", "engineer", "implementer", "tester"):
-        issued = token_store.issue(
+        issued = await token_store.issue(
             agent_id=None, role=role, label=f"{role}-baseline"
         )
         await s.execute(
@@ -131,10 +131,10 @@ async def setup(
     await s.close()
 
 
-def _issue_test_token(
+async def _issue_test_token(
     token_store: TokenStore, role: str, label: str
 ) -> IssuedToken:
-    return token_store.issue(agent_id=None, role=role, label=label)
+    return await token_store.issue(agent_id=None, role=role, label=label)
 
 
 async def _seed_agent_for_token(
@@ -198,7 +198,7 @@ async def test_engineer_claims_engineer_task_happy_path(
     agent_id (from access.client_id) lands as task.claimed_by AND on
     the audit row's actor column."""
     storage, registry, token_store = setup
-    issued = _issue_test_token(token_store, "engineer", "eng-claim-happy")
+    issued = await _issue_test_token(token_store, "engineer", "eng-claim-happy")
     await _seed_agent_for_token(storage, issued, "engineer")
     await _seed_pending_task(
         storage, task_id="t-eng-claim", agent_role="engineer"
@@ -247,7 +247,7 @@ async def test_implementer_cannot_claim_tester_task(
     layer surfaces the rejection structurally; no UPDATE attempted;
     no audit row."""
     storage, registry, token_store = setup
-    issued = _issue_test_token(
+    issued = await _issue_test_token(
         token_store, "implementer", "impl-claim-bypass-attempt"
     )
     await _seed_agent_for_token(storage, issued, "implementer")

@@ -10,6 +10,7 @@ Claude Desktop's MCP connector configuration immediately. Re-issue if lost.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import sys
 from pathlib import Path
 
@@ -18,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from meridian_orchestrator.auth import TokenStore
 
 
-def main() -> int:
+async def main() -> int:
     parser = argparse.ArgumentParser(description="Issue a new MCP auth token.")
     parser.add_argument(
         "--role",
@@ -38,7 +39,9 @@ def main() -> int:
     args = parser.parse_args()
 
     store = TokenStore()
-    issued = store.issue(agent_id=args.agent_id, role=args.role, label=args.label)
+    issued = await store.issue(
+        agent_id=args.agent_id, role=args.role, label=args.label
+    )
     print("Token issued. Copy it now — it will not be shown again.")
     print()
     print(f"  token:     {issued.token}")
@@ -51,4 +54,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(asyncio.run(main()))

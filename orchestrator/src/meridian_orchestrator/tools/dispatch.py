@@ -458,7 +458,7 @@ async def complete_dispatch(
             f"dispatch_id={request.dispatch_id!r} has no token_id; "
             "subprocess started before token was recorded?"
         )
-    token_record = token_store.lookup_by_token_id(token_id)
+    token_record = await token_store.lookup_by_token_id(token_id)
     if token_record is None:
         raise OrchestratorPermissionError(
             f"dispatch token {token_id!r} no longer resolves; cannot validate caller"
@@ -618,7 +618,7 @@ async def _enforce_self_dispatch_access(
         raise OrchestratorPermissionError(
             "dispatch has no token; cannot validate self-access"
         )
-    record = token_store.lookup_by_token_id(storage_token_id)
+    record = await token_store.lookup_by_token_id(storage_token_id)
     if record is None or record.agent_id != caller_agent_id:
         raise OrchestratorPermissionError("caller does not own this dispatch")
 

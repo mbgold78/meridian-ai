@@ -371,7 +371,7 @@ class MeridianOAuthProvider(
             existing_agent_id = self._store.find_oauth_caller_by_client_id(
                 client.client_id, role
             )
-        issued = self._store.issue(
+        issued = await self._store.issue(
             agent_id=existing_agent_id,
             role=role,
             label=f"oauth:{client.client_name or client.client_id or 'unknown'}",
@@ -428,7 +428,7 @@ class MeridianOAuthProvider(
         raise NotImplementedError("refresh tokens not issued in Phase 1")
 
     async def load_access_token(self, token: str) -> AccessToken | None:
-        record = self._store.lookup(token)
+        record = await self._store.lookup(token)
         if record is None:
             return None
         return _record_to_access_token(token, record)
@@ -437,11 +437,13 @@ class MeridianOAuthProvider(
         self, token: AccessToken | RefreshToken
     ) -> None:
         record = (
-            self._store.lookup(token.token) if isinstance(token, AccessToken) else None
+            await self._store.lookup(token.token)
+            if isinstance(token, AccessToken)
+            else None
         )
         if record is None:
             return
-        self._store.revoke(record.token_id)
+        await self._store.revoke(record.token_id)
         logger.info("oauth.token_revoked", token_id=record.token_id)
 
 

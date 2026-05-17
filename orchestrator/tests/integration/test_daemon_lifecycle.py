@@ -541,7 +541,9 @@ async def test_full_lifespan_seeds_agents_rows_before_serving_mcp(
     # not what this test verifies).
     store = TokenStore()
     issued_by_role = {
-        role: store.issue(agent_id=None, role=role, label=f"{role}-lifecycle-test")
+        role: await store.issue(
+            agent_id=None, role=role, label=f"{role}-lifecycle-test"
+        )
         for role in ("pm", "engineer", "implementer", "tester")
     }
 
@@ -600,7 +602,7 @@ async def test_full_lifespan_seeds_agents_rows_before_serving_mcp(
         # default TokenStore service is shared across tests in this
         # process.
         for issued in issued_by_role.values():
-            store.revoke(issued.record.token_id)
+            await store.revoke(issued.record.token_id)
 
 
 # ---------------------------------------------------------------------------
@@ -706,7 +708,7 @@ async def _e2e_issue_role_token(
     """Issue a static token for ``role`` and seed its agents row.
     Returns the IssuedToken."""
     store = TokenStore()
-    issued = store.issue(agent_id=None, role=role, label=label)
+    issued = await store.issue(agent_id=None, role=role, label=label)
     await _e2e_seed_agent(storage, issued.record.agent_id, role)
     return issued
 

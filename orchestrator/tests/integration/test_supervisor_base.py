@@ -338,11 +338,11 @@ async def test_respawn_writes_fresh_dispatch_row(
     assert new_row["status"] == "running"
     assert new_row["task_id"] is None  # Decision Q
 
-    initial_token = token_store.lookup_by_token_id(initial_token_id)
+    initial_token = await token_store.lookup_by_token_id(initial_token_id)
     assert initial_token is not None
     assert initial_token.revoked_at is not None
 
-    new_token = token_store.lookup_by_token_id(new_token_id)
+    new_token = await token_store.lookup_by_token_id(new_token_id)
     assert new_token is not None
     assert new_token.revoked_at is None
 

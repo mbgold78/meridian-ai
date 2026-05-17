@@ -186,7 +186,7 @@ async def _issue_role_token(
     that becomes ``access.client_id`` at the wrapper layer; seeding the
     agents row ensures the api_usage.agent_id FK satisfies."""
     token_store = TokenStore()
-    issued = token_store.issue(agent_id=None, role=role, label=label)
+    issued = await token_store.issue(agent_id=None, role=role, label=label)
     await _seed_agent(storage, issued.record.agent_id, role)
     return issued
 

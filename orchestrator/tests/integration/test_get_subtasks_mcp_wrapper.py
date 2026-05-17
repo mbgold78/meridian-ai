@@ -102,7 +102,7 @@ async def setup(
     token_store = TokenStore()
     baseline_ids: dict[str, str] = {}
     for role in ("pm", "engineer", "implementer", "tester"):
-        issued = token_store.issue(
+        issued = await token_store.issue(
             agent_id=None, role=role, label=f"{role}-baseline"
         )
         baseline_ids[role] = issued.record.agent_id
@@ -118,10 +118,10 @@ async def setup(
     await s.close()
 
 
-def _issue_test_token(
+async def _issue_test_token(
     token_store: TokenStore, role: str, label: str
 ) -> IssuedToken:
-    return token_store.issue(agent_id=None, role=role, label=label)
+    return await token_store.issue(agent_id=None, role=role, label=label)
 
 
 async def _seed_agent_for_token(
@@ -177,7 +177,7 @@ async def test_engineer_get_subtasks_via_claimed_by_parent(
     returns the implementer + tester subtasks (Engineer's subtree
     includes both)."""
     storage, registry, token_store, _baseline_ids = setup
-    issued = _issue_test_token(token_store, "engineer", "eng-subtasks")
+    issued = await _issue_test_token(token_store, "engineer", "eng-subtasks")
     await _seed_agent_for_token(storage, issued, "engineer")
 
     # Engineer-claimed parent + 2 subtasks.

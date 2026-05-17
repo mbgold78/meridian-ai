@@ -541,8 +541,7 @@ class BridgeDispatcher:
             # tradeoff is that per-dispatch tokens don't appear in
             # `scripts/list-tokens.py` — their lifecycle is visible via
             # audit_log + dispatches table queries instead.
-            issued_token = await asyncio.to_thread(
-                self._token_store.issue,
+            issued_token = await self._token_store.issue(
                 role_agent_id,
                 role,
                 f"dispatch:{dispatch_id}",
@@ -672,8 +671,8 @@ class BridgeDispatcher:
             return outcome
         finally:
             if issued_token is not None:
-                revoked = await asyncio.to_thread(
-                    self._token_store.revoke, issued_token.record.token_id
+                revoked = await self._token_store.revoke(
+                    issued_token.record.token_id
                 )
                 if revoked:
                     await write_audit(

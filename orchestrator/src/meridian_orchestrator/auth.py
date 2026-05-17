@@ -31,10 +31,13 @@ import secrets
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import keyring
 from keyring.errors import PasswordDeleteError
+
+if TYPE_CHECKING:
+    from meridian_orchestrator.transient_tokens import TransientTokenStore
 
 KEYRING_SERVICE = "meridian-orchestrator-tokens"
 INDEX_USERNAME = "_index"
@@ -196,8 +199,14 @@ class TokenStore:
     ``keyring.set_keyring`` and rely on the same module surface.
     """
 
-    def __init__(self, service: str = KEYRING_SERVICE) -> None:
+    def __init__(
+        self,
+        service: str = KEYRING_SERVICE,
+        *,
+        transient_store: TransientTokenStore | None = None,
+    ) -> None:
         self._service = service
+        self._transient_store = transient_store
 
     def _read_index(self) -> list[str]:
         raw = keyring.get_password(self._service, INDEX_USERNAME)
@@ -226,7 +235,7 @@ class TokenStore:
             self._service, _record_key(record.token_id), record.to_json()
         )
 
-    def issue(
+    async def issue(
         self,
         agent_id: str | None,
         role: str,
@@ -281,6 +290,17 @@ class TokenStore:
         """
         if not role:
             raise ValueError("role must be non-empty")
+        # R1=(b) routing: indexed=False high-churn tokens go to the SQLite-
+        # backed TransientTokenStore when one is configured. indexed=True
+        # always stays on keyring (static seeds + OAuth-issued PM tokens).
+        # transient_store=None preserves keyring-only behavior for callers
+        # (tests; scripts) that haven't opted into the SQLite backend.
+        if not indexed and self._transient_store is not None:
+            return await self._transient_store.issue(
+                agent_id=agent_id,
+                role=role,
+                label=label,
+            )
         token_id = _new_token_id()
         secret = _new_secret()
         record = TokenRecord(
@@ -318,9 +338,19 @@ class TokenStore:
         token = f"{TOKEN_PREFIX}_{token_id}_{secret}"
         return IssuedToken(token=token, record=record)
 
-    def lookup(self, token: str) -> TokenRecord | None:
+    async def lookup(self, token: str) -> TokenRecord | None:
         """Resolve a token string to its record. Returns ``None`` if not found,
-        revoked, expired, or the secret hash does not match (constant-time)."""
+        revoked, expired, or the secret hash does not match (constant-time).
+
+        R1=(b) routing: when a TransientTokenStore is configured, try SQLite
+        first; on miss, fall back to keyring. Active-record lookup short-
+        circuits on the first hit (returning a real record OR None per the
+        SQLite-side semantics — revoked/expired tokens return None from the
+        transient backend just as they do from the keyring path)."""
+        if self._transient_store is not None:
+            record = await self._transient_store.lookup(token)
+            if record is not None:
+                return record
         parsed = _parse_token(token)
         if parsed is None:
             return None
@@ -336,7 +366,7 @@ class TokenStore:
             return None
         return record
 
-    def lookup_by_token_id(self, token_id: str) -> TokenRecord | None:
+    async def lookup_by_token_id(self, token_id: str) -> TokenRecord | None:
         """Look up a token record by id alone. Used by the OAuth provider when
         the framework gives it the access_token string to revoke; we strip the
         id and call this for the lookup. Does not validate the secret.
@@ -347,7 +377,15 @@ class TokenStore:
         per-dispatch token in its terminal-state cleanup). Authorization checks
         at the call site are responsible for validating ``revoked_at``; do
         not filter revoked records here without auditing every caller.
+
+        R1=(b) routing: try transient first; if hit, return — the SQLite
+        backend honors the revoked-record-returned contract too. Else fall
+        back to keyring.
         """
+        if self._transient_store is not None:
+            record = await self._transient_store.lookup_by_token_id(token_id)
+            if record is not None:
+                return record
         return self._read_record(token_id)
 
     def find_oauth_caller_by_client_id(
@@ -390,7 +428,7 @@ class TokenStore:
         matching.sort(key=lambda r: r.issued_at, reverse=True)
         return matching[0].agent_id
 
-    def revoke(self, token_id: str) -> bool:
+    async def revoke(self, token_id: str) -> bool:
         """Mark a token revoked. Returns True if the record existed and was
         flipped, False if the token_id was unknown or already revoked.
 
@@ -399,7 +437,13 @@ class TokenStore:
         record, which silently flipped a revoked OAuth token's source to
         ``static`` — corrupting audit context for any downstream call that
         inspected revoked records (the dispatch self-access path is one).
+
+        R1=(b) routing: try transient first; if it flips, return True. Else
+        fall back to the keyring path.
         """
+        if self._transient_store is not None:
+            if await self._transient_store.revoke(token_id):
+                return True
         record = self._read_record(token_id)
         if record is None or record.revoked_at is not None:
             return False
@@ -418,10 +462,21 @@ class TokenStore:
         self._write_record(revoked)
         return True
 
-    def delete(self, token_id: str) -> bool:
+    async def delete(self, token_id: str) -> bool:
         """Hard-delete a token record from keyring and the index. Returns True
-        if anything was removed. Used by tests for cleanup; not exposed via CLI."""
+        if anything was removed. Used by tests for cleanup; not exposed via CLI.
+
+        D2=(a) — cross-backend symmetric routing. Try the transient backend
+        first (if configured); always also try the keyring path, since the
+        ``token_id`` may live in keyring even when ``transient_store`` is
+        wired (e.g., a static seed deleted by a test fixture that also has
+        the transient backend wired). Returns True if either path removed
+        something.
+        """
         removed = False
+        if self._transient_store is not None:
+            if await self._transient_store.delete(token_id):
+                removed = True
         try:
             keyring.delete_password(self._service, _record_key(token_id))
             removed = True

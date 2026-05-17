@@ -81,7 +81,7 @@ async def _seed_dispatch(
 async def test_complete_dispatch_happy_path(
     storage: SqliteStorage, token_store: TokenStore
 ) -> None:
-    issued = token_store.issue("impl-agent-id", "implementer", "dispatch:d1")
+    issued = await token_store.issue("impl-agent-id", "implementer", "dispatch:d1")
     await _seed_dispatch(
         storage,
         dispatch_id="d1",
@@ -128,7 +128,7 @@ async def test_complete_dispatch_happy_path(
 async def test_complete_dispatch_decline_path(
     storage: SqliteStorage, token_store: TokenStore
 ) -> None:
-    issued = token_store.issue("impl-agent-id", "implementer", "dispatch:d2")
+    issued = await token_store.issue("impl-agent-id", "implementer", "dispatch:d2")
     await _seed_dispatch(
         storage,
         dispatch_id="d2",
@@ -161,7 +161,7 @@ async def test_complete_dispatch_decline_path(
 async def test_complete_dispatch_decline_requires_reason(
     storage: SqliteStorage, token_store: TokenStore
 ) -> None:
-    issued = token_store.issue("impl-agent-id", "implementer", "dispatch:d3")
+    issued = await token_store.issue("impl-agent-id", "implementer", "dispatch:d3")
     await _seed_dispatch(
         storage,
         dispatch_id="d3",
@@ -182,7 +182,7 @@ async def test_complete_dispatch_decline_requires_reason(
 async def test_complete_dispatch_conflict_already_terminal(
     storage: SqliteStorage, token_store: TokenStore
 ) -> None:
-    issued = token_store.issue("impl-agent-id", "implementer", "dispatch:d4")
+    issued = await token_store.issue("impl-agent-id", "implementer", "dispatch:d4")
     await _seed_dispatch(
         storage,
         dispatch_id="d4",
@@ -204,7 +204,7 @@ async def test_complete_dispatch_role_mismatch(
     storage: SqliteStorage, token_store: TokenStore
 ) -> None:
     """A tester-role caller cannot complete an implementer dispatch."""
-    issued = token_store.issue("impl-agent-id", "implementer", "dispatch:d5")
+    issued = await token_store.issue("impl-agent-id", "implementer", "dispatch:d5")
     await _seed_dispatch(
         storage,
         dispatch_id="d5",
@@ -227,7 +227,7 @@ async def test_complete_dispatch_caller_not_token_owner(
 ) -> None:
     """Even with the correct role, only the agent the token was issued to
     can complete the dispatch."""
-    issued = token_store.issue("impl-agent-id", "implementer", "dispatch:d6")
+    issued = await token_store.issue("impl-agent-id", "implementer", "dispatch:d6")
     await _seed_dispatch(
         storage,
         dispatch_id="d6",
@@ -268,7 +268,7 @@ async def test_complete_dispatch_tester_preserves_commit_hash_on_none(
     clobber the up-front-recorded value. The COALESCE shape on the UPDATE
     delivers the docstring contract that the verified commit is recorded
     up front and visible end-to-end on the dispatches row."""
-    issued = token_store.issue("tester-agent-id", "tester", "dispatch:dt1")
+    issued = await token_store.issue("tester-agent-id", "tester", "dispatch:dt1")
     seeded_sha = "deadbeef" + "0" * 32
     await storage.execute(
         "INSERT INTO dispatches "
@@ -305,7 +305,7 @@ async def test_complete_dispatch_implementer_overwrites_commit_hash(
     """F5 CQ-D symmetry: Implementer success path still overwrites the
     column when a new commit_hash is provided. COALESCE only no-ops when
     the caller passes None."""
-    issued = token_store.issue("impl-agent-id", "implementer", "dispatch:di1")
+    issued = await token_store.issue("impl-agent-id", "implementer", "dispatch:di1")
     await _seed_dispatch(
         storage,
         dispatch_id="di1",
@@ -339,7 +339,7 @@ async def test_complete_dispatch_implementer_decline_leaves_commit_hash_null(
     """F5 CQ-D symmetry: Implementer decline/fail path leaves commit_hash
     NULL (no clobber semantics; the row's INSERT defaulted to NULL and
     COALESCE(None, NULL) = NULL preserves the absence)."""
-    issued = token_store.issue("impl-agent-id", "implementer", "dispatch:di2")
+    issued = await token_store.issue("impl-agent-id", "implementer", "dispatch:di2")
     await _seed_dispatch(
         storage,
         dispatch_id="di2",
@@ -400,7 +400,7 @@ def test_bridge_dispatcher_dispatch_commit_hash_is_keyword_only() -> None:
 async def test_get_dispatch_status_engineer_can_read(
     storage: SqliteStorage, token_store: TokenStore
 ) -> None:
-    issued = token_store.issue("impl-agent-id", "implementer", "dispatch:d7")
+    issued = await token_store.issue("impl-agent-id", "implementer", "dispatch:d7")
     await _seed_dispatch(
         storage,
         dispatch_id="d7",
@@ -423,7 +423,7 @@ async def test_get_dispatch_status_engineer_can_read(
 async def test_get_dispatch_result_implementer_self_only(
     storage: SqliteStorage, token_store: TokenStore
 ) -> None:
-    issued = token_store.issue("impl-agent-id", "implementer", "dispatch:d8")
+    issued = await token_store.issue("impl-agent-id", "implementer", "dispatch:d8")
     await _seed_dispatch(
         storage,
         dispatch_id="d8",

@@ -290,7 +290,7 @@ async def test_resolve_allowed_tools_for_role_prefixes_orchestrator_tools_with_c
         )
     store = TokenStore(service="resolve-allowed-tools-bridge-test")
     for role in ("pm", "engineer", "implementer", "tester"):
-        store.issue(agent_id=None, role=role, label=f"{role}-test")
+        await store.issue(agent_id=None, role=role, label=f"{role}-test")
     registry = AgentRegistry(agents_dir, token_store=store)
     await registry.initial_load()
 

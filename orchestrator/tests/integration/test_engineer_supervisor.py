@@ -139,7 +139,7 @@ async def _build_registry_with_engineer(
     agents_dir = tmp_path / "config" / "agents"
     _seed_repo_yamls(agents_dir)
     store = TokenStore(service=service)
-    issued = store.issue(agent_id=None, role="engineer", label="supervisor-test")
+    issued = await store.issue(agent_id=None, role="engineer", label="supervisor-test")
     registry = AgentRegistry(agents_dir, token_store=store)
     await registry.initial_load()
     engineer = registry.get("engineer")
@@ -193,7 +193,7 @@ async def test_launcher_receives_registry_prompt_and_supervisor_dir(
         assert ctx.working_directory == settings.engineer_supervisor_dir
 
         # Token bound to the engineer agent_id from the keyring lookup
-        token_record = token_store.lookup_by_token_id(
+        token_record = await token_store.lookup_by_token_id(
             supervisor._current_token.record.token_id  # type: ignore[union-attr]
         )
         assert token_record is not None

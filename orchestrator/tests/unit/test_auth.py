@@ -16,9 +16,9 @@ from meridian_orchestrator.auth import (
 )
 
 
-def test_issue_returns_token_and_metadata() -> None:
+async def test_issue_returns_token_and_metadata() -> None:
     store = TokenStore(service="test-service")
-    issued = store.issue(agent_id=None, role="pm", label="mike-cd")
+    issued = await store.issue(agent_id=None, role="pm", label="mike-cd")
 
     assert issued.token.startswith(f"{TOKEN_PREFIX}_")
     assert issued.token.count("_") >= 2
@@ -31,21 +31,21 @@ def test_issue_returns_token_and_metadata() -> None:
     assert _hash_secret(parts[2]) == issued.record.secret_hash
 
 
-def test_lookup_round_trips_and_returns_record() -> None:
+async def test_lookup_round_trips_and_returns_record() -> None:
     store = TokenStore(service="test-service")
-    issued = store.issue(agent_id="agent-uuid-1", role="engineer", label="")
-    rec = store.lookup(issued.token)
+    issued = await store.issue(agent_id="agent-uuid-1", role="engineer", label="")
+    rec = await store.lookup(issued.token)
     assert rec is not None
     assert rec.agent_id == "agent-uuid-1"
     assert rec.role == "engineer"
 
 
-def test_lookup_rejects_unknown_token() -> None:
+async def test_lookup_rejects_unknown_token() -> None:
     store = TokenStore(service="test-service")
-    assert store.lookup("mor_abcdef0123456789_notarealsecret") is None
+    assert await store.lookup("mor_abcdef0123456789_notarealsecret") is None
 
 
-def test_lookup_rejects_malformed_tokens() -> None:
+async def test_lookup_rejects_malformed_tokens() -> None:
     store = TokenStore(service="test-service")
     for bad in [
         "",
@@ -55,36 +55,36 @@ def test_lookup_rejects_malformed_tokens() -> None:
         "mor_NONHEX_secret",
         "mor_abcdef0123456789_",
     ]:
-        assert store.lookup(bad) is None, f"should reject {bad!r}"
+        assert await store.lookup(bad) is None, f"should reject {bad!r}"
 
 
-def test_lookup_rejects_tampered_secret() -> None:
+async def test_lookup_rejects_tampered_secret() -> None:
     store = TokenStore(service="test-service")
-    issued = store.issue(agent_id=None, role="pm", label="")
+    issued = await store.issue(agent_id=None, role="pm", label="")
     parts = issued.token.split("_", 2)
     tampered = f"{parts[0]}_{parts[1]}_zzz{parts[2][3:]}"
-    assert store.lookup(tampered) is None
+    assert await store.lookup(tampered) is None
 
 
-def test_revoke_marks_record_and_blocks_lookup() -> None:
+async def test_revoke_marks_record_and_blocks_lookup() -> None:
     store = TokenStore(service="test-service")
-    issued = store.issue(agent_id=None, role="pm", label="")
-    assert store.revoke(issued.record.token_id) is True
-    assert store.lookup(issued.token) is None
+    issued = await store.issue(agent_id=None, role="pm", label="")
+    assert await store.revoke(issued.record.token_id) is True
+    assert await store.lookup(issued.token) is None
     # Second revoke on the same id is a no-op.
-    assert store.revoke(issued.record.token_id) is False
+    assert await store.revoke(issued.record.token_id) is False
 
 
-def test_revoke_unknown_id_returns_false() -> None:
+async def test_revoke_unknown_id_returns_false() -> None:
     store = TokenStore(service="test-service")
-    assert store.revoke("0000000000000000") is False
+    assert await store.revoke("0000000000000000") is False
 
 
-def test_list_records_returns_active_and_revoked() -> None:
+async def test_list_records_returns_active_and_revoked() -> None:
     store = TokenStore(service="test-service")
-    a = store.issue(agent_id=None, role="pm", label="a")
-    store.issue(agent_id=None, role="engineer", label="b")
-    store.revoke(a.record.token_id)
+    a = await store.issue(agent_id=None, role="pm", label="a")
+    await store.issue(agent_id=None, role="engineer", label="b")
+    await store.revoke(a.record.token_id)
 
     records = store.list_records()
     assert len(records) == 2
@@ -93,23 +93,23 @@ def test_list_records_returns_active_and_revoked() -> None:
     assert by_role["engineer"].revoked_at is None
 
 
-def test_persisted_secret_is_only_hash(keyring_memory: object) -> None:
+async def test_persisted_secret_is_only_hash(keyring_memory: object) -> None:
     """The plaintext secret never lives in keyring storage."""
     store = TokenStore(service="probe")
-    issued = store.issue(agent_id=None, role="pm", label="")
+    issued = await store.issue(agent_id=None, role="pm", label="")
     parts = issued.token.split("_", 2)
     secret = parts[2]
     for stored in keyring_memory._store.values():  # type: ignore[attr-defined]
         assert secret not in stored
 
 
-def test_issue_requires_role() -> None:
+async def test_issue_requires_role() -> None:
     store = TokenStore(service="test-service")
     with pytest.raises(ValueError, match="role"):
-        store.issue(agent_id=None, role="", label="x")
+        await store.issue(agent_id=None, role="", label="x")
 
 
-def test_find_oauth_caller_by_client_id_returns_none_when_no_match() -> None:
+async def test_find_oauth_caller_by_client_id_returns_none_when_no_match() -> None:
     """No prior OAuth records for (client_id, role) → returns None;
     caller mints fresh agent_id at issuance time."""
     store = TokenStore(service="test-find-oauth-empty")
@@ -118,14 +118,14 @@ def test_find_oauth_caller_by_client_id_returns_none_when_no_match() -> None:
     # Static-only record exists but doesn't match — alpha persistence is
     # OAuth-only by design (static tokens have stable agent_ids via
     # different M2/M3 contract path).
-    store.issue(agent_id=None, role="pm", label="static-pm")
+    await store.issue(agent_id=None, role="pm", label="static-pm")
     assert store.find_oauth_caller_by_client_id("missing-cid", "pm") is None
 
 
-def test_find_oauth_caller_by_client_id_returns_agent_id_for_match() -> None:
+async def test_find_oauth_caller_by_client_id_returns_agent_id_for_match() -> None:
     """One OAuth record for (client_id, role) → returns its agent_id."""
     store = TokenStore(service="test-find-oauth-match")
-    issued = store.issue(
+    issued = await store.issue(
         agent_id=None,
         role="pm",
         label="oauth:claude",
@@ -136,7 +136,7 @@ def test_find_oauth_caller_by_client_id_returns_agent_id_for_match() -> None:
     assert found == issued.record.agent_id
 
 
-def test_find_oauth_caller_by_client_id_returns_most_recent_for_alpha_persistence(
+async def test_find_oauth_caller_by_client_id_returns_most_recent_for_alpha_persistence(
 ) -> None:
     """Multiple OAuth records for same (client_id, role) → returns the
     most-recent agent_id (by issued_at). Alpha-persistence reuse path:
@@ -149,7 +149,7 @@ def test_find_oauth_caller_by_client_id_returns_most_recent_for_alpha_persistenc
     issuance is the discriminator.
     """
     store = TokenStore(service="test-find-oauth-recent")
-    first = store.issue(
+    first = await store.issue(
         agent_id=None,
         role="pm",
         label="oauth:first",
@@ -158,7 +158,7 @@ def test_find_oauth_caller_by_client_id_returns_most_recent_for_alpha_persistenc
     )
     # Re-issue with same agent_id (simulating alpha persistence reuse
     # by the OAuth provider's exchange_authorization_code path).
-    second = store.issue(
+    second = await store.issue(
         agent_id=first.record.agent_id,
         role="pm",
         label="oauth:second",
@@ -207,14 +207,14 @@ def test_parse_token_returns_components() -> None:
 # tokens.
 
 
-def test_issue_indexed_true_writes_both_record_and_index(
+async def test_issue_indexed_true_writes_both_record_and_index(
     keyring_memory: object,
 ) -> None:
     """Default behavior (indexed=True): writes the per-token record AND
     appends the token_id to _index. Preserves prior shape for static/OAuth
     long-lived credentials."""
     store = TokenStore(service="test-indexed-true")
-    issued = store.issue(agent_id=None, role="pm", label="static-pm")
+    issued = await store.issue(agent_id=None, role="pm", label="static-pm")
 
     # Per-token record present
     record_raw = keyring_memory._store.get(  # type: ignore[attr-defined]
@@ -230,14 +230,14 @@ def test_issue_indexed_true_writes_both_record_and_index(
     assert issued.record.token_id in json.loads(index_raw)["token_ids"]
 
 
-def test_issue_indexed_false_writes_record_but_not_index(
+async def test_issue_indexed_false_writes_record_but_not_index(
     keyring_memory: object,
 ) -> None:
     """indexed=False writes the per-token record but does NOT touch _index.
     This is the high-churn-transient-token path used by per-dispatch and
     per-spawn supervisor tokens to prevent unbounded keyring blob growth."""
     store = TokenStore(service="test-indexed-false")
-    issued = store.issue(
+    issued = await store.issue(
         agent_id=None,
         role="implementer",
         label="dispatch:abc123",
@@ -262,31 +262,31 @@ def test_issue_indexed_false_writes_record_but_not_index(
     )
 
 
-def test_lookup_works_for_unindexed_tokens() -> None:
+async def test_lookup_works_for_unindexed_tokens() -> None:
     """lookup() reads token:<id> directly and verifies the secret hash
     constant-time. It does NOT consult _index, so unindexed tokens
     authenticate identically to indexed ones."""
     store = TokenStore(service="test-lookup-unindexed")
-    issued = store.issue(
+    issued = await store.issue(
         agent_id=None,
         role="implementer",
         label="dispatch:xyz789",
         indexed=False,
     )
 
-    rec = store.lookup(issued.token)
+    rec = await store.lookup(issued.token)
     assert rec is not None
     assert rec.role == "implementer"
     assert rec.label == "dispatch:xyz789"
     assert rec.token_id == issued.record.token_id
 
 
-def test_revoke_works_for_unindexed_tokens() -> None:
+async def test_revoke_works_for_unindexed_tokens() -> None:
     """revoke() reads/writes token:<id> directly. Works for unindexed
     tokens because the per-token record carries the revoked_at field;
     _index is not consulted on the revocation path."""
     store = TokenStore(service="test-revoke-unindexed")
-    issued = store.issue(
+    issued = await store.issue(
         agent_id=None,
         role="tester",
         label="dispatch:def456",
@@ -294,14 +294,14 @@ def test_revoke_works_for_unindexed_tokens() -> None:
     )
 
     # First revoke succeeds (record exists + was not previously revoked)
-    assert store.revoke(issued.record.token_id) is True
+    assert await store.revoke(issued.record.token_id) is True
     # lookup now returns None (revoked_at is set)
-    assert store.lookup(issued.token) is None
+    assert await store.lookup(issued.token) is None
     # Idempotency: second revoke is a no-op
-    assert store.revoke(issued.record.token_id) is False
+    assert await store.revoke(issued.record.token_id) is False
 
 
-def test_list_records_excludes_unindexed_tokens(
+async def test_list_records_excludes_unindexed_tokens(
     keyring_memory: object,
 ) -> None:
     """list_records iterates _index and reads each token:<id>. Unindexed
@@ -312,10 +312,10 @@ def test_list_records_excludes_unindexed_tokens(
     Their lifecycle is recorded in audit_log (dispatch.token_created /
     dispatch.token_revoked) and the dispatches table token_id column."""
     store = TokenStore(service="test-list-mixed")
-    indexed_token = store.issue(
+    indexed_token = await store.issue(
         agent_id=None, role="pm", label="static-pm"
     )
-    unindexed_token = store.issue(
+    unindexed_token = await store.issue(
         agent_id=None,
         role="implementer",
         label="dispatch:hidden",
@@ -334,11 +334,11 @@ def test_list_records_excludes_unindexed_tokens(
         is not None
     )
     # ...and still authenticates via lookup...
-    assert store.lookup(unindexed_token.token) is not None
+    assert await store.lookup(unindexed_token.token) is not None
     # ...but list_records intentionally does not surface it.
 
 
-def test_indexed_write_failure_rolls_back_token_record(
+async def test_indexed_write_failure_rolls_back_token_record(
     monkeypatch: pytest.MonkeyPatch, keyring_memory: object
 ) -> None:
     """If _write_index fails AFTER token:<id> has been written, the
@@ -364,7 +364,7 @@ def test_indexed_write_failure_rolls_back_token_record(
     monkeypatch.setattr(store, "_write_index", failing_write_index)
 
     with pytest.raises(OSError):
-        store.issue(agent_id=None, role="pm", label="static-pm")
+        await store.issue(agent_id=None, role="pm", label="static-pm")
 
     # After rollback, no token:* record should remain for this service.
     # We don't know the failed token_id (issue raised before returning),
@@ -381,7 +381,7 @@ def test_indexed_write_failure_rolls_back_token_record(
     )
 
 
-def test_indexed_write_failure_does_not_mask_original_error(
+async def test_indexed_write_failure_does_not_mask_original_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """If the cleanup delete itself raises, the original _write_index
@@ -403,10 +403,10 @@ def test_indexed_write_failure_does_not_mask_original_error(
     # The OSError from _write_index propagates, NOT the RuntimeError
     # from the failing cleanup. Root cause is preserved.
     with pytest.raises(OSError, match="The stub received bad data"):
-        store.issue(agent_id=None, role="pm", label="static-pm")
+        await store.issue(agent_id=None, role="pm", label="static-pm")
 
 
-def test_indexed_false_skips_rollback_path_entirely(
+async def test_indexed_false_skips_rollback_path_entirely(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """indexed=False never calls _write_index, so even if _write_index
@@ -425,7 +425,7 @@ def test_indexed_false_skips_rollback_path_entirely(
     )
 
     # No exception — _write_index is never invoked for indexed=False.
-    issued = store.issue(
+    issued = await store.issue(
         agent_id=None,
         role="implementer",
         label="dispatch:safe",
@@ -433,4 +433,4 @@ def test_indexed_false_skips_rollback_path_entirely(
     )
     assert issued.record.role == "implementer"
     # Token still authenticates via lookup.
-    assert store.lookup(issued.token) is not None
+    assert await store.lookup(issued.token) is not None

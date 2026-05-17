@@ -111,7 +111,7 @@ async def test_ping_wrapper_records_activity_end_to_end(
     via the real MCP client, assert the dispatch row's last_activity_at and
     last_tool_called were updated by the helper invocation in the wrapper."""
     token_store = TokenStore()
-    issued = token_store.issue(
+    issued = await token_store.issue(
         agent_id="agent-test", role="implementer", label="e2e-activity"
     )
 
@@ -201,7 +201,7 @@ async def test_observe_caller_rolls_back_both_writes_on_failure(
     didn't actually complete observably.
     """
     token_store = TokenStore()
-    issued = token_store.issue(
+    issued = await token_store.issue(
         agent_id=None,
         role="pm",
         label="oauth-pm-rollback-test",

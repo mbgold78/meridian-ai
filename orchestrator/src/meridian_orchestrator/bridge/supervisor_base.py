@@ -515,9 +515,7 @@ class LongRunningSupervisor(ABC):
             await cancel_drain_task(proc)
 
         if token is not None and dispatch_id is not None:
-            revoked = await asyncio.to_thread(
-                self._token_store.revoke, token.record.token_id
-            )
+            revoked = await self._token_store.revoke(token.record.token_id)
             if revoked:
                 await write_audit(
                     self._storage,
@@ -642,8 +640,7 @@ class LongRunningSupervisor(ABC):
         # both work normally; tradeoff is that supervisor per-spawn
         # tokens don't surface in `scripts/list-tokens.py` (visibility
         # via audit_log / dispatches instead).
-        issued = await asyncio.to_thread(
-            self._token_store.issue,
+        issued = await self._token_store.issue(
             self._supervisor_agent_id(),
             self._token_role(),
             self._token_label(),
@@ -835,9 +832,8 @@ class LongRunningSupervisor(ABC):
         )
 
         if self._current_token is not None:
-            revoked = await asyncio.to_thread(
-                self._token_store.revoke,
-                self._current_token.record.token_id,
+            revoked = await self._token_store.revoke(
+                self._current_token.record.token_id
             )
             if revoked:
                 await write_audit(
@@ -903,9 +899,8 @@ class LongRunningSupervisor(ABC):
         )
 
         if self._current_token is not None:
-            revoked = await asyncio.to_thread(
-                self._token_store.revoke,
-                self._current_token.record.token_id,
+            revoked = await self._token_store.revoke(
+                self._current_token.record.token_id
             )
             if revoked:
                 await write_audit(
@@ -1047,9 +1042,7 @@ class LongRunningSupervisor(ABC):
             await cancel_drain_task(proc)
 
         if token is not None:
-            revoked = await asyncio.to_thread(
-                self._token_store.revoke, token.record.token_id
-            )
+            revoked = await self._token_store.revoke(token.record.token_id)
             if revoked:
                 await write_audit(
                     self._storage,

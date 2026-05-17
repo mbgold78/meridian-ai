@@ -138,7 +138,7 @@ async def _issue_role_token(
     storage: SqliteStorage, role: str, label: str
 ) -> IssuedToken:
     token_store = TokenStore()
-    issued = token_store.issue(agent_id=None, role=role, label=label)
+    issued = await token_store.issue(agent_id=None, role=role, label=label)
     await _seed_agent(storage, issued.record.agent_id, role)
     return issued
 

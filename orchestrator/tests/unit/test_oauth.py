@@ -172,7 +172,7 @@ async def test_exchange_authorization_code_issues_oauth_sourced_token() -> None:
     assert oauth_token.access_token.startswith("mor_")
 
     # The issued token resolves through the unified TokenStore, marked oauth.
-    record = store.lookup(oauth_token.access_token)
+    record = await store.lookup(oauth_token.access_token)
     assert record is not None
     assert record.source == "oauth"
     assert record.client_id == "cid-1"
@@ -219,7 +219,7 @@ async def test_exchange_reuses_agent_id_for_same_client_id_alpha_persistence() -
         auth_code = await provider.load_authorization_code(client, code_value)
         assert auth_code is not None
         token = await provider.exchange_authorization_code(client, auth_code)
-        record = store.lookup(token.access_token)
+        record = await store.lookup(token.access_token)
         assert record is not None
         return record.agent_id
 
@@ -263,7 +263,7 @@ async def test_exchange_invokes_oauth_caller_registered_callback() -> None:
 
     assert len(captured) == 1
     agent_id, role = captured[0]
-    record = store.lookup(token.access_token)
+    record = await store.lookup(token.access_token)
     assert record is not None
     assert agent_id == record.agent_id
     assert role == "pm"
@@ -298,7 +298,7 @@ async def test_exchange_callback_failure_does_not_block_token_issuance() -> None
     # Should not raise despite callback failure
     token = await provider.exchange_authorization_code(client, auth_code)
     assert token.token_type == "Bearer"
-    record = store.lookup(token.access_token)
+    record = await store.lookup(token.access_token)
     assert record is not None
     assert record.source == "oauth"
 
@@ -306,7 +306,7 @@ async def test_exchange_callback_failure_does_not_block_token_issuance() -> None
 async def test_revoke_token_marks_record_revoked() -> None:
     store = TokenStore(service="oauth-test")
     provider = MeridianOAuthProvider(store)
-    issued = store.issue(
+    issued = await store.issue(
         agent_id=None, role="pm", label="oauth:test",
         source="oauth", client_id="cid-1",
     )

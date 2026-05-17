@@ -31,14 +31,14 @@ from meridian_orchestrator.server import (
 )
 
 
-def test_resolves_token_id_from_valid_bearer_token(
+async def test_resolves_token_id_from_valid_bearer_token(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Happy path: a valid bearer token in the access context resolves
     to its token_id (the short hex prefix). The resolved token_id is
     what the record_api_call handler passes to its dispatch lookup."""
     store = TokenStore(service="resolve-token-id-test-1")
-    issued = store.issue("agent-x", "engineer", "test-engineer")
+    issued = await store.issue("agent-x", "engineer", "test-engineer")
 
     access = AccessToken(
         token=issued.token,
@@ -69,7 +69,7 @@ def test_raises_auth_error_on_missing_access_context(
         _resolve_caller_token_id()
 
 
-def test_returns_short_hex_prefix_format_matching_dispatch_lookup(
+async def test_returns_short_hex_prefix_format_matching_dispatch_lookup(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Format contract test: the token_id returned by
@@ -91,7 +91,7 @@ def test_returns_short_hex_prefix_format_matching_dispatch_lookup(
     valid against the current TokenStore implementation.
     """
     store = TokenStore(service="resolve-token-id-test-3")
-    issued = store.issue("agent-y", "implementer", "test-implementer")
+    issued = await store.issue("agent-y", "implementer", "test-implementer")
 
     access = AccessToken(
         token=issued.token,
@@ -108,7 +108,7 @@ def test_returns_short_hex_prefix_format_matching_dispatch_lookup(
     # Round-trip: the resolved token_id must look up the original
     # record. If the format ever drifts (TokenStore changes the prefix
     # length, _parse_token changes its return shape, etc.), this fails.
-    record = store.lookup_by_token_id(resolved_token_id)
+    record = await store.lookup_by_token_id(resolved_token_id)
     assert record is not None, (
         f"_resolve_caller_token_id returned {resolved_token_id!r} but "
         "TokenStore.lookup_by_token_id couldn't find a record. The "
@@ -127,7 +127,7 @@ def test_returns_short_hex_prefix_format_matching_dispatch_lookup(
 
 
 @pytest.mark.parametrize("source", ["static", "oauth"])
-def test_resolve_caller_source_returns_token_record_source(
+async def test_resolve_caller_source_returns_token_record_source(
     monkeypatch: pytest.MonkeyPatch, source: str
 ) -> None:
     """Happy path for both source values: ``_resolve_caller_source``
@@ -140,7 +140,7 @@ def test_resolve_caller_source_returns_token_record_source(
     submitted_by population.
     """
     store = TokenStore(service=f"resolve-source-test-{source}")
-    issued = store.issue(
+    issued = await store.issue(
         "agent-z", "pm", f"test-pm-{source}", source=source  # type: ignore[arg-type]
     )
 
@@ -154,11 +154,11 @@ def test_resolve_caller_source_returns_token_record_source(
         lambda: access,
     )
 
-    resolved = _resolve_caller_source(store)
+    resolved = await _resolve_caller_source(store)
     assert resolved == source
 
 
-def test_resolve_caller_source_raises_on_missing_access_context(
+async def test_resolve_caller_source_raises_on_missing_access_context(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """No authenticated context (no Bearer token on the request) raises
@@ -172,10 +172,10 @@ def test_resolve_caller_source_raises_on_missing_access_context(
     )
 
     with pytest.raises(AuthError, match="no authenticated context"):
-        _resolve_caller_source(store)
+        await _resolve_caller_source(store)
 
 
-def test_resolve_caller_source_raises_on_unresolvable_token_id(
+async def test_resolve_caller_source_raises_on_unresolvable_token_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Bearer token parses cleanly but token_id doesn't resolve to a
@@ -183,9 +183,9 @@ def test_resolve_caller_source_raises_on_unresolvable_token_id(
     AuthError rather than silently returning a sentinel; this is a
     wrapper-layer bug not a caller error per the docstring contract."""
     store = TokenStore(service="resolve-source-test-orphan")
-    issued = store.issue("agent-orphan", "pm", "orphan-source-test")
+    issued = await store.issue("agent-orphan", "pm", "orphan-source-test")
     # Hard-delete the record so lookup_by_token_id returns None.
-    store.delete(issued.record.token_id)
+    await store.delete(issued.record.token_id)
 
     access = AccessToken(
         token=issued.token,
@@ -198,4 +198,4 @@ def test_resolve_caller_source_raises_on_unresolvable_token_id(
     )
 
     with pytest.raises(AuthError, match="could not resolve TokenRecord"):
-        _resolve_caller_source(store)
+        await _resolve_caller_source(store)
