@@ -201,6 +201,25 @@ class Settings(BaseSettings):
     # external-credential pattern documented above the OAuth token field).
     transient_token_gc_interval_seconds: int = Field(default=60, ge=1)
 
+    # M5-sqlite-transient-token-store slice 1b commit 6: gate the one-shot
+    # startup probe in ``bridge/transient_token_probe.py``. The lifespan
+    # body (wired at this commit) invokes :class:`TransientTokenStartupProbe`
+    # once after :class:`TransientTokenStore` is constructed but before
+    # the MCP server binds the listening socket.
+    #
+    # Default ``True`` because the probe is the M1=(c) ratified
+    # observability target — the daemon should report orphans and
+    # double-presence on every boot until orphans are zero. Operator
+    # may flip to ``False`` once the keyring is post-slice-1c-cleanup
+    # (orphans = 0 expected) to skip the startup latency. The probe is
+    # bounded — keyring ``token:*`` enumeration is ~4 static seeds + ≤N
+    # OAuth tokens + remaining slice-1-era orphans, sub-second at Phase 1
+    # scale. Probe failure → WARN + continue; never blocks daemon boot
+    # (per slice 1b spec § Lifespan ordering).
+    #
+    # Env var: ``MERIDIAN_ORCH_TRANSIENT_TOKEN_ORPHAN_PROBE_ON_STARTUP``.
+    transient_token_orphan_probe_on_startup: bool = Field(default=True)
+
     @model_validator(mode="after")
     def _require_substrate_working_directory_when_supervisor_enabled(
         self,

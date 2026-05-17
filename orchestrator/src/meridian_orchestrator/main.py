@@ -38,12 +38,17 @@ from meridian_orchestrator.bridge.oauth_usage import (
     OAuthUsagePoller,
 )
 from meridian_orchestrator.bridge.pm_supervisor import PMSupervisor
+from meridian_orchestrator.bridge.transient_token_gc import TransientTokenGc
+from meridian_orchestrator.bridge.transient_token_probe import (
+    TransientTokenStartupProbe,
+)
 from meridian_orchestrator.config import Settings
 from meridian_orchestrator.errors import ValidationError
 from meridian_orchestrator.server import serve as serve_mcp
 from meridian_orchestrator.storage.migrations import run_migrations
 from meridian_orchestrator.storage.seed import seed_initial
 from meridian_orchestrator.storage.sqlite import SqliteStorage
+from meridian_orchestrator.transient_tokens import TransientTokenStore
 
 logger = structlog.get_logger(__name__)
 
@@ -344,6 +349,65 @@ async def _run_lifespan_body(
     pointing at a temp data dir.
     """
     async with _lifespan(settings) as storage:
+        # M5-sqlite-transient-token-store slice 1b commit 6: construct
+        # the SQLite-backed transient-token store + wire it into all
+        # TokenStore() instances created in this lifespan. Per the slice
+        # 1b spec § Lifespan ordering table, steps 2-3: construct
+        # transient_store immediately after migrations are applied so
+        # downstream TokenStore() constructions (BridgeDispatcher,
+        # PMSupervisor, EngineerSupervisor) all get the SQLite-routed
+        # backend. The single transient_store instance is shared across
+        # all TokenStore() constructions in this lifespan — the store is
+        # stateless beyond its Storage-backed write surface, so sharing
+        # is correct and avoids the keyring-only fallback shape per
+        # slice 1a's `transient_store=None` regression-guard tests.
+        transient_store = TransientTokenStore(storage=storage)
+
+        # Step 4 (per spec § Lifespan ordering): one-shot orphan +
+        # double-presence probe. Pure observability (M1=(c) ratified
+        # report-only); fires before the MCP server binds the
+        # listening socket so the daemon does not accept MCP requests
+        # while observability state is still indeterminate.
+        #
+        # Probe failure → log WARNING + continue. The probe is
+        # observability-only; daemon liveness does NOT depend on its
+        # success per the spec § Lifespan ordering startup-failure-mode
+        # table.
+        if settings.transient_token_orphan_probe_on_startup:
+            probe = TransientTokenStartupProbe(
+                storage=storage,
+                token_store=TokenStore(transient_store=transient_store),
+            )
+            try:
+                probe_result = await probe.run()
+                logger.info(
+                    "transient_token_probe.completed",
+                    **probe_result,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "transient_token_probe.failed",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+
+        # Step 5 (per spec § Lifespan ordering): start the GC task.
+        # GC startup failure is FAIL-FAST — the task creation itself
+        # is synchronous (just an asyncio.create_task call); the GC
+        # loop's internal exceptions are caught inside _emit_audit and
+        # _sweep_once per the gc module's contracts. We treat the
+        # asyncio.create_task call as best-effort and let the
+        # lifespan's outer exception handlers surface anything truly
+        # broken.
+        gc = TransientTokenGc(
+            storage=storage,
+            interval_seconds=settings.transient_token_gc_interval_seconds,
+        )
+        gc_shutdown = asyncio.Event()
+        gc_task = asyncio.create_task(
+            gc.run(gc_shutdown), name="transient-token-gc"
+        )
+
         # M5-subscription-routing commit 0.5: seed companies + projects
         # automatically on every boot. Idempotent per seed_initial's
         # contract — re-runs are no-ops when rows already exist. Folded
@@ -387,7 +451,7 @@ async def _run_lifespan_body(
                 )
                 dispatcher = BridgeDispatcher(
                     storage=storage,
-                    token_store=TokenStore(),
+                    token_store=TokenStore(transient_store=transient_store),
                     canonical=canonical,
                     worktrees_root=settings.dispatch_worktrees_root,
                     # M5-flag-flips F4: per-dispatch stderr log root.
@@ -690,7 +754,9 @@ async def _run_lifespan_body(
                                     registry=registry,
                                     working_directory=settings.pm_continuous_dir,
                                     storage=storage,
-                                    token_store=TokenStore(),
+                                    token_store=TokenStore(
+                                        transient_store=transient_store
+                                    ),
                                     # M5-flag-flips F4: stderr drain
                                     # destination for the PM-continuous
                                     # supervisor subprocess.
@@ -727,7 +793,9 @@ async def _run_lifespan_body(
                                     registry=registry,
                                     working_directory=settings.engineer_supervisor_dir,
                                     storage=storage,
-                                    token_store=TokenStore(),
+                                    token_store=TokenStore(
+                                        transient_store=transient_store
+                                    ),
                                     # M5-flag-flips F4: stderr drain
                                     # destination for the Engineer
                                     # supervisor subprocess.
@@ -817,6 +885,34 @@ async def _run_lifespan_body(
                             "engineer_supervisor.shutdown_force_close",
                             error=str(exc),
                         )
+                # Slice 1b commit 6 per spec § Shutdown sequence step 2:
+                # cancel the GC task and drain the in-flight cycle.
+                # ``shutdown.set()`` signals a clean exit at the next
+                # cycle boundary; ``wait_for`` enforces the A5-ratified
+                # 5s drain ceiling. Beyond the timeout, log WARNING and
+                # exit anyway — DELETE is atomic at the SQL layer so
+                # the row state remains consistent regardless of
+                # Python-side cancel timing.
+                gc_shutdown.set()
+                try:
+                    await asyncio.wait_for(
+                        gc_task, timeout=gc.drain_timeout_seconds
+                    )
+                except TimeoutError:
+                    logger.warning(
+                        "transient_token_gc.drain_timeout",
+                        timeout_seconds=gc.drain_timeout_seconds,
+                    )
+                    gc_task.cancel()
+                    with contextlib.suppress(
+                        asyncio.CancelledError, Exception
+                    ):
+                        await gc_task
+                except Exception as exc:
+                    logger.error(
+                        "transient_token_gc.drain_failed",
+                        error=str(exc),
+                    )
                 if not mcp_task.done():
                     mcp_task.cancel()
                     with contextlib.suppress(asyncio.CancelledError, Exception):
