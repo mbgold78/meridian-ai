@@ -24,11 +24,15 @@ from meridian_orchestrator.storage.sqlite import SqliteStorage
 #   0011_pm_spin_rationale_log.sql             (M5-continuous-pm-driver commit 3)
 #   0012_audit_sample_log.sql                  (M5-continuous-pm-driver commit 4)
 #   0013_tasks_task_type_and_status_check.sql  (M4d-task-management-surface commit 1)
+#   0015_transient_tokens.sql                  (M5-sqlite-transient-token-store slice 1a)
 # Reservation gap remaining: 0004 reserved for inbound_messages +
 # outbound_messages (Telegram notifications); milestone-attribution
 # pending resolution between data-model.md (M6) and the M5 sub-milestone
-# breakdown memory (M5-telegram-foundation).
-EXPECTED_VERSIONS = [1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+# breakdown memory (M5-telegram-foundation). 0014 reserved in fork
+# for canonical-clone-mgmt slice 1 (not promoted to live); live's
+# expected list intentionally skips 14, mirroring the existing 4-skip
+# convention (live-promotion adaptation 2026-05-17, β-S11-12 option-b).
+EXPECTED_VERSIONS = [1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15]
 
 
 @pytest_asyncio.fixture
