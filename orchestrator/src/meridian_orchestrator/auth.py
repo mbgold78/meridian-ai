@@ -20,6 +20,17 @@ constant-time path:
 
 The CLI (``list-tokens.py``) surfaces the ``source`` so the operator can audit
 which tokens came from where.
+
+Two-backend storage model (post-M5-sqlite-transient-token-store):
+- Static seeds + OAuth tokens stored in keyring (via TokenStore methods).
+- Transient per-dispatch / per-spawn tokens stored in SQLite via
+  TransientTokenStore (injected at TokenStore construction; routed
+  per ratified decision R1=(b) try-SQLite-first-then-keyring).
+- Lifespan-managed GC reaps expired transient rows on the
+  Settings.transient_token_gc_interval_seconds cadence (default 60s).
+- Startup orphan + double-presence probe (M1=(c) ratified report-only)
+  emits auth.orphan.detected + auth.double_presence.detected audit
+  events for operator observability.
 """
 
 from __future__ import annotations
