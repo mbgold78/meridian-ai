@@ -10,6 +10,17 @@ Sketched in `docs/kickoff/12-phase-two-engineering-team.md`.
 
 ## Deferred
 
+- **β-S11-14 — Runtime agent-yaml drift from source-controlled config (2026-05-17, surfaced during β-S11-15 diagnosis).** Daemon's agent yaml seed-on-startup is "copy from source-controlled config IF not present in runtime dir, otherwise skip" — the startup log emits `agents_dir.seed_skipped` when runtime dir is already populated. Once seeded, runtime yamls at `~/.meridian-orchestrator/config/agents/` are NEVER auto-refreshed from source-controlled changes, even across daemon restarts.
+
+  **Manifestation:** β-S11-12/13 prompt-level changes committed to source-controlled pm.yaml + engineer.yaml at HEAD `ea297f3` (2026-05-17). Daemon restart at 16:39 UTC to activate HEAD `ea297f3` logged `agents_dir.seed_skipped` (runtime yamls present from initial daemon setup 8-9 days prior, mtimes May 8-12). Newly spawned PM + Engineer supervisors loaded the PRE-edit prompts. The β-S11-12/13 policies were silently inert at runtime. Discovered only because the prompt changes were initially suspected as a cause of an unrelated supervisor regression (β-S11-15) and a static analysis of the runtime yaml content ruled them out — that same analysis revealed runtime yamls had never received the source-controlled updates.
+
+  **Disposition options:**
+  - Daemon-side: change seed behavior from "copy-if-absent" to "always-copy from source-controlled" OR add file-watcher-style refresh on source mtime change. Risk: any operator-side runtime yaml customizations (if any) would be overwritten.
+  - Operator-side: document a manual runtime-refresh procedure (`cp -f <source>/config/agents/*.yaml ~/.meridian-orchestrator/config/agents/` then daemon restart). Lowest risk, no code change. Least ergonomic.
+  - Hybrid: warn at startup if source-controlled yaml mtime newer than runtime yaml mtime; operator sees a deterministic WARN and can decide whether to refresh. Lowest blast radius among automated paths.
+
+  **Touchpoint:** `main.py` agents-dir-seeding logic (the `agents_dir.seed_skipped` emit site); agent registry yaml-loading code path. Spec home: not yet authored. **Disposition:** TBD — operator decision; not blocking β-S11-15 fix.
+
 - **β-S11-12 — Agent auto-resolve skill / incident triage policy (operator-ratified 2026-05-17).** Agents escalate tactical uncertainties too readily to the human-in-the-loop or Operator Fix Window. Recent examples: perceived Engineer liveness failure that resolved cleanly via authoritative DB state (operator-perceived ~13min stall was actual ~1min claim latency); duplicate PM lifecycle ownership across windows (β-S11-11, fork BACKLOG); canonical visibility ambiguity (β-S11-9); Engineer commit-boundary gap (β-S11-10). Underlying gap: no role-specific auto-resolve discipline — agents propagate raw confusion upward without first observing authoritative state, classifying the issue, or attempting bounded safe actions within their role envelope.
 
   **Proposal — role-specific auto-resolve skill.** Each role (PM, Engineer, Implementer, Tester, Operator Fix Window) runs a four-step discipline before any escalation:
