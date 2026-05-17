@@ -37,9 +37,18 @@ def _clear_supervisor_flag_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
     ``MERIDIAN_ORCH_ENABLE_ENGINEER_SUPERVISOR=false`` from the
     autouse fixture and the substrate-working-directory validator
     never fires — masking the very behavior these tests assert.
+
+    Also clears ``MERIDIAN_ORCH_SUBSTRATE_WORKING_DIRECTORY``: when
+    these tests are run via a dispatched Tester subprocess, the
+    parent dispatcher's env can leak this var into pydantic-settings,
+    populating ``Settings.substrate_working_directory`` from the
+    environment and either suppressing the validator path under test
+    or breaking ``... is None`` assertions. Inherited-env hygiene,
+    not a production-code concern.
     """
     monkeypatch.delenv("MERIDIAN_ORCH_ENABLE_ENGINEER_SUPERVISOR", raising=False)
     monkeypatch.delenv("MERIDIAN_ORCH_ENABLE_PM_SUPERVISOR", raising=False)
+    monkeypatch.delenv("MERIDIAN_ORCH_SUBSTRATE_WORKING_DIRECTORY", raising=False)
 
 
 def test_production_default_enables_engineer_supervisor(
