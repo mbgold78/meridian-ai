@@ -179,6 +179,28 @@ class Settings(BaseSettings):
     # tools/pm_handoff.py — zero new bridge → tools imports.
     pm_handoff_dir: Path | None = Field(default=None)
 
+    # M5-sqlite-transient-token-store slice 1b commit 5: GC sweep cadence
+    # for ``bridge/transient_token_gc.py``. The lifespan task (wired at
+    # slice 1b commit 6) sleeps this many seconds between sweeps of
+    # ``transient_tokens`` rows whose ``expires_at`` is in the past.
+    #
+    # Default 60s per the slice 1b spec § Settings additions trade-off
+    # table: shorter intervals reduce the post-revocation row-leak
+    # window (DB carries already-expired rows longer if the cadence is
+    # large) while longer intervals reduce DB churn + lifespan-task
+    # wakeup overhead. At 60s, a revoked token persists in
+    # ``transient_tokens`` for up to 60s past ``expires_at`` before
+    # reaping — well within the per-dispatch lifetime (minutes-to-tens-
+    # of-minutes). 30s would double DB I/O without operational benefit;
+    # 300s would extend the leak window past typical dispatch terminal-
+    # state cleanup.
+    #
+    # Env var: ``MERIDIAN_ORCH_TRANSIENT_TOKEN_GC_INTERVAL_SECONDS``. The
+    # MERIDIAN_ORCH_ prefix in :attr:`model_config` applies automatically
+    # (the explicit ``validation_alias`` shape is reserved for the
+    # external-credential pattern documented above the OAuth token field).
+    transient_token_gc_interval_seconds: int = Field(default=60, ge=1)
+
     @model_validator(mode="after")
     def _require_substrate_working_directory_when_supervisor_enabled(
         self,
