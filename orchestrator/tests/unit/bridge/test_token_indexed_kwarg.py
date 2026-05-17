@@ -29,14 +29,25 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
+import keyring
 import pytest
 import pytest_asyncio
 
+from meridian_orchestrator.auth import KEYRING_SERVICE, TokenStore, _record_key
 from meridian_orchestrator.bridge.canonical import CanonicalClone
-from meridian_orchestrator.bridge.dispatcher import BridgeDispatcher
-from meridian_orchestrator.bridge.supervisor_base import LongRunningSupervisor
+from meridian_orchestrator.bridge.dispatcher import (
+    BridgeDispatcher,
+    DispatchLaunchContext,
+    SubprocessHandle,
+)
+from meridian_orchestrator.bridge.supervisor_base import (
+    LongRunningSupervisor,
+    SupervisorLaunchContext,
+    SupervisorSubprocessHandle,
+)
 from meridian_orchestrator.storage.migrations import run_migrations
 from meridian_orchestrator.storage.sqlite import SqliteStorage
+from meridian_orchestrator.transient_tokens import TransientTokenStore
 
 pytestmark = pytest.mark.skipif(
     shutil.which("git") is None,
@@ -295,3 +306,159 @@ def test_supervisor_base_source_contains_indexed_false_literal() -> None:
         "See comment in test_dispatcher_source_contains_indexed_false_literal "
         "for the disposition discipline."
     )
+
+
+# ---- Slice 1a commit 4: SQLite-backed transient routing landing tests ----
+#
+# The two tests below replace the spy with a real
+# ``TokenStore(transient_store=TransientTokenStore(...))`` and assert the
+# per-dispatch / per-spawn token lands in the ``transient_tokens`` SQLite
+# table, NOT in the keyring ``token:<id>`` entry. The ``indexed=False``
+# kwarg checked above is necessary but not sufficient — with the routing
+# layer in place, the destination flipped from keyring to SQLite, and
+# this is what fully closes β-S11-5/6's keyring-blob-growth surface (the
+# original ``indexed=False`` kept the id out of the ``_index`` aggregator
+# but the per-token record still went to keyring). To keep these tests
+# fast and deterministic the launcher raises after the issue lands;
+# downstream lifecycle (subprocess, terminate, merge) is covered in the
+# existing dispatch and supervisor integration tests.
+
+
+async def _raising_dispatcher_launcher(
+    ctx: DispatchLaunchContext,
+) -> SubprocessHandle:
+    raise RuntimeError("test: short-circuit after transient issue lands")
+
+
+async def _raising_supervisor_launcher(
+    ctx: SupervisorLaunchContext,
+) -> SupervisorSubprocessHandle:
+    raise RuntimeError("test: short-circuit after transient issue lands")
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_per_dispatch_token_lands_in_transient(
+    storage_with_task: SqliteStorage,
+    canonical: CanonicalClone,
+    tmp_path: Path,
+) -> None:
+    """Slice 1a commit 4 call-site verification: when
+    :class:`BridgeDispatcher` runs ``self._token_store.issue(...,
+    indexed=False)`` through a :class:`TokenStore` wired with a real
+    :class:`TransientTokenStore`, the per-dispatch token's
+    ``token:<token_id>`` record must land in the SQLite
+    ``transient_tokens`` table — and NOT in the keyring entry under
+    ``token:<token_id>``. The keyring ``_index`` aggregator absence is
+    already covered by the kwarg test above; this test verifies the
+    routing destination switched."""
+    transient_store = TransientTokenStore(storage_with_task)
+    token_store = TokenStore(transient_store=transient_store)
+
+    dispatcher = BridgeDispatcher(
+        storage=storage_with_task,
+        token_store=token_store,
+        canonical=canonical,
+        worktrees_root=tmp_path / "data" / "dispatch-worktrees",
+        subprocess_launcher=_raising_dispatcher_launcher,
+    )
+
+    with pytest.raises(RuntimeError, match="test: short-circuit"):
+        await dispatcher.dispatch(
+            task_id="task-1",
+            role="implementer",
+            role_agent_id="impl-agent-id",
+            prompt="ignored",
+            actor="eng-agent-id",
+        )
+
+    row = await storage_with_task.fetch_one(
+        "SELECT token_id FROM dispatches WHERE task_id = ?", ("task-1",)
+    )
+    assert row is not None and row["token_id"] is not None, (
+        "BridgeDispatcher.dispatch should have set dispatches.token_id "
+        "after the issue call landed."
+    )
+    token_id = row["token_id"]
+
+    transient_row = await storage_with_task.fetch_one(
+        "SELECT agent_id, role, label FROM transient_tokens "
+        "WHERE token_id = ?",
+        (token_id,),
+    )
+    assert transient_row is not None, (
+        "expected a transient_tokens row for the per-dispatch token "
+        "(token_id=" + token_id + "); SQLite-backed routing is not "
+        "active for indexed=False issuance through TokenStore."
+    )
+    assert transient_row["agent_id"] == "impl-agent-id"
+    assert transient_row["role"] == "implementer"
+    assert transient_row["label"].startswith("dispatch:")
+
+    assert (
+        keyring.get_password(KEYRING_SERVICE, _record_key(token_id)) is None
+    ), (
+        "per-dispatch token leaked into the keyring backend; with "
+        "transient_store wired the token:<id> record must live in "
+        "transient_tokens only — keyring growth would re-open β-S11-5/6."
+    )
+
+
+@pytest.mark.asyncio
+async def test_supervisor_per_spawn_token_lands_in_transient(
+    tmp_path: Path,
+) -> None:
+    """Slice 1a commit 4 call-site verification: same routing-destination
+    check as the dispatcher version, against
+    :meth:`LongRunningSupervisor._spawn`. Per-spawn supervisor tokens
+    were the other half of the β-S11-5/6 surface; the SQLite backend
+    closes that side too."""
+    s = SqliteStorage(tmp_path / "data" / "orchestrator.db")
+    await s.connect()
+    try:
+        await run_migrations(s)
+        transient_store = TransientTokenStore(s)
+        token_store = TokenStore(transient_store=transient_store)
+
+        supervisor = _MinimalSupervisor(
+            storage=s,
+            token_store=token_store,
+            subprocess_launcher=_raising_supervisor_launcher,
+        )
+
+        with pytest.raises(RuntimeError, match="test: short-circuit"):
+            await supervisor.start()
+
+        row = await s.fetch_one(
+            "SELECT token_id FROM dispatches WHERE token_id IS NOT NULL "
+            "ORDER BY rowid DESC LIMIT 1"
+        )
+        assert row is not None and row["token_id"] is not None, (
+            "LongRunningSupervisor._spawn should have set "
+            "dispatches.token_id after the issue call landed."
+        )
+        token_id = row["token_id"]
+
+        transient_row = await s.fetch_one(
+            "SELECT agent_id, role, label FROM transient_tokens "
+            "WHERE token_id = ?",
+            (token_id,),
+        )
+        assert transient_row is not None, (
+            "expected a transient_tokens row for the per-spawn supervisor "
+            "token (token_id=" + token_id + "); SQLite-backed routing "
+            "is not active for indexed=False supervisor issuance."
+        )
+        assert transient_row["agent_id"] == "test-agent-id"
+        assert transient_row["role"] == "engineer"
+        assert transient_row["label"] == "test-supervisor"
+
+        assert (
+            keyring.get_password(KEYRING_SERVICE, _record_key(token_id))
+            is None
+        ), (
+            "per-spawn supervisor token leaked into the keyring backend; "
+            "with transient_store wired the token:<id> record must live "
+            "in transient_tokens only."
+        )
+    finally:
+        await s.close()
