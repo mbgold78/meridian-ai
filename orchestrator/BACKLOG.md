@@ -10,6 +10,43 @@ Sketched in `docs/kickoff/12-phase-two-engineering-team.md`.
 
 ## Deferred
 
+- **β-S11-16 — `HUMAN_ACTION_REQUIRED` notification contract + low-noise autonomous telemetry (2026-05-17).** PM can stop and report in its own window, but the operator still has to poll or notice the right window. During autonomous execution, silence creates uncertainty; during gates, "standing down" is not enough — PM must distinguish normal progress telemetry from actual human-action-required gates so decision gates do not disappear into chat history.
+
+  **Requirements:**
+
+  1. **`HUMAN_ACTION_REQUIRED` contract.** When PM reaches a stop gate, review gate, promotion gate, approval gate, or out-of-envelope condition, it must emit the exact literal phrase `HUMAN_ACTION_REQUIRED` and include a decision packet:
+     - workstream
+     - why human action is required
+     - options
+     - recommendation
+     - what is blocked
+     - what has and has not been mutated
+
+     PM must not report "human action required: no" while waiting on the human.
+
+  2. **Low-noise autonomous telemetry.** During active autonomous execution, PM provides progress telemetry without asking tactical questions. Telemetry shape (mirrors β-S11-13 § Format):
+     - active workstream
+     - current owner
+     - current task / dispatch / commit
+     - current state
+     - last transition time
+     - expected next transition
+     - time-to-concern
+     - human action required: yes / no
+
+     If work is progressing normally, say so briefly and continue.
+
+  3. **Cadence.** Event-driven updates on major transitions (per β-S11-13 transition list). Periodic updates only if execution runs long enough to create operator uncertainty. Keep periodic updates low-noise — favor brevity over completeness when nothing has changed.
+
+  4. **Scope.** Prompt-level policy first (extension of β-S11-12/13 sections in `pm.yaml`). Later product surface can make this first-class with a persistent `operator_decisions` or `human_action_required` table/tool so gates survive across sessions and are discoverable independent of chat history.
+
+  **Relationship to existing discipline:**
+  - β-S11-12 auto-resolve prevents premature escalation.
+  - β-S11-13 telemetry prevents silent waiting.
+  - β-S11-16 `HUMAN_ACTION_REQUIRED` prevents decision gates from disappearing into chat history.
+
+  **Disposition:** TBD; catalog only for now. Do NOT implement while β-S11-4 supervisor-cycle-completed execution chain is active. Pick up as follow-up after that chain completes. Touchpoint when implemented: `config/agents/pm.yaml` § Autonomous telemetry contract (extend with `HUMAN_ACTION_REQUIRED` literal contract); future product-surface design.
+
 - **β-S11-14 — Runtime agent-yaml drift from source-controlled config (2026-05-17, surfaced during β-S11-15 diagnosis).** Daemon's agent yaml seed-on-startup is "copy from source-controlled config IF not present in runtime dir, otherwise skip" — the startup log emits `agents_dir.seed_skipped` when runtime dir is already populated. Once seeded, runtime yamls at `~/.meridian-orchestrator/config/agents/` are NEVER auto-refreshed from source-controlled changes, even across daemon restarts.
 
   **Manifestation:** β-S11-12/13 prompt-level changes committed to source-controlled pm.yaml + engineer.yaml at HEAD `ea297f3` (2026-05-17). Daemon restart at 16:39 UTC to activate HEAD `ea297f3` logged `agents_dir.seed_skipped` (runtime yamls present from initial daemon setup 8-9 days prior, mtimes May 8-12). Newly spawned PM + Engineer supervisors loaded the PRE-edit prompts. The β-S11-12/13 policies were silently inert at runtime. Discovered only because the prompt changes were initially suspected as a cause of an unrelated supervisor regression (β-S11-15) and a static analysis of the runtime yaml content ruled them out — that same analysis revealed runtime yamls had never received the source-controlled updates.
