@@ -294,6 +294,22 @@ class _RespawnEntry:
     last_tool_called: str | None
 
 
+@dataclass(frozen=True)
+class _CycleHistoryEntry:
+    """One row in the supervisor's in-process cycle-completed history.
+
+    The spin guard (β-S11-4 commit B) tracks healthy supervisor cycle
+    completions in a fixed-window deque. ``triggered_by_dispatch_id`` is
+    the dispatch_id of the just-completed-cycle instance;
+    ``last_tool_called`` is its ``dispatches.last_tool_called`` value at
+    the cycle-completed moment, for diagnostic capture in the halt audit.
+    """
+
+    timestamp: datetime
+    triggered_by_dispatch_id: str
+    last_tool_called: str
+
+
 class LongRunningSupervisor(ABC):
     """Abstract base for engineer-supervisor (M4c) and pm-continuous (M5).
 
@@ -324,6 +340,8 @@ class LongRunningSupervisor(ABC):
         timeout_seconds: int = 1800,
         respawn_cap: int = 3,
         respawn_window_seconds: int = 3600,
+        cycle_completed_cap: int = 5,
+        cycle_completed_window_seconds: int = 60,
         grace_seconds: float = _GRACE_SECONDS_DEFAULT,
         effort: str = "high",
         dispatches_root: Path | None = None,
@@ -340,6 +358,16 @@ class LongRunningSupervisor(ABC):
         self._timeout_seconds = timeout_seconds
         self._respawn_cap = respawn_cap
         self._respawn_window = timedelta(seconds=respawn_window_seconds)
+        # β-S11-4 commit B spin guard: N healthy cycle-completed exits
+        # within W seconds halts the supervisor via _halt_spin_guard.
+        # Separate deque from _respawn_history (A2 binding): healthy
+        # cycles and failure-recovery cycles have different N/W and
+        # different halt semantics — conflating would cross-couple the
+        # two cap accounts.
+        self._cycle_completed_cap = cycle_completed_cap
+        self._cycle_completed_window = timedelta(
+            seconds=cycle_completed_window_seconds
+        )
         self._grace = grace_seconds
         # M5-flag-flips F4: per-dispatch stderr log root. Threaded to
         # the default launcher via SupervisorLaunchContext.dispatches_root.
@@ -375,6 +403,7 @@ class LongRunningSupervisor(ABC):
         self._current_token: IssuedToken | None = None
         self._current_proc: SupervisorSubprocessHandle | None = None
         self._respawn_history: deque[_RespawnEntry] = deque()
+        self._cycle_history: deque[_CycleHistoryEntry] = deque()
         self._halted: bool = False
         self._started: bool = False
         self._watchdog_task: asyncio.Task[None] | None = None
@@ -972,10 +1001,6 @@ class LongRunningSupervisor(ABC):
         self._current_token = None
         self._current_dispatch_id = None
 
-        # NO ``_respawn_history.append`` — healthy cycles do not increment
-        # the failure-recovery cap counter (A3 invariant).
-        await self._spawn()
-
         logger.debug(
             "supervisor.cycle_completed",
             role=self._token_role_with_label(),
@@ -983,6 +1008,24 @@ class LongRunningSupervisor(ABC):
             last_tool_called=last_tool_called,
             cycle_duration_seconds=cycle_duration_seconds,
         )
+
+        # β-S11-4 commit B spin guard: prune entries older than the
+        # window, append this cycle's entry, and halt if N exits have
+        # occurred within W seconds. Healthy cycles do NOT touch
+        # _respawn_history (A3 invariant); the spin-guard deque is
+        # independent of the failure-recovery cap.
+        self._prune_cycle_history()
+        self._cycle_history.append(
+            _CycleHistoryEntry(
+                timestamp=datetime.now(tz=UTC),
+                triggered_by_dispatch_id=dispatch_id,
+                last_tool_called=last_tool_called,
+            )
+        )
+        if len(self._cycle_history) >= self._cycle_completed_cap:
+            await self._halt_spin_guard(triggering_dispatch_id=dispatch_id)
+        else:
+            await self._spawn()
 
     async def _handle_subprocess_unexpected_exit(
         self, dispatch_id: str, exit_code: int
@@ -1210,6 +1253,15 @@ class LongRunningSupervisor(ABC):
         while self._respawn_history and self._respawn_history[0].timestamp < cutoff:
             self._respawn_history.popleft()
 
+    def _prune_cycle_history(self) -> None:
+        """Drop cycle-history entries older than ``cycle_completed_window``."""
+        cutoff = datetime.now(tz=UTC) - self._cycle_completed_window
+        while (
+            self._cycle_history
+            and self._cycle_history[0].timestamp < cutoff
+        ):
+            self._cycle_history.popleft()
+
     async def _halt(
         self,
         triggering_dispatch_id: str,
@@ -1257,6 +1309,63 @@ class LongRunningSupervisor(ABC):
             triggering_dispatch_id=triggering_dispatch_id,
             triggering_last_tool=triggering_last_tool,
             respawn_dispatch_ids=respawn_dispatch_ids,
+            last_tool_called_per_dispatch=last_tool_per_dispatch,
+            recovery="service restart required",
+        )
+
+        self._halted = True
+        self._started = False
+
+    async def _halt_spin_guard(
+        self,
+        triggering_dispatch_id: str,
+    ) -> None:
+        """Spin guard fired: too many cycle-completed exits in too short a
+        window. Write halt audit, structlog ERROR, set _halted=True.
+
+        Mirror of :meth:`_halt`. Distinct from the
+        ``dispatch.heartbeat_timeout_cap`` audit and ``supervisor.halted``
+        structlog event so observability tooling can route the two halt
+        paths differently (one is failure-recovery exhaustion, the other
+        is rapid-healthy-cycle exhaustion).
+        """
+        if self._halted:
+            return
+
+        dispatch_ids: list[str] = [
+            e.triggered_by_dispatch_id for e in self._cycle_history
+        ]
+        last_tool_per_dispatch: list[str] = [
+            e.last_tool_called for e in self._cycle_history
+        ]
+
+        details: dict[str, Any] = {
+            "role": self._token_role_with_label(),
+            "n": self._cycle_completed_cap,
+            "window_seconds": int(
+                self._cycle_completed_window.total_seconds()
+            ),
+            "dispatch_ids": dispatch_ids,
+            "last_tool_called_per_dispatch": last_tool_per_dispatch,
+        }
+        await write_audit(
+            self._storage,
+            actor="system",
+            action="dispatch.supervisor_cycle_spin_halt",
+            target=triggering_dispatch_id,
+            details=details,
+        )
+
+        logger.error(
+            "supervisor.cycle_spin_halt",
+            role=self._token_role_with_label(),
+            label=self._token_label(),
+            triggering_dispatch_id=triggering_dispatch_id,
+            n=self._cycle_completed_cap,
+            window_seconds=int(
+                self._cycle_completed_window.total_seconds()
+            ),
+            dispatch_ids=dispatch_ids,
             last_tool_called_per_dispatch=last_tool_per_dispatch,
             recovery="service restart required",
         )

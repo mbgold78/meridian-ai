@@ -38,6 +38,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator, Callable
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -48,6 +49,7 @@ from meridian_orchestrator.auth import TokenStore
 from meridian_orchestrator.bridge.activity import record_mcp_call
 from meridian_orchestrator.bridge.engineer_supervisor import EngineerSupervisor
 from meridian_orchestrator.bridge.supervisor_base import (
+    HaltedSupervisorError,
     SupervisorLaunchContext,
     SupervisorSubprocessHandle,
 )
@@ -156,6 +158,8 @@ async def _build_supervisor(
     *,
     service: str,
     proc_queue: list[_ControllableProc],
+    cycle_completed_cap: int = 10,
+    cycle_completed_window_seconds: int = 60,
 ) -> EngineerSupervisor:
     agents_dir = tmp_path / "config" / "agents"
     _seed_repo_yamls(agents_dir)
@@ -173,7 +177,7 @@ async def _build_supervisor(
             proc_queue.append(_ControllableProc())
         return proc_queue.pop(0)
 
-    return EngineerSupervisor(
+    supervisor = EngineerSupervisor(
         registry=registry,
         working_directory=settings.engineer_supervisor_dir,
         storage=storage,
@@ -187,6 +191,19 @@ async def _build_supervisor(
         respawn_cap=3,
         respawn_window_seconds=60,
     )
+    # β-S11-4 commit B spin-guard: test fixture overrides applied
+    # post-construction because the A7 uniform mandate keeps the
+    # ``cycle_completed_cap`` / ``cycle_completed_window_seconds``
+    # parameters off ``EngineerSupervisor.__init__`` (defaults inherit
+    # via super() in production). Test fixture defaults sit above any
+    # non-spin-guard test's cycle count so Tests 1/2/6 exercise
+    # healthy-cycle behavior without tripping the guard; Test 3
+    # overrides to cap=3, window=1 to exercise the guard.
+    supervisor._cycle_completed_cap = cycle_completed_cap
+    supervisor._cycle_completed_window = timedelta(
+        seconds=cycle_completed_window_seconds
+    )
+    return supervisor
 
 
 async def _drive_healthy_cycle(
@@ -195,21 +212,25 @@ async def _drive_healthy_cycle(
     proc: _ControllableProc,
     *,
     tool_name: str = "get_window_state",
+    wait_for_halt: bool = False,
 ) -> str:
     """Populate ``last_tool_called`` via record_mcp_call, then signal
-    clean exit. Wait for respawn. Returns the dispatch_id that just
-    completed (pre-respawn)."""
+    clean exit. Wait for respawn (default) or halt (``wait_for_halt``).
+    Returns the dispatch_id that just completed (pre-respawn)."""
     pre_id = supervisor._current_dispatch_id
     assert pre_id is not None
     token = supervisor._current_token
     assert token is not None
     await record_mcp_call(storage, token.record.token_id, tool_name)
     proc.signal_clean_exit()
-    await _wait_until(
-        lambda: supervisor._current_dispatch_id is not None
-        and supervisor._current_dispatch_id != pre_id,
-        timeout=4.0,
-    )
+    if wait_for_halt:
+        await _wait_until(lambda: supervisor.is_halted, timeout=4.0)
+    else:
+        await _wait_until(
+            lambda: supervisor._current_dispatch_id is not None
+            and supervisor._current_dispatch_id != pre_id,
+            timeout=4.0,
+        )
     return pre_id
 
 
@@ -246,8 +267,9 @@ async def test_repeated_healthy_cycles_do_not_halt_supervisor(
     produce 5 status='completed' dispatch rows + 5 audit rows of the
     new ``dispatch.supervisor_cycle_completed`` action.
 
-    Commit A note: ``supervisor._cycle_history`` does not exist yet —
-    commit B adds it; this test does not assert on it.
+    Commit B addendum: ``_cycle_history`` grows by 5 (one entry per
+    cycle) and the spin guard does NOT fire — the test fixture's
+    ``cycle_completed_cap`` (10) sits above the cycle count.
     """
     # 1 initial + 5 respawn = 6 procs
     procs = [_ControllableProc() for _ in range(6)]
@@ -268,6 +290,7 @@ async def test_repeated_healthy_cycles_do_not_halt_supervisor(
         assert supervisor.is_halted is False
         assert supervisor._started is True
         assert len(supervisor._respawn_history) == 0
+        assert len(supervisor._cycle_history) == 5
 
         completed_rows = await storage.fetch_all(
             "SELECT id FROM dispatches WHERE role = ? AND status = 'completed'",
@@ -286,6 +309,13 @@ async def test_repeated_healthy_cycles_do_not_halt_supervisor(
             "WHERE action = 'dispatch.subprocess_unexpected_exit'"
         )
         assert len(unexpected) == 0
+
+        # No spin-guard halt fired (window not exceeded under realistic cadence)
+        spin_halt = await storage.fetch_all(
+            "SELECT 1 FROM audit_log WHERE action = ?",
+            ("dispatch.supervisor_cycle_spin_halt",),
+        )
+        assert len(spin_halt) == 0
     finally:
         await supervisor.shutdown()
 
@@ -466,5 +496,68 @@ async def test_healthy_cycles_do_not_clear_unexpected_exit_history(
             "WHERE action = 'dispatch.subprocess_unexpected_exit'"
         )
         assert len(unex_rows) == 4
+    finally:
+        await supervisor.shutdown()
+
+
+async def test_spin_guard_halts_supervisor_after_N_fast_cycles(  # noqa: N802
+    storage: SqliteStorage, settings: Settings, tmp_path: Path
+) -> None:
+    """Spec § 11 Test 3 (commit B): drive N=3 cycle-completed exits
+    inside a W=1s window. The 3rd cycle's append makes
+    ``len(_cycle_history) == 3``; the cap check (``>= 3``) fires and
+    ``_halt_spin_guard`` writes a ``dispatch.supervisor_cycle_spin_halt``
+    audit row, sets ``_halted = True`` and ``_started = False``. The 3
+    cycle-completed audit rows are still written (audit precedes the
+    spin-guard block by construction).
+    """
+    # 1 initial + 2 respawns = 3 procs (the 3rd cycle halts instead
+    # of respawning, so no proc is consumed for a 4th launch).
+    procs = [_ControllableProc() for _ in range(3)]
+    proc_queue = list(procs)
+    supervisor = await _build_supervisor(
+        storage,
+        settings,
+        tmp_path,
+        service="cycle-completed-spin-halt",
+        proc_queue=proc_queue,
+        cycle_completed_cap=3,
+        cycle_completed_window_seconds=1,
+    )
+
+    await supervisor.start()
+    try:
+        await _drive_healthy_cycle(supervisor, storage, procs[0])
+        await _drive_healthy_cycle(supervisor, storage, procs[1])
+        await _drive_healthy_cycle(
+            supervisor, storage, procs[2], wait_for_halt=True
+        )
+
+        assert supervisor.is_halted is True
+        assert supervisor._started is False
+
+        spin_halt_rows = await storage.fetch_all(
+            "SELECT target, details_json FROM audit_log "
+            "WHERE action = 'dispatch.supervisor_cycle_spin_halt'"
+        )
+        assert len(spin_halt_rows) == 1
+
+        details = json.loads(spin_halt_rows[0]["details_json"])
+        assert isinstance(details["dispatch_ids"], list)
+        assert len(details["dispatch_ids"]) == 3
+        assert all(
+            isinstance(d, str) and d for d in details["dispatch_ids"]
+        )
+        assert details["n"] == 3
+        assert details["window_seconds"] == 1
+
+        cycle_rows = await storage.fetch_all(
+            "SELECT id FROM audit_log "
+            "WHERE action = 'dispatch.supervisor_cycle_completed'"
+        )
+        assert len(cycle_rows) == 3
+
+        with pytest.raises(HaltedSupervisorError):
+            await supervisor.start()
     finally:
         await supervisor.shutdown()
