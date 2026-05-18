@@ -801,8 +801,28 @@ class LongRunningSupervisor(ABC):
         exit_code = proc.returncode
         if self._compaction_pending:
             await self._handle_compaction_completed(dispatch_id, exit_code)
-        else:
-            await self._handle_subprocess_unexpected_exit(dispatch_id, exit_code)
+            return True
+
+        # β-S11-4 commit A: classify clean rc=0 + useful MCP activity as
+        # healthy supervisor-cycle completion (status='completed'; no cap-
+        # counter increment). See docs/specs/beta-S11-4-supervisor-cycle-
+        # completed.md § 2 + § 4 priority ordering.
+        if exit_code == 0:
+            row = await self._storage.fetch_one(
+                "SELECT last_tool_called, started_at FROM dispatches "
+                "WHERE id = ?",
+                (dispatch_id,),
+            )
+            if row is not None and row["last_tool_called"] is not None:
+                await self._handle_supervisor_cycle_completed(
+                    dispatch_id,
+                    exit_code,
+                    row["last_tool_called"],
+                    row["started_at"],
+                )
+                return True
+
+        await self._handle_subprocess_unexpected_exit(dispatch_id, exit_code)
         return True
 
     async def _handle_compaction_completed(
@@ -878,6 +898,91 @@ class LongRunningSupervisor(ABC):
         # and _handle_subprocess_unexpected_exit) — those are failure
         # modes, not lifecycle.
         await self._spawn()
+
+    async def _handle_supervisor_cycle_completed(
+        self,
+        dispatch_id: str,
+        exit_code: int,
+        last_tool_called: str,
+        started_at_raw: str | None,
+    ) -> None:
+        """The supervisor exited cleanly (rc=0) after at least one MCP call.
+        Classify as a healthy cycle completion: status='completed', new
+        ``dispatch.supervisor_cycle_completed`` audit event, respawn without
+        touching ``_respawn_history`` (A3 invariant — healthy cycles do not
+        interact with the failure-recovery cap counter).
+
+        Mirrors :meth:`_handle_compaction_completed` shape. See
+        ``docs/specs/beta-S11-4-supervisor-cycle-completed.md`` § 2, § 8,
+        § 10. Spin-guard (commit B) is a separate landing.
+        """
+        cycle_duration_seconds: float | None = None
+        if started_at_raw is not None:
+            try:
+                effective_dt = datetime.fromisoformat(started_at_raw)
+            except ValueError:
+                effective_dt = None
+            if effective_dt is not None:
+                effective_dt = _coerce_naive_to_utc(effective_dt)
+                cycle_duration_seconds = round(
+                    (datetime.now(tz=UTC) - effective_dt).total_seconds(), 3
+                )
+
+        await write_audit(
+            self._storage,
+            actor="system",
+            action="dispatch.supervisor_cycle_completed",
+            target=dispatch_id,
+            details={
+                "supervisor_role": self._token_role_with_label(),
+                "dispatch_id": dispatch_id,
+                "last_tool_called": last_tool_called,
+                "cycle_duration_seconds": cycle_duration_seconds,
+                "rc": exit_code,
+                "compaction_triggered": False,
+            },
+        )
+
+        if self._current_token is not None:
+            revoked = await self._token_store.revoke(
+                self._current_token.record.token_id
+            )
+            if revoked:
+                await write_audit(
+                    self._storage,
+                    actor="system",
+                    action="dispatch.token_revoked",
+                    target=dispatch_id,
+                    details={
+                        "dispatch_id": dispatch_id,
+                        "token_id": self._current_token.record.token_id,
+                        "reason": "cycle_completed",
+                    },
+                )
+
+        await self._storage.execute(
+            "UPDATE dispatches SET status = 'completed', "
+            "completed_at = ? WHERE id = ?",
+            (_now_iso(), dispatch_id),
+        )
+
+        await cancel_drain_task(self._current_proc)
+
+        self._current_proc = None
+        self._current_token = None
+        self._current_dispatch_id = None
+
+        # NO ``_respawn_history.append`` — healthy cycles do not increment
+        # the failure-recovery cap counter (A3 invariant).
+        await self._spawn()
+
+        logger.debug(
+            "supervisor.cycle_completed",
+            role=self._token_role_with_label(),
+            dispatch_id=dispatch_id,
+            last_tool_called=last_tool_called,
+            cycle_duration_seconds=cycle_duration_seconds,
+        )
 
     async def _handle_subprocess_unexpected_exit(
         self, dispatch_id: str, exit_code: int
