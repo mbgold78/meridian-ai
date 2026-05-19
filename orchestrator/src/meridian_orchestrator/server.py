@@ -55,6 +55,9 @@ from meridian_orchestrator.bridge.activity import (
     record_mcp_call,
     record_oauth_pm_auto_flip,
 )
+from meridian_orchestrator.bridge.canonical_registry import (
+    CanonicalCloneRegistry,
+)
 from meridian_orchestrator.bridge.dispatcher import BridgeDispatcher
 from meridian_orchestrator.bridge.supervisor_base import LongRunningSupervisor
 from meridian_orchestrator.config import Settings
@@ -72,6 +75,9 @@ from meridian_orchestrator.tools.agents import (
     get_agent_config,
     get_org_chart,
     list_agents,
+)
+from meridian_orchestrator.tools.canonical import (
+    _register_canonical_clone_tools,
 )
 from meridian_orchestrator.tools.budget import (
     BurnRateWindowLiteral,
@@ -332,6 +338,9 @@ def build_server(
     get_engineer_supervisor: Callable[[], LongRunningSupervisor | None] | None = None,
     get_pm_supervisor: Callable[[], LongRunningSupervisor | None] | None = None,
     get_dispatcher: Callable[[], BridgeDispatcher | None] | None = None,
+    get_canonical_registry: (
+        Callable[[], CanonicalCloneRegistry | None] | None
+    ) = None,
     get_oauth_usage_snapshot: SnapshotProvider | None = None,
     sampler: Sampler | None = None,
     get_pm_loop_tick_seconds: Callable[[], float] | None = None,
@@ -445,6 +454,15 @@ def build_server(
     if storage is not None and get_dispatcher is not None and registry is not None:
         _register_dispatch_initiation_tools(
             mcp, storage, registry, token_store, get_dispatcher
+        )
+
+    if (
+        storage is not None
+        and registry is not None
+        and get_canonical_registry is not None
+    ):
+        _register_canonical_clone_tools(
+            mcp, storage, token_store, registry, get_canonical_registry
         )
 
     if storage is not None and (
@@ -1858,6 +1876,9 @@ async def serve(
     get_engineer_supervisor: Callable[[], LongRunningSupervisor | None] | None = None,
     get_pm_supervisor: Callable[[], LongRunningSupervisor | None] | None = None,
     get_dispatcher: Callable[[], BridgeDispatcher | None] | None = None,
+    get_canonical_registry: (
+        Callable[[], CanonicalCloneRegistry | None] | None
+    ) = None,
     get_oauth_usage_snapshot: SnapshotProvider | None = None,
     sampler: Sampler | None = None,
     get_pm_loop_tick_seconds: Callable[[], float] | None = None,
@@ -1892,6 +1913,7 @@ async def serve(
         get_engineer_supervisor=get_engineer_supervisor,
         get_pm_supervisor=get_pm_supervisor,
         get_dispatcher=get_dispatcher,
+        get_canonical_registry=get_canonical_registry,
         get_oauth_usage_snapshot=get_oauth_usage_snapshot,
         sampler=sampler,
         get_pm_loop_tick_seconds=get_pm_loop_tick_seconds,

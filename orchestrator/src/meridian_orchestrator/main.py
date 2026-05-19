@@ -436,6 +436,7 @@ async def _run_lifespan_body(
             # unset (the M5-wrapper-closure default state for tests that
             # don't exercise dispatch).
             dispatcher: BridgeDispatcher | None = None
+            canonical_registry: CanonicalCloneRegistry | None = None
             if settings.substrate_working_directory is not None:
                 logger.info(
                     "canonical.provisioning_begin",
@@ -527,6 +528,15 @@ async def _run_lifespan_body(
             # is symmetric with get_engineer_supervisor for consistency.
             def get_dispatcher() -> BridgeDispatcher | None:
                 return dispatcher
+
+            # M5-canonical-clone-mgmt slice 3: lazy lookup for the
+            # canonical-clone MCP tools. Mirrors get_dispatcher's shape —
+            # canonical_registry is constructed in the same provisioning
+            # block above when substrate_working_directory is set; stays
+            # None otherwise (test daemons without substrate get
+            # AuthError on the canonical-clone tools).
+            def get_canonical_registry() -> CanonicalCloneRegistry | None:
+                return canonical_registry
 
             # Lazy lookup for the get_window_state tool wrapper.
             # OAuthUsagePoller is constructed after mcp_ready (so its
@@ -651,6 +661,7 @@ async def _run_lifespan_body(
                     get_engineer_supervisor=get_engineer_supervisor,
                     get_pm_supervisor=get_pm_supervisor,
                     get_dispatcher=get_dispatcher,
+                    get_canonical_registry=get_canonical_registry,
                     get_oauth_usage_snapshot=get_oauth_usage_snapshot,
                     sampler=sampler,
                     get_pm_loop_tick_seconds=get_pm_loop_tick_seconds,
