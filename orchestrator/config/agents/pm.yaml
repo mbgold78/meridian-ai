@@ -88,6 +88,13 @@ mcp_tools_allowed:
   - get_most_recent_handoff
   - signal_compaction
 
+  # Canonical-clone registry (M5-canonical-clone-mgmt slice 3) — PM-only per
+  # Option B (Mike, 2026-05-16); Engineer/Implementer/Tester yamls intentionally
+  # omit these.
+  - register_canonical_clone
+  - list_canonical_clones
+  - unregister_canonical_clone
+
 # Subprocess-level tool allowlist passed to ``claude --allowedTools``
 # at PM-continuous supervisor spawn time. Mirrors the implementer/tester
 # yaml shape (commit 3); supervisor symmetric wiring lands at commit 3.6.
