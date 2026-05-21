@@ -940,8 +940,50 @@ async def _run_lifespan_body(
     logger.info("shutdown.complete")
 
 
+def _configure_stderr_encoding() -> None:
+    """β-S11-18 v3 (2026-05-21): make daemon stderr resilient to
+    non-encodable characters under the host console's default codec.
+
+    Background: on Windows the default ``sys.stderr.encoding`` is
+    typically ``cp1252`` (the system codepage), which has no codepoint
+    for Greek beta (U+03B2) and many other Unicode glyphs that appear
+    in this codebase's log messages (audit notes, structured warning
+    hints, comments-leaking-into-f-strings, etc.). When structlog
+    renders a warning whose payload contains an unencodable character,
+    ``print(file=sys.stderr)`` raises ``UnicodeEncodeError``. If that
+    happens inside a request handler (as observed with the OAuth
+    /register path under the beta-S11-18 hotfix), the daemon returns
+    HTTP 500 to its caller, breaking the operator's PM Claude Code
+    MCP reconnect.
+
+    The mitigation here is narrow: switch stderr's error-handling
+    strategy from the default ``strict`` to ``replace`` so that any
+    unencodable character is silently rendered as a ``?`` instead of
+    raising. This is purely a defense-in-depth measure paired with
+    fixing the immediate offending message (auth.py warning hint
+    string). Future Unicode-in-stderr regressions degrade gracefully
+    instead of crashing the daemon's response surface.
+
+    Guarded with try/except so a stream that doesn't support
+    ``.reconfigure()`` (e.g., a non-TextIOWrapper redirect, a closed
+    stream, etc.) doesn't break daemon startup. ``sys.stderr`` SHOULD
+    expose ``.reconfigure`` on CPython 3.7+ when wrapping a buffered
+    binary stream, but we don't assume.
+    """
+    reconfigure = getattr(sys.stderr, "reconfigure", None)
+    if reconfigure is None:
+        return
+    try:
+        reconfigure(errors="replace")
+    except (OSError, ValueError):
+        # Best-effort: a misconfigured stderr (closed, non-text,
+        # already wrapped non-reconfigurable) should not block boot.
+        pass
+
+
 def main() -> int:
     """Synchronous entry point. Returns exit code."""
+    _configure_stderr_encoding()
     try:
         asyncio.run(_run())
     except KeyboardInterrupt:

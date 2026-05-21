@@ -870,6 +870,140 @@ async def test_register_oauth_client_propagates_pywintypes_credread_with_overflo
         store.register_oauth_client(record)
 
 
+async def test_register_oauth_client_warning_ascii_safe_under_cp1252_stderr(
+    monkeypatch: pytest.MonkeyPatch,
+    keyring_memory: object,
+) -> None:
+    """β-S11-18 v3: the overflow warning's hint string MUST be
+    ASCII-safe so structlog's render-to-stderr path does not crash
+    under Windows-default cp1252 console encoding. v2 hotfix shipped a
+    hint with the literal Greek beta (U+03B2) prefix; cp1252 raised
+    UnicodeEncodeError on render, the error propagated out of the
+    OAuth /register handler, and PM Claude Code re-auth returned
+    HTTP 500.
+
+    Mechanism: explicitly bind a structlog PrintLogger to a
+    cp1252-encoded stream with errors='strict' (the Windows production
+    shape). Trigger the overflow suppression path against a TokenStore
+    that uses that logger. The warning emission MUST complete without
+    raising; the per-client record MUST remain resolvable.
+    """
+    import io
+    import structlog
+    from win32ctypes.pywin32.pywintypes import error as pywintypes_error
+    import keyring as keyring_module
+    from meridian_orchestrator import auth as auth_module
+
+    # Capture via cp1252-encoded buffer with errors='strict' to mirror
+    # the Windows console redirect shape. If the hint string contains a
+    # non-cp1252-encodable character, the write will raise exactly as
+    # it did in production.
+    raw_buf = io.BytesIO()
+    cp1252_strict_stderr = io.TextIOWrapper(
+        raw_buf, encoding="cp1252", errors="strict", write_through=True
+    )
+    # Bind a structlog PrintLogger directly to our cp1252-strict stream
+    # and patch it into the auth module so the suppression path uses
+    # this logger. Bypasses any default-stderr cache that
+    # structlog.get_logger may have established at module load.
+    test_logger = structlog.PrintLogger(file=cp1252_strict_stderr)
+    test_bound = structlog.wrap_logger(
+        test_logger,
+        processors=[
+            structlog.processors.add_log_level,
+            structlog.dev.ConsoleRenderer(colors=False),
+        ],
+    )
+    monkeypatch.setattr(auth_module, "logger", test_bound)
+
+    store = TokenStore(service="test-oauth-cp1252-stderr")
+
+    real_set_password = keyring_module.set_password
+
+    def overflow_on_index(
+        service: str, username: str, password: str
+    ) -> None:
+        if username == OAUTH_CLIENTS_INDEX_USERNAME:
+            raise pywintypes_error(
+                1783, "CredWrite", "The stub received bad data"
+            )
+        real_set_password(service, username, password)
+
+    monkeypatch.setattr(keyring_module, "set_password", overflow_on_index)
+
+    record = _oauth_record("test-client-cp1252-001")
+    # The v2 hotfix would raise UnicodeEncodeError here when structlog
+    # rendered the beta-containing hint string to the cp1252-strict
+    # stderr. The v3 hotfix's ASCII-safe hint MUST avoid that.
+    store.register_oauth_client(record)
+
+    cp1252_strict_stderr.flush()
+    rendered = raw_buf.getvalue().decode("cp1252", errors="strict")
+    # The warning event name must appear in the rendered output (proves
+    # we actually traversed the suppression path, not some short-circuit).
+    assert "auth.oauth_clients_index_write_overflow" in rendered, (
+        f"β-S11-18 v3: warning must render cleanly under cp1252-strict "
+        f"stderr; rendered output: {rendered!r}"
+    )
+    # And the per-client record must still resolve (no propagation).
+    assert store.get_oauth_client("test-client-cp1252-001") is not None
+
+
+def test_configure_stderr_encoding_sets_replace_error_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """β-S11-18 v3 Change 2: daemon-startup
+    `_configure_stderr_encoding()` calls `sys.stderr.reconfigure(
+    errors='replace')` so that ANY future unencodable character in a
+    log message degrades gracefully (renders as `?`) instead of
+    crashing the daemon's response path.
+
+    Mechanism: install a fake stderr that records reconfigure() calls.
+    Verify the helper invokes reconfigure with errors='replace'.
+    Verify a stderr without reconfigure (e.g., a raw BytesIO redirect)
+    degrades gracefully — no exception, no boot-blocker.
+    """
+    import io
+    import sys
+    from meridian_orchestrator.main import _configure_stderr_encoding
+
+    # Case 1: stderr.reconfigure exists and accepts errors kwarg.
+    captured_calls: list[dict[str, object]] = []
+
+    class _FakeReconfigurableStderr:
+        encoding = "cp1252"
+
+        def reconfigure(self, **kwargs: object) -> None:
+            captured_calls.append(dict(kwargs))
+
+    monkeypatch.setattr(sys, "stderr", _FakeReconfigurableStderr())
+    _configure_stderr_encoding()
+    assert captured_calls == [{"errors": "replace"}], (
+        f"β-S11-18 v3: daemon startup must call "
+        f"sys.stderr.reconfigure(errors='replace'); got {captured_calls}"
+    )
+
+    # Case 2: stderr has no reconfigure attribute (e.g., a closed
+    # stream, a non-TextIOWrapper redirect). Helper must NOT raise.
+    class _NoReconfigureStderr:
+        encoding = "cp1252"
+
+    monkeypatch.setattr(sys, "stderr", _NoReconfigureStderr())
+    _configure_stderr_encoding()  # must complete without raising
+
+    # Case 3: stderr.reconfigure raises OSError (e.g., already
+    # configured to a non-reconfigurable shape). Helper must NOT
+    # propagate — best-effort by design.
+    class _RaisingReconfigureStderr:
+        encoding = "cp1252"
+
+        def reconfigure(self, **kwargs: object) -> None:
+            raise OSError("simulated non-reconfigurable stream")
+
+    monkeypatch.setattr(sys, "stderr", _RaisingReconfigureStderr())
+    _configure_stderr_encoding()  # must complete without raising
+
+
 def test_is_credwrite_blob_overflow_classifier_matrix() -> None:
     """β-S11-18 v2 classifier unit test: matrix of (exception shape,
     expected suppression) pinning the duck-typing rules.

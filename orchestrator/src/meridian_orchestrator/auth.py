@@ -734,11 +734,23 @@ class TokenStore:
                 error=str(exc),
                 error_type=f"{type(exc).__module__}.{type(exc).__name__}",
                 hint=(
-                    "β-S11-18: keyring CredWrite blob >~2560 bytes; "
+                    # β-S11-18 v3 (2026-05-21): runtime-emitted strings
+                    # MUST be ASCII-safe. Windows console stderr defaults
+                    # to cp1252 which has no codepoint for Greek beta
+                    # (U+03B2). The v2 hotfix's hint contained the
+                    # literal "β-S11-18" prefix; when structlog rendered
+                    # the warning to stderr, cp1252 raised
+                    # UnicodeEncodeError, which propagated up through
+                    # the OAuth /register handler as HTTP 500.
+                    # Paired with the daemon-startup
+                    # sys.stderr.reconfigure(errors='replace') in
+                    # main.py — belt-and-suspenders against future
+                    # Unicode-in-stderr regressions.
+                    "beta-S11-18: keyring CredWrite blob >~2560 bytes; "
                     "per-client `oauth_client:<id>` records remain "
                     "written and resolvable via get_oauth_client(). "
                     "list_oauth_clients() enumeration is now stale "
-                    "until BACKLOG β-S11-18 SQLite-backed migration "
+                    "until BACKLOG beta-S11-18 SQLite-backed migration "
                     "lands."
                 ),
             )
