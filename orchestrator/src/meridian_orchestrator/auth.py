@@ -598,11 +598,73 @@ class TokenStore:
             return []
 
     def _write_oauth_clients_index(self, client_ids: list[str]) -> None:
-        keyring.set_password(
-            self._service,
-            OAUTH_CLIENTS_INDEX_USERNAME,
-            json.dumps({"client_ids": client_ids}),
-        )
+        """Persist the OAuth-clients enumeration index in keyring.
+
+        β-S11-18 (2026-05-21): Windows Credential Manager rejects
+        ``CredWrite`` calls whose blob exceeds ~2560 bytes with
+        ``OSError(winerror=1783, 'The stub received bad data')``.
+        Same architectural shape as β-S11-5 transient-tokens
+        index-bleed: a monolithic aggregator keyring blob grows
+        unbounded across daemon lifetimes until it overflows the
+        backend's per-credential limit. Once over, every new
+        ``register_client`` call from a fresh MCP dynamic-registration
+        request fails at this exact line, surfacing as HTTP 500 at
+        ``/register`` and breaking the OAuth handshake.
+
+        Tactical suppression (β-S11-18 hotfix): the per-client record
+        at ``oauth_client:<client_id>`` was already written by
+        :meth:`register_oauth_client` BEFORE this call (auth.py:609),
+        so ``get_oauth_client(client_id)`` — the only call site OAuth
+        token validation depends on — still resolves the new client.
+        The cost of suppressing this specific failure is that
+        :meth:`list_oauth_clients` will miss enumerating clients added
+        after the overflow; no production code path uses
+        ``list_oauth_clients`` for live OAuth flow, only for operator
+        introspection.
+
+        Durable follow-up tracked in BACKLOG as β-S11-18:
+        SQLite-backed OAuth client registry, mirroring β-S11-15's
+        transient-tokens migration. That removes the keyring blob
+        entirely and recovers ``list_oauth_clients`` correctness.
+
+        Only ``OSError`` with ``winerror == 1783`` is suppressed.
+        Other keyring failures (permission denied, backend
+        unavailable, etc.) still propagate so we don't accidentally
+        mask a deeper auth-store regression.
+        """
+        try:
+            keyring.set_password(
+                self._service,
+                OAUTH_CLIENTS_INDEX_USERNAME,
+                json.dumps({"client_ids": client_ids}),
+            )
+        except OSError as exc:
+            # Match by EITHER winerror or errno: production exceptions
+            # from pywin32 set ``winerror=1783``; Python's bare
+            # ``OSError(1783, ...)`` constructor (used by tests and by
+            # ``keyring/backends/Windows.py`` re-raise paths) sets
+            # ``errno=1783`` with ``winerror=None``. Both shapes
+            # represent the same Windows CredWrite blob-overflow
+            # failure mode, so accept either to avoid platform/
+            # construction-path-specific suppression gaps.
+            winerror = getattr(exc, "winerror", None)
+            errno_ = getattr(exc, "errno", None)
+            if winerror != 1783 and errno_ != 1783:
+                raise
+            logger.warning(
+                "auth.oauth_clients_index_write_overflow",
+                service=self._service,
+                client_count=len(client_ids),
+                error=str(exc),
+                hint=(
+                    "β-S11-18: keyring CredWrite blob >~2560 bytes; "
+                    "per-client `oauth_client:<id>` records remain "
+                    "written and resolvable via get_oauth_client(). "
+                    "list_oauth_clients() enumeration is now stale "
+                    "until BACKLOG β-S11-18 SQLite-backed migration "
+                    "lands."
+                ),
+            )
 
     def register_oauth_client(self, record: OAuthClientRecord) -> None:
         """Persist a registered OAuth client. Idempotent on client_id."""

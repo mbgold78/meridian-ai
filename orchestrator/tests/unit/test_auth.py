@@ -8,7 +8,9 @@ import pytest
 
 from meridian_orchestrator.auth import (
     INDEX_USERNAME,
+    OAUTH_CLIENTS_INDEX_USERNAME,
     TOKEN_PREFIX,
+    OAuthClientRecord,
     TokenStore,
     _hash_secret,
     _parse_token,
@@ -434,3 +436,257 @@ async def test_indexed_false_skips_rollback_path_entirely(
     assert issued.record.role == "implementer"
     # Token still authenticates via lookup.
     assert await store.lookup(issued.token) is not None
+
+
+# ===========================================================================
+# β-S11-18: OAuth client index keyring blob overflow — tactical suppression
+# ===========================================================================
+#
+# Production incident 2026-05-21: PM Claude Code MCP /register endpoint
+# returned HTTP 500 after daemon restart. Root cause:
+# _write_oauth_clients_index() persists the entire JSON list of accumulated
+# OAuth client_ids under one keyring credential
+# (OAUTH_CLIENTS_INDEX_USERNAME). Every dynamic-client-registration grows
+# that blob. Once it exceeds Windows Credential Manager's ~2560-byte
+# CredWrite limit, OSError(winerror=1783, 'The stub received bad data')
+# propagates through the OAuth /register handler.
+#
+# Same shape as β-S11-5 transient-tokens index bleed; durable fix is
+# tracked in BACKLOG as β-S11-18 SQLite-backed OAuth client registry.
+# Hotfix below suppresses the specific overflow error so OAuth
+# registration succeeds: the per-client `oauth_client:<id>` keyring
+# entry was already written BEFORE the index update, so
+# get_oauth_client(client_id) — the only call OAuth token validation
+# depends on — still resolves correctly.
+# ---------------------------------------------------------------------------
+
+
+def _oauth_record(client_id: str) -> OAuthClientRecord:
+    """Build an OAuthClientRecord for these tests with the minimum
+    fields the dataclass / persistence path requires.
+    """
+    return OAuthClientRecord(
+        client_id=client_id,
+        client_secret="test-secret",
+        client_name="test-client",
+        redirect_uris=["http://127.0.0.1:8765/callback"],
+        scope="mcp:read mcp:write",
+        grant_types=["authorization_code"],
+        response_types=["code"],
+        token_endpoint_auth_method="client_secret_post",
+        registered_at="2026-05-21T00:00:00+00:00",
+    )
+
+
+async def test_register_oauth_client_succeeds_when_index_write_overflows(
+    monkeypatch: pytest.MonkeyPatch,
+    keyring_memory: object,
+) -> None:
+    """β-S11-18 hotfix: when _write_oauth_clients_index hits
+    OSError(winerror=1783) (Windows Credential Manager blob-overflow),
+    register_oauth_client must STILL return successfully so the
+    MCP /register handler returns 200 to Claude Code. The per-client
+    record at oauth_client:<id> was already written before the index
+    write, so get_oauth_client(client_id) MUST resolve the new client.
+    """
+    import keyring as keyring_module
+
+    store = TokenStore(service="test-oauth-overflow")
+
+    real_set_password = keyring_module.set_password
+
+    def selective_failing_set_password(
+        service: str, username: str, password: str
+    ) -> None:
+        # Fail ONLY on the index write; per-client `oauth_client:<id>`
+        # writes still go through to the in-memory keyring.
+        if username == OAUTH_CLIENTS_INDEX_USERNAME:
+            raise OSError(1783, "CredWrite", "The stub received bad data")
+        real_set_password(service, username, password)
+
+    monkeypatch.setattr(
+        keyring_module, "set_password", selective_failing_set_password
+    )
+
+    record = _oauth_record("test-client-001")
+    # Must NOT raise — β-S11-18 suppresses the specific overflow shape.
+    store.register_oauth_client(record)
+
+    # The per-client record was written and resolves via get_oauth_client.
+    fetched = store.get_oauth_client("test-client-001")
+    assert fetched is not None, (
+        "β-S11-18: per-client `oauth_client:<id>` record must remain "
+        "written and resolvable even when the index write overflows. "
+        "OAuth token validation depends on this lookup path."
+    )
+    assert fetched.client_id == "test-client-001"
+
+
+async def test_register_oauth_client_propagates_unknown_oserror(
+    monkeypatch: pytest.MonkeyPatch,
+    keyring_memory: object,
+) -> None:
+    """β-S11-18 narrow-suppression invariant: an OSError that is NOT
+    WinError 1783 (e.g., winerror=5 access-denied; or any non-Windows
+    OSError without winerror) MUST propagate. The hotfix only masks
+    the specific known-shape blob-overflow failure; broader keyring
+    regressions must remain visible.
+    """
+    import keyring as keyring_module
+
+    store = TokenStore(service="test-oauth-other-oserror")
+
+    real_set_password = keyring_module.set_password
+
+    def index_write_access_denied(
+        service: str, username: str, password: str
+    ) -> None:
+        if username == OAUTH_CLIENTS_INDEX_USERNAME:
+            # winerror=5 = ERROR_ACCESS_DENIED. Not the overflow shape.
+            raise OSError(5, "CredWrite", "Access is denied")
+        real_set_password(service, username, password)
+
+    monkeypatch.setattr(
+        keyring_module, "set_password", index_write_access_denied
+    )
+
+    record = _oauth_record("test-client-002")
+    with pytest.raises(OSError) as exc_info:
+        store.register_oauth_client(record)
+    # Python's bare OSError(5, ...) sets errno=5 with winerror=None.
+    # The suppression invariant is "match 1783 only on either field"; an
+    # errno=5 OSError MUST propagate. Pin the errno rather than
+    # winerror so this test passes on both production-shape (winerror
+    # set by pywin32) AND synthetic-shape (errno set by Python).
+    assert exc_info.value.errno == 5, (
+        "non-1783 OSError must propagate verbatim — β-S11-18 hotfix "
+        "must not mask other auth-store regressions"
+    )
+
+
+async def test_register_oauth_client_per_client_write_failure_not_muted(
+    monkeypatch: pytest.MonkeyPatch,
+    keyring_memory: object,
+) -> None:
+    """β-S11-18 narrow-suppression invariant: the per-client
+    `oauth_client:<id>` write (which is the OAuth lookup primary key)
+    is NOT inside the suppress-on-1783 try/except. If keyring rejects
+    the per-client write itself, the OAuth flow MUST fail loudly —
+    silently dropping the per-client record would leave a registered
+    client that token validation can never resolve.
+    """
+    import keyring as keyring_module
+
+    store = TokenStore(service="test-oauth-per-client-fail")
+
+    def fail_per_client_writes(
+        service: str, username: str, password: str
+    ) -> None:
+        # Fail on the per-client key. Index writes would also fail
+        # but we never reach them.
+        if username.startswith("oauth_client:"):
+            raise OSError(1783, "CredWrite", "The stub received bad data")
+
+    monkeypatch.setattr(
+        keyring_module, "set_password", fail_per_client_writes
+    )
+
+    record = _oauth_record("test-client-003")
+    with pytest.raises(OSError):
+        store.register_oauth_client(record)
+
+
+async def test_register_oauth_client_logs_overflow_warning(
+    monkeypatch: pytest.MonkeyPatch,
+    keyring_memory: object,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """β-S11-18: the suppression path emits a structured WARNING with
+    the documented event name so operator log-grep + telemetry
+    pipelines can detect the degraded enumeration state. structlog is
+    configured at module load to write to stderr (not stdlib logging),
+    so capsys is the appropriate capture surface here.
+    """
+    import keyring as keyring_module
+
+    store = TokenStore(service="test-oauth-overflow-warn")
+
+    def index_overflow(
+        service: str, username: str, password: str
+    ) -> None:
+        if username == OAUTH_CLIENTS_INDEX_USERNAME:
+            raise OSError(1783, "CredWrite", "The stub received bad data")
+
+    monkeypatch.setattr(
+        keyring_module, "set_password", index_overflow
+    )
+
+    record = _oauth_record("test-client-004")
+    store.register_oauth_client(record)
+
+    captured = capsys.readouterr()
+    combined = captured.out + captured.err
+    assert "auth.oauth_clients_index_write_overflow" in combined, (
+        f"β-S11-18: register_oauth_client must emit a structured "
+        f"WARNING `auth.oauth_clients_index_write_overflow` when "
+        f"the index write overflows; captured:\n"
+        f"--- stdout ---\n{captured.out}\n--- stderr ---\n{captured.err}"
+    )
+    # Pin two structural fields so the suppression path's diagnostics
+    # remain actionable: hint mentions β-S11-18 + client_count is
+    # reported so operators see the size growth.
+    assert "β-S11-18" in combined or "SQLite-backed" in combined, (
+        "warning hint must reference β-S11-18 / SQLite-backed "
+        "migration so post-mortem reviewers can find the durable fix"
+    )
+
+
+async def test_list_oauth_clients_misses_post_overflow_clients(
+    monkeypatch: pytest.MonkeyPatch,
+    keyring_memory: object,
+) -> None:
+    """β-S11-18 contained degradation: list_oauth_clients() is the
+    enumeration path that reads the index, so clients registered
+    AFTER the index overflowed will be missing from list output.
+    The per-client records remain on disk + resolvable via direct
+    get_oauth_client(client_id) — only the enumeration is degraded.
+    This test pins the expected behavior so operators can rely on
+    `get_oauth_client` as the source of truth for individual client
+    lookup until β-S11-18 SQLite migration lands.
+    """
+    import keyring as keyring_module
+
+    store = TokenStore(service="test-oauth-list-degrades")
+
+    # First client registers with healthy index.
+    store.register_oauth_client(_oauth_record("client-A"))
+
+    # Subsequent registrations hit the overflow.
+    real_set_password = keyring_module.set_password
+
+    def index_overflow_after_first(
+        service: str, username: str, password: str
+    ) -> None:
+        if username == OAUTH_CLIENTS_INDEX_USERNAME:
+            raise OSError(1783, "CredWrite", "The stub received bad data")
+        real_set_password(service, username, password)
+
+    monkeypatch.setattr(
+        keyring_module, "set_password", index_overflow_after_first
+    )
+
+    store.register_oauth_client(_oauth_record("client-B"))
+    store.register_oauth_client(_oauth_record("client-C"))
+
+    # list_oauth_clients misses B + C (they never reached the index).
+    listed_ids = {rec.client_id for rec in store.list_oauth_clients()}
+    assert "client-A" in listed_ids
+    assert "client-B" not in listed_ids
+    assert "client-C" not in listed_ids
+
+    # But direct lookups for B + C STILL succeed — OAuth flow works.
+    assert store.get_oauth_client("client-B") is not None, (
+        "β-S11-18: direct lookup MUST resolve clients that the index "
+        "overflow caused list_oauth_clients to miss"
+    )
+    assert store.get_oauth_client("client-C") is not None
