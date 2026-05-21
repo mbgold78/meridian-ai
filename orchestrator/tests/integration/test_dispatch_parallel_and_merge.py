@@ -36,6 +36,7 @@ from meridian_orchestrator.bridge.dispatcher import (
     BridgeDispatcher,
     DispatchLaunchContext,
     SubprocessHandle,
+    _dispatcher_owned_canonicals,
 )
 from meridian_orchestrator.storage.migrations import run_migrations
 from meridian_orchestrator.storage.sqlite import SqliteStorage
@@ -471,13 +472,22 @@ async def test_rebase_aborts_cleanly_no_residue(
     )
     # Worktree-side rebase state under .git/worktrees/<name>/ — both worktrees
     # have been removed by cleanup() on terminal state, so this is implicit:
-    # the directories shouldn't exist at all.
+    # the dispatch_id leaf directories shouldn't exist at all.
+    # Slice 4 C2 nested the path layout under `<canonical_name>/`; cleanup
+    # removes the dispatch_id leaf, but the canonical-name parent may
+    # persist as an empty directory. The contract requires the leaves to
+    # be gone — walk two levels deep to find any surviving dispatch_id
+    # subtree.
     worktrees_dir = tmp_path / "data" / "dispatch-worktrees"
-    leftover_worktrees = (
-        list(worktrees_dir.iterdir()) if worktrees_dir.exists() else []
-    )
-    assert not leftover_worktrees, (
-        f"dispatch worktrees not cleaned: {leftover_worktrees}"
+    leftover_dispatch_dirs: list[Path] = []
+    if worktrees_dir.exists():
+        for canonical_parent in worktrees_dir.iterdir():
+            if canonical_parent.is_dir():
+                leftover_dispatch_dirs.extend(
+                    p for p in canonical_parent.iterdir() if p.is_dir()
+                )
+    assert not leftover_dispatch_dirs, (
+        f"dispatch worktrees not cleaned: {leftover_dispatch_dirs}"
     )
 
 
@@ -728,3 +738,280 @@ async def test_dispatch_tester_records_commit_hash_at_insert(
     assert row is not None
     assert row["commit_hash"] == expected_commit
     assert row["status"] == "completed"
+
+
+# ----- M5-canonical-clone-mgmt slice 4 (C2) — I5/I6 worktree path scoping ----
+
+
+@pytest.fixture
+def substrate_upstream_repo(tmp_path: Path) -> Path:
+    """Independent upstream for substrate canonical (used by I6).
+
+    Mirrors the default `upstream_repo` fixture pattern but with its own
+    initial commit + path, so a dispatch routed to `substrate` lands on
+    a different repository than the default-canonical dispatches do.
+    """
+    upstream = tmp_path / "substrate-upstream"
+    upstream.mkdir()
+    _git("init", "-b", "main", cwd=upstream)
+    _git("config", "user.email", "test@example.com", cwd=upstream)
+    _git("config", "user.name", "Test", cwd=upstream)
+    _git("config", "receive.denyCurrentBranch", "ignore", cwd=upstream)
+    (upstream / "SUBSTRATE.md").write_text("substrate root\n", encoding="utf-8")
+    _git("add", "SUBSTRATE.md", cwd=upstream)
+    _git("commit", "-m", "substrate initial", cwd=upstream)
+    return upstream
+
+
+async def test_sequential_same_canonical_dispatches_get_distinct_paths(
+    storage: SqliteStorage, upstream_repo: Path, tmp_path: Path
+) -> None:
+    """I5 — two sequential dispatches against the SAME canonical with the
+    SAME `worktrees_root`. Each gets its own
+    `<canonical>/<dispatch_id>/` directory; cleanup of the first leaves
+    the second's directory untouched (or, after second's cleanup, both
+    are gone).
+
+    The dispatch_id is a fresh uuid hex per dispatch (collision-free
+    by construction); the canonical-name parent (`default/` here) is
+    stable across the two dispatches. The pin: the dispatcher's INSERT
+    captures distinct working_directory values, and at no point does
+    dispatch B see dispatch A's leftover state.
+    """
+    canonical = CanonicalClone(
+        path=tmp_path / "data" / "substrate-canonical",
+        upstream_url=str(upstream_repo),
+        default_branch="main",
+    )
+    await canonical.ensure_provisioned()
+    token_store = TokenStore()
+    background: list[asyncio.Task[None]] = []
+
+    # Capture the worktree path each dispatch saw via the launcher; we
+    # also remember whether the previous dispatch's path existed at
+    # the time the new one provisioned.
+    seen_paths: list[Path] = []
+    leftover_observations: list[bool] = []
+
+    fake_procs: list[_FakeSubprocess] = []
+
+    async def launcher(ctx: DispatchLaunchContext) -> SubprocessHandle:
+        proc = _FakeSubprocess()
+        fake_procs.append(proc)
+        ctx_dir = Path(ctx.working_directory)
+        seen_paths.append(ctx_dir)
+        # If a previous dispatch's directory was left behind, record it.
+        # By the time this launcher runs, the prior dispatch has
+        # already completed + cleaned up (sequential).
+        if len(seen_paths) > 1:
+            prior = seen_paths[0]
+            leftover_observations.append(prior.exists())
+
+        async def simulate() -> None:
+            await asyncio.sleep(0.01)
+            sha = await asyncio.to_thread(
+                _commit_in_worktree,
+                ctx_dir,
+                f"file_{len(seen_paths)}.txt",
+                f"sequential dispatch {len(seen_paths)}\n",
+            )
+            await complete_dispatch(
+                storage=storage,
+                token_store=token_store,
+                request=CompleteDispatchInput(
+                    dispatch_id=ctx.dispatch_id,
+                    status="completed",
+                    commit_hash=sha,
+                ),
+                caller_agent_id="impl-agent-id",
+                caller_role="implementer",
+            )
+            proc.signal_clean_exit()
+
+        background.append(asyncio.create_task(simulate()))
+        return proc
+
+    canonical_registry = CanonicalCloneRegistry(storage=storage)
+    await canonical_registry.ensure_default(
+        path=canonical.path, upstream_url=canonical.upstream_url
+    )
+    worktrees_root = tmp_path / "data" / "dispatch-worktrees"
+    try:
+        dispatcher = await BridgeDispatcher.create(
+            storage=storage,
+            token_store=token_store,
+            canonical_registry=canonical_registry,
+            worktrees_root=worktrees_root,
+            subprocess_launcher=launcher,
+            poll_interval_seconds=0.02,
+        )
+
+        # First dispatch.
+        outcome1 = await dispatcher.dispatch(
+            task_id="task-A",
+            role="implementer",
+            role_agent_id="impl-agent-id",
+            prompt="seq-1",
+            actor="eng-agent-id",
+        )
+        # Second dispatch against the same canonical.
+        outcome2 = await dispatcher.dispatch(
+            task_id="task-B",
+            role="implementer",
+            role_agent_id="impl-agent-id",
+            prompt="seq-2",
+            actor="eng-agent-id",
+        )
+
+        assert outcome1.status == "completed"
+        assert outcome2.status == "completed"
+        assert outcome1.dispatch_id != outcome2.dispatch_id
+
+        # Both dispatches saw paths nested under `<root>/default/<id>/`
+        # with distinct dispatch-id segments.
+        assert len(seen_paths) == 2
+        assert seen_paths[0] != seen_paths[1]
+        assert seen_paths[0] == worktrees_root / "default" / outcome1.dispatch_id
+        assert seen_paths[1] == worktrees_root / "default" / outcome2.dispatch_id
+
+        # The first dispatch's directory was cleaned before the second
+        # provisioned — no leftover residue.
+        assert leftover_observations == [False]
+
+        # After both completed, neither path exists; but the parent
+        # `default/` segment lives on as the canonical-name nesting layer.
+        assert not seen_paths[0].exists()
+        assert not seen_paths[1].exists()
+    finally:
+        _dispatcher_owned_canonicals.discard(canonical.path)
+
+
+async def test_sequential_cross_canonical_dispatches_get_distinct_parents(
+    storage: SqliteStorage,
+    upstream_repo: Path,
+    substrate_upstream_repo: Path,
+    tmp_path: Path,
+) -> None:
+    """I6 — sequential dispatches against `default` then `substrate`. Each
+    provisions and cleans up independently: `<root>/default/<id1>/` and
+    `<root>/substrate/<id2>/` are distinct parent paths.
+
+    Each cleanup removes only its own subtree — the substrate dispatch
+    does not touch the default canonical's worktree tree, and
+    vice-versa. This is the cross-canonical isolation pin.
+    """
+    default_canonical = CanonicalClone(
+        path=tmp_path / "data" / "default-canonical",
+        upstream_url=str(upstream_repo),
+        default_branch="main",
+    )
+    await default_canonical.ensure_provisioned()
+    substrate_canonical = CanonicalClone(
+        path=tmp_path / "data" / "substrate-canonical",
+        upstream_url=str(substrate_upstream_repo),
+        default_branch="main",
+    )
+    await substrate_canonical.ensure_provisioned()
+    token_store = TokenStore()
+    background: list[asyncio.Task[None]] = []
+
+    seen_paths: list[Path] = []
+    fake_procs: list[_FakeSubprocess] = []
+
+    async def launcher(ctx: DispatchLaunchContext) -> SubprocessHandle:
+        proc = _FakeSubprocess()
+        fake_procs.append(proc)
+        ctx_dir = Path(ctx.working_directory)
+        seen_paths.append(ctx_dir)
+
+        async def simulate() -> None:
+            await asyncio.sleep(0.01)
+            sha = await asyncio.to_thread(
+                _commit_in_worktree,
+                ctx_dir,
+                f"file_{len(seen_paths)}.txt",
+                f"cross-canonical dispatch {len(seen_paths)}\n",
+            )
+            await complete_dispatch(
+                storage=storage,
+                token_store=token_store,
+                request=CompleteDispatchInput(
+                    dispatch_id=ctx.dispatch_id,
+                    status="completed",
+                    commit_hash=sha,
+                ),
+                caller_agent_id="impl-agent-id",
+                caller_role="implementer",
+            )
+            proc.signal_clean_exit()
+
+        background.append(asyncio.create_task(simulate()))
+        return proc
+
+    canonical_registry = CanonicalCloneRegistry(storage=storage)
+    await canonical_registry.ensure_default(
+        path=default_canonical.path,
+        upstream_url=default_canonical.upstream_url,
+    )
+    await canonical_registry.register(
+        name="substrate",
+        path=substrate_canonical.path,
+        upstream_url=substrate_canonical.upstream_url,
+    )
+    worktrees_root = tmp_path / "data" / "dispatch-worktrees"
+    try:
+        dispatcher = await BridgeDispatcher.create(
+            storage=storage,
+            token_store=token_store,
+            canonical_registry=canonical_registry,
+            worktrees_root=worktrees_root,
+            subprocess_launcher=launcher,
+            poll_interval_seconds=0.02,
+        )
+
+        # Dispatch 1 against `default` (no canonical_name kwarg).
+        outcome_default = await dispatcher.dispatch(
+            task_id="task-A",
+            role="implementer",
+            role_agent_id="impl-agent-id",
+            prompt="default dispatch",
+            actor="eng-agent-id",
+        )
+        # Dispatch 2 against `substrate`.
+        outcome_substrate = await dispatcher.dispatch(
+            task_id="task-B",
+            role="implementer",
+            role_agent_id="impl-agent-id",
+            prompt="substrate dispatch",
+            actor="eng-agent-id",
+            canonical_name="substrate",
+        )
+
+        assert outcome_default.status == "completed"
+        assert outcome_substrate.status == "completed"
+
+        # Distinct parent paths — cross-canonical isolation.
+        assert len(seen_paths) == 2
+        assert (
+            seen_paths[0]
+            == worktrees_root / "default" / outcome_default.dispatch_id
+        )
+        assert (
+            seen_paths[1]
+            == worktrees_root / "substrate" / outcome_substrate.dispatch_id
+        )
+        assert seen_paths[0].parent != seen_paths[1].parent
+        assert seen_paths[0].parent.name == "default"
+        assert seen_paths[1].parent.name == "substrate"
+
+        # After both cleanups, both worktree directories are removed.
+        # Their parent canonical-name dirs may persist as empty (or be
+        # absent if git's worktree-remove cleaned the dispatch-id leaf
+        # without touching the canonical-name parent — both outcomes
+        # are acceptable, only the per-dispatch-id leaf cleanup is
+        # required by the cleanup contract).
+        assert not seen_paths[0].exists()
+        assert not seen_paths[1].exists()
+    finally:
+        _dispatcher_owned_canonicals.discard(default_canonical.path)
+        _dispatcher_owned_canonicals.discard(substrate_canonical.path)

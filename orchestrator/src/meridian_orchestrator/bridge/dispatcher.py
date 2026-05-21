@@ -905,6 +905,7 @@ class BridgeDispatcher:
             canonical=canonical,
             dispatch_id=dispatch_id,
             worktrees_root=self._worktrees_root,
+            canonical_name=resolved_canonical_name,
         )
 
         # Timeout precedence: explicit override > calculate_timeout(model,

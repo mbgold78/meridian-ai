@@ -90,10 +90,16 @@ class DispatchWorktree:
         canonical: CanonicalClone,
         dispatch_id: str,
         worktrees_root: Path,
+        canonical_name: str,
     ) -> None:
+        # Slice 4 C2: nested layout `<worktrees_root>/<canonical_name>/<dispatch_id>/`
+        # replaces the pre-Slice-4 flat `<worktrees_root>/<dispatch_id>/`.
+        # `provision()`'s `mkdir(parents=True, exist_ok=True)` already covers
+        # the added depth without source change.
         self._canonical = canonical
         self._dispatch_id = dispatch_id
-        self._path = worktrees_root / dispatch_id
+        self._canonical_name = canonical_name
+        self._path = worktrees_root / canonical_name / dispatch_id
         self._branch = dispatch_branch_name(dispatch_id)
 
     @property

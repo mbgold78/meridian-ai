@@ -720,3 +720,156 @@ async def test_dispatch_initiation_tools_unregistered_when_dispatcher_absent(
     assert "get_dispatch_result" in names
 
 
+# ----- M5-canonical-clone-mgmt slice 4 (C2) — MCP wrapper exposes canonical_name
+
+
+@pytest.fixture
+def substrate_upstream_repo(tmp_path: Path) -> Path:
+    """Second upstream for substrate canonical (named-canonical wiring test).
+
+    Independent of `upstream_repo` so the MCP-level dispatch routed to
+    `substrate` lands on a different repository than default.
+    """
+    upstream = tmp_path / "substrate-upstream"
+    upstream.mkdir()
+    _git("init", "-b", "main", cwd=upstream)
+    _git("config", "user.email", "test@example.com", cwd=upstream)
+    _git("config", "user.name", "Test", cwd=upstream)
+    _git("config", "receive.denyCurrentBranch", "ignore", cwd=upstream)
+    (upstream / "SUBSTRATE.md").write_text("substrate root\n", encoding="utf-8")
+    _git("add", "SUBSTRATE.md", cwd=upstream)
+    _git("commit", "-m", "substrate initial", cwd=upstream)
+    return upstream
+
+
+async def test_dispatch_implementer_mcp_wrapper_threads_canonical_name(
+    settings: Settings,
+    storage: SqliteStorage,
+    upstream_repo: Path,
+    substrate_upstream_repo: Path,
+    registry_with_tokens: tuple[AgentRegistry, TokenStore],
+    tmp_path: Path,
+) -> None:
+    """C2 wiring smoke test: `canonical_name='substrate'` reaches the
+    dispatcher over the real FastMCP Streamable-HTTP transport.
+
+    Pins the C1 queue-item resolution: the manual `_dispatch_implementer`
+    wrapper in server.py now exposes the `canonical_name` parameter, and
+    a name passed by an MCP-served Engineer caller threads through to
+    the dispatcher → dispatch row → audit payload. Verifies pins #1/#2/
+    #5 of the operator-acceptance ladder over the MCP transport (which
+    were previously verified only in-process).
+
+    Two canonicals are registered: `default` (the substrate-product
+    upstream) and `substrate` (the substrate-named-canonical upstream).
+    Engineer dispatches with `canonical_name='substrate'`. Verifies:
+
+    - dispatch row's `canonical_name` column equals `'substrate'`
+      (the kwarg threaded through the FastMCP wrapper into the input
+      model, into the dispatcher, into the INSERT).
+    - `dispatch.issued` audit payload contains `canonical_name='substrate'`.
+    - the dispatch row's `working_directory` is nested under
+      `<root>/substrate/<id>/` (C2 path-layout pin over MCP transport).
+    """
+    registry, token_store = registry_with_tokens
+    base_url = f"http://{settings.mcp_host}:{settings.mcp_port}"
+
+    default_canonical = CanonicalClone(
+        path=settings.substrate_canonical_dir,
+        upstream_url=str(upstream_repo),
+    )
+    await default_canonical.ensure_provisioned()
+    substrate_canonical_path = tmp_path / "data" / "substrate-named-canonical"
+    substrate_canonical = CanonicalClone(
+        path=substrate_canonical_path,
+        upstream_url=str(substrate_upstream_repo),
+    )
+    await substrate_canonical.ensure_provisioned()
+    settings.dispatch_worktrees_root.mkdir(parents=True, exist_ok=True)
+
+    launcher, _bg = _make_implementer_launcher(base_url=base_url)
+    canonical_registry = CanonicalCloneRegistry(storage=storage)
+    await canonical_registry.ensure_default(
+        path=default_canonical.path,
+        upstream_url=default_canonical.upstream_url,
+    )
+    await canonical_registry.register(
+        name="substrate",
+        path=substrate_canonical.path,
+        upstream_url=substrate_canonical.upstream_url,
+    )
+    dispatcher = await BridgeDispatcher.create(
+        storage=storage,
+        token_store=token_store,
+        canonical_registry=canonical_registry,
+        worktrees_root=settings.dispatch_worktrees_root,
+        subprocess_launcher=launcher,
+        poll_interval_seconds=0.02,
+    )
+
+    spec_path = tmp_path / "phase-spec.md"
+    spec_path.write_text("# Phase\nApply the change.\n", encoding="utf-8")
+
+    eng = registry.get("engineer")
+    assert eng is not None
+    eng_token = await token_store.issue(
+        agent_id=eng.agent_id, role="engineer", label="engineer-supervisor"
+    )
+
+    try:
+        async with _running_server(settings, storage, registry, dispatcher):
+            disp_result = await _call_tool(
+                f"{base_url}/mcp",
+                eng_token.token,
+                "dispatch_implementer",
+                {
+                    "task_id": "task-1",
+                    "spec_path": str(spec_path),
+                    "working_directory": str(substrate_upstream_repo),
+                    "canonical_name": "substrate",
+                },
+            )
+            disp_out = _structured(disp_result)
+            assert disp_out["status"] == "completed", (
+                f"dispatch via MCP did not complete; outcome: {disp_out!r}"
+            )
+            dispatch_id = disp_out["dispatch_id"]
+    finally:
+        with contextlib.suppress(KeyError):
+            from meridian_orchestrator.bridge.dispatcher import (
+                _dispatcher_owned_canonicals,
+            )
+            _dispatcher_owned_canonicals.discard(default_canonical.path)
+            _dispatcher_owned_canonicals.discard(substrate_canonical.path)
+
+    # The canonical_name kwarg threaded through the FastMCP wrapper into
+    # the dispatch row.
+    row = await storage.fetch_one(
+        "SELECT canonical_name, working_directory FROM dispatches "
+        "WHERE id = ?",
+        (dispatch_id,),
+    )
+    assert row is not None
+    assert row["canonical_name"] == "substrate", (
+        "MCP-served dispatch_implementer must thread canonical_name='substrate' "
+        "to the dispatch row. If this assertion fails, the server.py wrapper "
+        "is not exposing the kwarg or is dropping it before constructing the "
+        "DispatchImplementerInput."
+    )
+
+    # Worktree path was nested under `<root>/substrate/<dispatch_id>/`.
+    expected_worktree = (
+        settings.dispatch_worktrees_root / "substrate" / dispatch_id
+    )
+    assert Path(row["working_directory"]) == expected_worktree
+
+    # The dispatch.issued audit payload also carries the name.
+    issued = await storage.fetch_one(
+        "SELECT details_json FROM audit_log "
+        "WHERE target = ? AND action = 'dispatch.issued'",
+        (dispatch_id,),
+    )
+    assert issued is not None
+    issued_details = json.loads(issued["details_json"])
+    assert issued_details["canonical_name"] == "substrate"
+

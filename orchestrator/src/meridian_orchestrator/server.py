@@ -510,7 +510,12 @@ def _register_dispatch_initiation_tools(
             "given spec. Runs the dispatch lifecycle through to a terminal "
             "state and returns the structured outcome. spec_path is read by "
             "the daemon at dispatch time and passed to the subprocess as "
-            "its prompt."
+            "its prompt. canonical_name (optional, default None): name of a "
+            "registered canonical clone to dispatch against. When omitted or "
+            "None, the default canonical is used (preserves pre-Slice-4 "
+            "behavior). Must match ^[a-z][a-z0-9-]{0,62}$ (1-63 chars); "
+            "'default' is callable here even though it is reserved on "
+            "register/unregister."
         ),
     )
     async def _dispatch_implementer(
@@ -520,6 +525,7 @@ def _register_dispatch_initiation_tools(
         timeout_override_seconds: int | None = None,
         keep_worktree_on_failure: bool = False,
         engineer_decisions: list[dict[str, Any]] | None = None,
+        canonical_name: str | None = None,
     ) -> DispatchImplementerOutput:
         agent_id = _resolve_agent_id()
         await _observe_caller(storage, token_store,"dispatch_implementer")
@@ -549,6 +555,7 @@ def _register_dispatch_initiation_tools(
                 timeout_override_seconds=timeout_override_seconds,
                 keep_worktree_on_failure=keep_worktree_on_failure,
                 engineer_decisions=decisions,
+                canonical_name=canonical_name,
             ),
             caller_agent_id=agent_id,
             caller_role=caller_role,
@@ -561,7 +568,12 @@ def _register_dispatch_initiation_tools(
             "Engineer-only. Dispatches a Tester sub-agent to verify the "
             "specified commit_hash against the assertion_spec prompt. Runs "
             "the dispatch lifecycle through to a terminal state and returns "
-            "the structured test_results."
+            "the structured test_results. canonical_name (optional, default "
+            "None): name of a registered canonical clone to dispatch against. "
+            "When omitted or None, the default canonical is used (preserves "
+            "pre-Slice-4 behavior). Must match ^[a-z][a-z0-9-]{0,62}$ "
+            "(1-63 chars); 'default' is callable here even though it is "
+            "reserved on register/unregister."
         ),
     )
     async def _dispatch_tester(
@@ -572,6 +584,7 @@ def _register_dispatch_initiation_tools(
         timeout_override_seconds: int | None = None,
         keep_worktree_on_failure: bool = False,
         engineer_decisions: list[dict[str, Any]] | None = None,
+        canonical_name: str | None = None,
     ) -> DispatchTesterOutput:
         agent_id = _resolve_agent_id()
         await _observe_caller(storage, token_store,"dispatch_tester")
@@ -601,6 +614,7 @@ def _register_dispatch_initiation_tools(
                 timeout_override_seconds=timeout_override_seconds,
                 keep_worktree_on_failure=keep_worktree_on_failure,
                 engineer_decisions=decisions,
+                canonical_name=canonical_name,
             ),
             caller_agent_id=agent_id,
             caller_role=caller_role,

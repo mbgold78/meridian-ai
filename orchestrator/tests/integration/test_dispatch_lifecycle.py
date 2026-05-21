@@ -236,8 +236,13 @@ async def test_serial_implementer_dispatch_completes(
     assert row["started_at"] is not None
     assert row["subprocess_pid"] == 99999
 
-    # The worktree was cleaned up post-completion.
-    worktree_path = tmp_path / "data" / "dispatch-worktrees" / outcome.dispatch_id
+    # The worktree was cleaned up post-completion. Slice 4 C2 nested
+    # the path layout under `<canonical_name>/`; no-arg dispatches
+    # resolve to 'default' so the worktree lived at
+    # `<root>/default/<dispatch_id>/` until cleanup.
+    worktree_path = (
+        tmp_path / "data" / "dispatch-worktrees" / "default" / outcome.dispatch_id
+    )
     assert not worktree_path.exists()
 
     # The token was revoked.
@@ -604,3 +609,200 @@ async def test_dispatch_with_reserved_default_name_routes_identically(
         assert merged_details["canonical_name"] == "default"
     finally:
         _dispatcher_owned_canonicals.discard(canonical.path)
+
+
+# ----- M5-canonical-clone-mgmt slice 4 (C2) — I1 named-canonical lifecycle ----
+
+
+@pytest.fixture
+def substrate_upstream_repo(tmp_path: Path) -> Path:
+    """Second upstream simulating Mike's substrate-canonical upstream.
+
+    Independent of `upstream_repo` so the named-canonical dispatch's
+    merge lands on the substrate upstream and the default-canonical's
+    HEAD remains observably untouched (I1 pin assertion (d)+(e)).
+    """
+    upstream = tmp_path / "substrate-upstream"
+    upstream.mkdir()
+    _git("init", "-b", "main", cwd=upstream)
+    _git("config", "user.email", "test@example.com", cwd=upstream)
+    _git("config", "user.name", "Test", cwd=upstream)
+    _git("config", "receive.denyCurrentBranch", "ignore", cwd=upstream)
+    (upstream / "SUBSTRATE.md").write_text("substrate root\n", encoding="utf-8")
+    _git("add", "SUBSTRATE.md", cwd=upstream)
+    _git("commit", "-m", "substrate initial", cwd=upstream)
+    return upstream
+
+
+async def test_dispatch_against_named_substrate_canonical_lifecycle(
+    storage: SqliteStorage,
+    upstream_repo: Path,
+    substrate_upstream_repo: Path,
+    tmp_path: Path,
+) -> None:
+    """I1 — full lifecycle against a NAMED canonical (operator-pin #3).
+
+    Two upstream repos in tmp_path; the registry registers both as
+    `default` + `substrate`. Engineer dispatches Implementer against
+    `substrate`. Verifies:
+
+    (a) dispatch row has `canonical_name='substrate'` (DB SELECT).
+    (b) worktree path is `<root>/substrate/<dispatch_id>/` (filesystem
+        path captured in the dispatches row, since the directory itself
+        is cleaned up post-completion).
+    (c) `dispatch.issued` audit payload contains `canonical_name='substrate'`.
+    (d) merge lands on the substrate canonical's main (substrate-upstream
+        HEAD advances).
+    (e) the default canonical's upstream HEAD is untouched.
+
+    Operator-pin #4 (nested worktree path includes canonical name) is
+    exercised by leg (b).
+    """
+    import json as _json
+
+    default_canonical = CanonicalClone(
+        path=tmp_path / "data" / "substrate-canonical",
+        upstream_url=str(upstream_repo),
+        default_branch="main",
+    )
+    await default_canonical.ensure_provisioned()
+    substrate_canonical = CanonicalClone(
+        path=tmp_path / "data" / "substrate-named-canonical",
+        upstream_url=str(substrate_upstream_repo),
+        default_branch="main",
+    )
+    await substrate_canonical.ensure_provisioned()
+
+    # Capture pre-dispatch upstream HEADs to verify (d)+(e).
+    default_upstream_head_before = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=str(upstream_repo),
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    substrate_upstream_head_before = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=str(substrate_upstream_repo),
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
+    token_store = TokenStore()
+    fake_proc = _FakeSubprocess()
+    background: list[asyncio.Task[None]] = []
+
+    async def fake_launcher(ctx: DispatchLaunchContext) -> SubprocessHandle:
+        async def simulate() -> None:
+            await asyncio.sleep(0)
+            commit_sha = await asyncio.to_thread(
+                _commit_in_worktree, ctx.working_directory, "I1 substrate dispatch"
+            )
+            await complete_dispatch(
+                storage=storage,
+                token_store=token_store,
+                request=CompleteDispatchInput(
+                    dispatch_id=ctx.dispatch_id,
+                    status="completed",
+                    commit_hash=commit_sha,
+                    notes="I1 named canonical",
+                ),
+                caller_agent_id="impl-agent-id",
+                caller_role="implementer",
+            )
+            fake_proc.signal_clean_exit()
+
+        background.append(asyncio.create_task(simulate()))
+        return fake_proc
+
+    canonical_registry = CanonicalCloneRegistry(storage=storage)
+    await canonical_registry.ensure_default(
+        path=default_canonical.path, upstream_url=default_canonical.upstream_url
+    )
+    await canonical_registry.register(
+        name="substrate",
+        path=substrate_canonical.path,
+        upstream_url=substrate_canonical.upstream_url,
+    )
+    worktrees_root = tmp_path / "data" / "dispatch-worktrees"
+    try:
+        dispatcher = await BridgeDispatcher.create(
+            storage=storage,
+            token_store=token_store,
+            canonical_registry=canonical_registry,
+            worktrees_root=worktrees_root,
+            subprocess_launcher=fake_launcher,
+            poll_interval_seconds=0.02,
+        )
+
+        outcome = await dispatcher.dispatch(
+            task_id="task-1",
+            role="implementer",
+            role_agent_id="impl-agent-id",
+            prompt="ignored",
+            actor="eng-agent-id",
+            canonical_name="substrate",
+        )
+
+        # Leg (a): dispatch row carries the resolved name.
+        assert outcome.status == "completed"
+        row = await storage.fetch_one(
+            "SELECT canonical_name, working_directory FROM dispatches "
+            "WHERE id = ?",
+            (outcome.dispatch_id,),
+        )
+        assert row is not None
+        assert row["canonical_name"] == "substrate"
+
+        # Leg (b): worktree path nested under `<root>/substrate/<id>/`.
+        # Directory itself cleaned up post-completion; the dispatches row
+        # captures the working_directory used at dispatch time.
+        expected_worktree = worktrees_root / "substrate" / outcome.dispatch_id
+        assert Path(row["working_directory"]) == expected_worktree
+        assert not expected_worktree.exists()
+
+        # Leg (c): dispatch.issued audit payload contains the field +
+        # the nested working_directory.
+        issued = await storage.fetch_one(
+            "SELECT details_json FROM audit_log "
+            "WHERE target = ? AND action = 'dispatch.issued'",
+            (outcome.dispatch_id,),
+        )
+        assert issued is not None
+        issued_details = _json.loads(issued["details_json"])
+        assert issued_details["canonical_name"] == "substrate"
+        assert (
+            Path(issued_details["working_directory"])
+            == worktrees_root / "substrate" / outcome.dispatch_id
+        )
+
+        # Leg (d): substrate upstream advanced — merge landed on its main.
+        substrate_upstream_head_after = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=str(substrate_upstream_repo),
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        assert substrate_upstream_head_after != substrate_upstream_head_before, (
+            "substrate upstream HEAD should advance after a substrate-dispatch "
+            "merge; canonical-name routing landed the merge on the wrong upstream"
+        )
+
+        # Leg (e): default upstream is untouched.
+        default_upstream_head_after = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=str(upstream_repo),
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        assert default_upstream_head_after == default_upstream_head_before, (
+            "default upstream HEAD must NOT advance when the dispatch was "
+            "explicitly routed to the substrate canonical; cross-canonical "
+            "contamination indicates the resolver swap is broken"
+        )
+    finally:
+        _dispatcher_owned_canonicals.discard(default_canonical.path)
+        _dispatcher_owned_canonicals.discard(substrate_canonical.path)
