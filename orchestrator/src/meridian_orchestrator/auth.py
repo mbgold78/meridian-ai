@@ -63,6 +63,68 @@ _HEX = "0123456789abcdef"
 
 logger = structlog.get_logger(__name__)
 
+
+# β-S11-18: Windows CredWrite blob-overflow classifier ---------------------
+#
+# Windows Credential Manager rejects ``CredWrite`` calls whose blob exceeds
+# ~2560 bytes with Windows error code 1783 ('The stub received bad data').
+# When this surfaces through the ``keyring`` Python package on Windows the
+# exception class depends on which Windows-bindings library is installed:
+#
+#   * ``pywin32-ctypes`` (the actual installed package per this repo's lockfile):
+#     raises ``win32ctypes.pywin32.pywintypes.error`` — inherits from
+#     ``Exception``, NOT from ``OSError``. Has ``winerror``, ``funcname``,
+#     and ``strerror`` attributes; ``args`` is the raw 3-tuple
+#     ``(winerror, funcname, strerror)``.
+#   * The legacy ``pywin32`` package surfaces a similar
+#     ``pywintypes.error`` class with comparable shape.
+#   * Some non-Windows test paths construct the bare ``OSError(1783,
+#     'CredWrite', '...')`` form to simulate the failure mode; on
+#     Windows-Python that sets ``errno=1783`` with ``winerror=None``.
+#
+# The classifier below tolerates all three shapes by duck-typing on
+# either:
+#
+#   - ``winerror``, ``errno``, or first-positional ``args[0]`` equal to
+#     1783 (the code check); AND
+#   - ``funcname == 'CredWrite'``, ``'CredWrite' in args``, or
+#     ``'CredWrite' in str(exc)`` (the operation/source check).
+#
+# Both conditions are required: an unrelated exception happening to
+# carry a 1783 code in some unrelated field, or a CredRead/CredEnumerate
+# failure that doesn't match the blob-overflow shape, will NOT be
+# suppressed. The β-S11-18 v1 hotfix relied on ``except OSError`` and
+# silently failed in production because the actual pywintypes-shape
+# exception isn't an OSError subclass; v2 broadens the catch and pins
+# the narrowness here in the classifier.
+def _is_credwrite_blob_overflow(exc: BaseException) -> bool:
+    """Return True iff ``exc`` matches the Windows CredWrite blob-overflow
+    failure shape (winerror=1783 + CredWrite source). False for any other
+    exception; the caller will propagate non-matching exceptions.
+
+    Tolerates pywin32-ctypes, legacy pywin32, and bare-OSError shapes.
+    See module-level comment above for the classifier rationale.
+    """
+    # ----- code check -----
+    code = getattr(exc, "winerror", None)
+    if code is None:
+        code = getattr(exc, "errno", None)
+    if code is None:
+        args = getattr(exc, "args", ()) or ()
+        if args and isinstance(args[0], int):
+            code = args[0]
+    if code != 1783:
+        return False
+
+    # ----- source check (CredWrite / Windows keyring) -----
+    funcname = getattr(exc, "funcname", None)
+    if funcname == "CredWrite":
+        return True
+    args = getattr(exc, "args", ()) or ()
+    if any(a == "CredWrite" for a in args if isinstance(a, str)):
+        return True
+    return "CredWrite" in str(exc)
+
 LOOKUP_LATENCY_METRIC_KIND: str = "auth.lookup.duration_us"
 
 
@@ -601,20 +663,20 @@ class TokenStore:
         """Persist the OAuth-clients enumeration index in keyring.
 
         β-S11-18 (2026-05-21): Windows Credential Manager rejects
-        ``CredWrite`` calls whose blob exceeds ~2560 bytes with
-        ``OSError(winerror=1783, 'The stub received bad data')``.
-        Same architectural shape as β-S11-5 transient-tokens
-        index-bleed: a monolithic aggregator keyring blob grows
-        unbounded across daemon lifetimes until it overflows the
-        backend's per-credential limit. Once over, every new
-        ``register_client`` call from a fresh MCP dynamic-registration
-        request fails at this exact line, surfacing as HTTP 500 at
-        ``/register`` and breaking the OAuth handshake.
+        ``CredWrite`` calls whose blob exceeds ~2560 bytes with the
+        Windows error code 1783 ('The stub received bad data'). Same
+        architectural shape as β-S11-5 transient-tokens index-bleed:
+        a monolithic aggregator keyring blob grows unbounded across
+        daemon lifetimes until it overflows the backend's
+        per-credential limit. Once over, every new ``register_client``
+        call from a fresh MCP dynamic-registration request fails at
+        this exact line, surfacing as HTTP 500 at ``/register`` and
+        breaking the OAuth handshake.
 
-        Tactical suppression (β-S11-18 hotfix): the per-client record
-        at ``oauth_client:<client_id>`` was already written by
-        :meth:`register_oauth_client` BEFORE this call (auth.py:609),
-        so ``get_oauth_client(client_id)`` — the only call site OAuth
+        Tactical suppression (β-S11-18 hotfix v2): the per-client
+        record at ``oauth_client:<client_id>`` was already written by
+        :meth:`register_oauth_client` BEFORE this call, so
+        ``get_oauth_client(client_id)`` — the only call site OAuth
         token validation depends on — still resolves the new client.
         The cost of suppressing this specific failure is that
         :meth:`list_oauth_clients` will miss enumerating clients added
@@ -622,15 +684,39 @@ class TokenStore:
         ``list_oauth_clients`` for live OAuth flow, only for operator
         introspection.
 
-        Durable follow-up tracked in BACKLOG as β-S11-18:
-        SQLite-backed OAuth client registry, mirroring β-S11-15's
-        transient-tokens migration. That removes the keyring blob
-        entirely and recovers ``list_oauth_clients`` correctness.
+        Durable follow-up tracked in BACKLOG as β-S11-18: SQLite-backed
+        OAuth client registry, mirroring β-S11-15's transient-tokens
+        migration. That removes the keyring blob entirely and recovers
+        ``list_oauth_clients`` correctness.
 
-        Only ``OSError`` with ``winerror == 1783`` is suppressed.
-        Other keyring failures (permission denied, backend
-        unavailable, etc.) still propagate so we don't accidentally
-        mask a deeper auth-store regression.
+        **v2 catch-classifier rationale:** the v1 hotfix used
+        ``except OSError``, which failed in production because the
+        actual exception arriving from
+        ``keyring.backends.Windows.set_password`` is
+        ``win32ctypes.pywin32.pywintypes.error`` — a bare
+        ``Exception`` subclass, NOT ``OSError``. The ``pywin32error``
+        context manager catches the underlying ``WindowsError`` and
+        re-raises as ``pywintypes.error`` with ``winerror`` set as an
+        attribute. v2 broadens the catch to ``except Exception`` and
+        applies an inline duck-typing check that requires BOTH:
+
+          1. Windows error code 1783 surfaced via ANY of
+             ``winerror`` (pywin32-shape), ``errno`` (bare-OSError
+             shape used in tests / non-pywin32 backends), or
+             ``args[0]`` (rawest pywintypes shape with the int code
+             as first positional).
+          2. Operation/source indicator points at CredWrite or the
+             Windows keyring path: ``funcname == 'CredWrite'``
+             (pywintypes-shape), ``'CredWrite' in args``
+             (multi-positional shape), or ``'CredWrite' in str(exc)``
+             (string-fallback shape).
+
+        Both conditions must hold; otherwise the exception propagates
+        verbatim. This keeps the broadened try-block from broadening
+        the silent-failure surface — any unrelated exception (e.g.,
+        ``RuntimeError`` from a misconfigured backend, OSError with
+        ``errno=5`` access-denied, ValueError from a corrupt blob)
+        still bubbles up loudly.
         """
         try:
             keyring.set_password(
@@ -638,24 +724,15 @@ class TokenStore:
                 OAUTH_CLIENTS_INDEX_USERNAME,
                 json.dumps({"client_ids": client_ids}),
             )
-        except OSError as exc:
-            # Match by EITHER winerror or errno: production exceptions
-            # from pywin32 set ``winerror=1783``; Python's bare
-            # ``OSError(1783, ...)`` constructor (used by tests and by
-            # ``keyring/backends/Windows.py`` re-raise paths) sets
-            # ``errno=1783`` with ``winerror=None``. Both shapes
-            # represent the same Windows CredWrite blob-overflow
-            # failure mode, so accept either to avoid platform/
-            # construction-path-specific suppression gaps.
-            winerror = getattr(exc, "winerror", None)
-            errno_ = getattr(exc, "errno", None)
-            if winerror != 1783 and errno_ != 1783:
+        except Exception as exc:
+            if not _is_credwrite_blob_overflow(exc):
                 raise
             logger.warning(
                 "auth.oauth_clients_index_write_overflow",
                 service=self._service,
                 client_count=len(client_ids),
                 error=str(exc),
+                error_type=f"{type(exc).__module__}.{type(exc).__name__}",
                 hint=(
                     "β-S11-18: keyring CredWrite blob >~2560 bytes; "
                     "per-client `oauth_client:<id>` records remain "

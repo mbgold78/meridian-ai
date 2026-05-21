@@ -690,3 +690,223 @@ async def test_list_oauth_clients_misses_post_overflow_clients(
         "overflow caused list_oauth_clients to miss"
     )
     assert store.get_oauth_client("client-C") is not None
+
+
+# ===========================================================================
+# β-S11-18 v2: pywintypes.error catch — production shape coverage
+# ===========================================================================
+#
+# v1 incident 2026-05-21: the v1 hotfix used `except OSError` and silently
+# failed in production. Root cause: keyring's Windows backend re-raises
+# the underlying WindowsError as `win32ctypes.pywin32.pywintypes.error`,
+# which inherits from `Exception` (NOT `OSError`). The v1 tests passed
+# because they raised bare `OSError(1783, ...)` — a fixture-fidelity gap.
+#
+# v2 broadens the catch to `except Exception` and gates suppression on
+# the duck-typed CredWrite-blob-overflow shape (winerror/errno/args[0]
+# == 1783 AND CredWrite source). Tests below pin production-shape
+# exceptions to prevent this regression class.
+# ---------------------------------------------------------------------------
+
+
+async def test_register_oauth_client_succeeds_when_pywintypes_overflow_raised(
+    monkeypatch: pytest.MonkeyPatch,
+    keyring_memory: object,
+) -> None:
+    """β-S11-18 v2: production exception class
+    ``win32ctypes.pywin32.pywintypes.error`` is NOT an ``OSError``
+    subclass. v1 hotfix's ``except OSError`` did not catch it; v2's
+    ``except Exception`` + CredWrite-shape classifier MUST catch it.
+
+    This is the test the v1 hotfix needed but lacked. Without it,
+    the v1 hotfix's existing OSError-shaped tests all passed but
+    production still HTTP-500'd on /register.
+    """
+    from win32ctypes.pywin32.pywintypes import error as pywintypes_error
+    import keyring as keyring_module
+
+    store = TokenStore(service="test-oauth-pywintypes-overflow")
+
+    real_set_password = keyring_module.set_password
+
+    def selective_failing_set_password(
+        service: str, username: str, password: str
+    ) -> None:
+        if username == OAUTH_CLIENTS_INDEX_USERNAME:
+            # Production exception shape: from the daemon-stderr
+            # diagnostic 2026-05-21. winerror=1783, funcname='CredWrite',
+            # strerror='The stub received bad data'. Inherits from
+            # Exception, NOT OSError.
+            raise pywintypes_error(
+                1783, "CredWrite", "The stub received bad data"
+            )
+        real_set_password(service, username, password)
+
+    monkeypatch.setattr(
+        keyring_module, "set_password", selective_failing_set_password
+    )
+
+    record = _oauth_record("test-client-v2-001")
+    # Must NOT raise — v2 hotfix suppresses the pywintypes-shape overflow.
+    store.register_oauth_client(record)
+
+    # Per-client record persists and resolves — OAuth token validation
+    # path is unaffected.
+    fetched = store.get_oauth_client("test-client-v2-001")
+    assert fetched is not None, (
+        "β-S11-18 v2: pywintypes-shape overflow must suppress cleanly "
+        "AND the per-client record must remain resolvable via direct "
+        "get_oauth_client lookup. v1 hotfix failed BOTH parts in "
+        "production."
+    )
+    assert fetched.client_id == "test-client-v2-001"
+
+
+async def test_register_oauth_client_propagates_pywintypes_with_other_winerror(
+    monkeypatch: pytest.MonkeyPatch,
+    keyring_memory: object,
+) -> None:
+    """β-S11-18 v2 narrow-suppression invariant: a pywintypes.error
+    with the SAME class but a DIFFERENT winerror code (e.g., 5 =
+    access denied) MUST propagate. Suppression is keyed to
+    winerror==1783 specifically, not to the exception class.
+    """
+    from win32ctypes.pywin32.pywintypes import error as pywintypes_error
+    import keyring as keyring_module
+
+    store = TokenStore(service="test-oauth-pywintypes-access-denied")
+
+    real_set_password = keyring_module.set_password
+
+    def index_write_access_denied(
+        service: str, username: str, password: str
+    ) -> None:
+        if username == OAUTH_CLIENTS_INDEX_USERNAME:
+            raise pywintypes_error(5, "CredWrite", "Access is denied")
+        real_set_password(service, username, password)
+
+    monkeypatch.setattr(
+        keyring_module, "set_password", index_write_access_denied
+    )
+
+    record = _oauth_record("test-client-v2-002")
+    with pytest.raises(pywintypes_error) as exc_info:
+        store.register_oauth_client(record)
+    assert exc_info.value.winerror == 5, (
+        "non-1783 pywintypes.error must propagate verbatim — "
+        "β-S11-18 v2 suppression is keyed to winerror==1783 only"
+    )
+
+
+async def test_register_oauth_client_propagates_unrelated_exception(
+    monkeypatch: pytest.MonkeyPatch,
+    keyring_memory: object,
+) -> None:
+    """β-S11-18 v2 broadened-catch invariant: ``except Exception``
+    around _write_oauth_clients_index does NOT widen the
+    silent-failure surface. An unrelated exception (e.g., RuntimeError
+    from a misconfigured backend, ValueError, KeyError) MUST
+    propagate. The inner duck-typing check on (1783 + CredWrite)
+    enforces the narrowness.
+    """
+    import keyring as keyring_module
+
+    store = TokenStore(service="test-oauth-unrelated-exception")
+
+    real_set_password = keyring_module.set_password
+
+    def index_write_runtime_error(
+        service: str, username: str, password: str
+    ) -> None:
+        if username == OAUTH_CLIENTS_INDEX_USERNAME:
+            raise RuntimeError(
+                "simulated backend misconfiguration — not a CredWrite "
+                "blob-overflow failure"
+            )
+        real_set_password(service, username, password)
+
+    monkeypatch.setattr(
+        keyring_module, "set_password", index_write_runtime_error
+    )
+
+    record = _oauth_record("test-client-v2-003")
+    with pytest.raises(RuntimeError, match="misconfiguration"):
+        store.register_oauth_client(record)
+
+
+async def test_register_oauth_client_propagates_pywintypes_credread_with_overflow_code(
+    monkeypatch: pytest.MonkeyPatch,
+    keyring_memory: object,
+) -> None:
+    """β-S11-18 v2 source-check invariant: even if winerror==1783
+    surfaces, suppression requires the source/operation to indicate
+    CredWrite. A pywintypes.error from CredRead/CredEnumerate or any
+    other Windows call that happens to carry code 1783 MUST propagate
+    — those are not the blob-overflow failure mode this hotfix
+    targets.
+    """
+    from win32ctypes.pywin32.pywintypes import error as pywintypes_error
+    import keyring as keyring_module
+
+    store = TokenStore(service="test-oauth-credread-1783")
+
+    real_set_password = keyring_module.set_password
+
+    def index_write_credread_overflow(
+        service: str, username: str, password: str
+    ) -> None:
+        if username == OAUTH_CLIENTS_INDEX_USERNAME:
+            # winerror=1783 but funcname=CredRead — implausible in
+            # practice but pins the source-check invariant.
+            raise pywintypes_error(1783, "CredRead", "some-other-error")
+        real_set_password(service, username, password)
+
+    monkeypatch.setattr(
+        keyring_module, "set_password", index_write_credread_overflow
+    )
+
+    record = _oauth_record("test-client-v2-004")
+    with pytest.raises(pywintypes_error):
+        store.register_oauth_client(record)
+
+
+def test_is_credwrite_blob_overflow_classifier_matrix() -> None:
+    """β-S11-18 v2 classifier unit test: matrix of (exception shape,
+    expected suppression) pinning the duck-typing rules.
+    """
+    from win32ctypes.pywin32.pywintypes import error as pywintypes_error
+    from meridian_orchestrator.auth import _is_credwrite_blob_overflow
+
+    # ----- positive cases (should suppress) -----
+    assert _is_credwrite_blob_overflow(
+        pywintypes_error(1783, "CredWrite", "The stub received bad data")
+    ), "production pywintypes shape with code 1783 + CredWrite MUST match"
+
+    assert _is_credwrite_blob_overflow(
+        OSError(1783, "CredWrite", "The stub received bad data")
+    ), "bare OSError(1783, 'CredWrite', ...) MUST match for fallback shapes"
+
+    # ----- negative cases (must NOT suppress) -----
+    assert not _is_credwrite_blob_overflow(
+        pywintypes_error(5, "CredWrite", "Access denied")
+    ), "non-1783 code must NOT match"
+
+    assert not _is_credwrite_blob_overflow(
+        pywintypes_error(1783, "CredRead", "anything")
+    ), "non-CredWrite source must NOT match"
+
+    assert not _is_credwrite_blob_overflow(
+        OSError(5, "CredWrite", "Access denied")
+    ), "OSError with errno=5 must NOT match"
+
+    assert not _is_credwrite_blob_overflow(
+        RuntimeError("unrelated failure")
+    ), "unrelated exception must NOT match"
+
+    assert not _is_credwrite_blob_overflow(
+        ValueError("some value error")
+    ), "ValueError must NOT match"
+
+    assert not _is_credwrite_blob_overflow(
+        Exception()
+    ), "bare Exception with no args must NOT match"
