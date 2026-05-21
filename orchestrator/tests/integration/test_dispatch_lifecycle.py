@@ -34,9 +34,13 @@ import pytest_asyncio
 
 from meridian_orchestrator.auth import TokenStore
 from meridian_orchestrator.bridge.canonical import CanonicalClone
-from meridian_orchestrator.bridge.canonical_registry import CanonicalCloneRegistry
+from meridian_orchestrator.bridge.canonical_registry import (
+    CanonicalCloneRegistry,
+    CanonicalNotFoundError,
+)
 from meridian_orchestrator.bridge.dispatcher import (
     BridgeDispatcher,
+    _dispatcher_owned_canonicals,
     DispatchLaunchContext,
     SubprocessHandle,
 )
@@ -318,3 +322,285 @@ async def test_subprocess_exits_without_complete_dispatch_marks_failed(
     assert row["status"] == "failed"
     assert row["notes"] is not None
     assert "without complete_dispatch" in row["notes"]
+
+
+# ----- M5-canonical-clone-mgmt slice 4 — I2, I3, I4 -----------------------
+
+
+async def test_dispatch_without_canonical_name_writes_default_literal(
+    storage: SqliteStorage, upstream_repo: Path, tmp_path: Path
+) -> None:
+    """I2 — backward-compat. A dispatch with no ``canonical_name`` kwarg
+    produces ``dispatches.canonical_name='default'`` (Ratification #4
+    explicit literal), and ``dispatch.issued`` + ``dispatch.merged``
+    audit payloads carry ``canonical_name='default'`` (Ratification #2
+    minimal-4). Operator-pin #5 — existing callers route through the
+    new code path identically to pre-Slice-4."""
+    import json as _json
+
+    canonical = CanonicalClone(
+        path=tmp_path / "data" / "substrate-canonical",
+        upstream_url=str(upstream_repo),
+        default_branch="main",
+    )
+    await canonical.ensure_provisioned()
+    token_store = TokenStore()
+
+    fake_proc = _FakeSubprocess()
+    background: list[asyncio.Task[None]] = []
+
+    async def fake_launcher(ctx: DispatchLaunchContext) -> SubprocessHandle:
+        async def simulate() -> None:
+            await asyncio.sleep(0)
+            commit_sha = await asyncio.to_thread(
+                _commit_in_worktree, ctx.working_directory, "slice4 I2"
+            )
+            await complete_dispatch(
+                storage=storage,
+                token_store=token_store,
+                request=CompleteDispatchInput(
+                    dispatch_id=ctx.dispatch_id,
+                    status="completed",
+                    commit_hash=commit_sha,
+                    notes="I2 default",
+                ),
+                caller_agent_id="impl-agent-id",
+                caller_role="implementer",
+            )
+            fake_proc.signal_clean_exit()
+
+        background.append(asyncio.create_task(simulate()))
+        return fake_proc
+
+    canonical_registry = CanonicalCloneRegistry(storage=storage)
+    await canonical_registry.ensure_default(
+        path=canonical.path, upstream_url=canonical.upstream_url
+    )
+    try:
+        dispatcher = await BridgeDispatcher.create(
+            storage=storage,
+            token_store=token_store,
+            canonical_registry=canonical_registry,
+            worktrees_root=tmp_path / "data" / "dispatch-worktrees",
+            subprocess_launcher=fake_launcher,
+            poll_interval_seconds=0.02,
+        )
+
+        outcome = await dispatcher.dispatch(
+            task_id="task-1",
+            role="implementer",
+            role_agent_id="impl-agent-id",
+            prompt="ignored",
+            actor="eng-agent-id",
+            # NOTE: canonical_name kwarg omitted — preserves pre-Slice-4
+            # caller shape. The dispatcher's resolver swap interprets
+            # None as get_default(); the INSERT writes the explicit
+            # 'default' literal per Ratification #4.
+        )
+
+        assert outcome.status == "completed"
+        row = await storage.fetch_one(
+            "SELECT canonical_name FROM dispatches WHERE id = ?",
+            (outcome.dispatch_id,),
+        )
+        assert row is not None
+        assert row["canonical_name"] == "default"
+
+        # Audit payload on dispatch.issued contains the field with the
+        # resolved literal.
+        issued = await storage.fetch_one(
+            "SELECT details_json FROM audit_log "
+            "WHERE target = ? AND action = 'dispatch.issued'",
+            (outcome.dispatch_id,),
+        )
+        assert issued is not None
+        issued_details = _json.loads(issued["details_json"])
+        assert issued_details["canonical_name"] == "default"
+
+        # Audit payload on dispatch.merged contains the field too —
+        # _merge_and_record threading symmetric to Slice 2's canonical
+        # parameter pattern.
+        merged = await storage.fetch_one(
+            "SELECT details_json FROM audit_log "
+            "WHERE target = ? AND action = 'dispatch.merged'",
+            (outcome.dispatch_id,),
+        )
+        assert merged is not None
+        merged_details = _json.loads(merged["details_json"])
+        assert merged_details["canonical_name"] == "default"
+    finally:
+        _dispatcher_owned_canonicals.discard(canonical.path)
+
+
+async def test_dispatch_unknown_canonical_name_raises_and_inserts_nothing(
+    storage: SqliteStorage, upstream_repo: Path, tmp_path: Path
+) -> None:
+    """I3 — operator-pin #2. ``canonical_name='never-registered'`` raises
+    ``CanonicalNotFoundError`` (verbatim per Ratification #3, stable
+    code 'CANONICAL_NOT_FOUND'); the dispatcher's resolver fails BEFORE
+    any side effect:
+
+    - No ``dispatches`` row inserted (negative DB assert).
+    - No ``dispatch.issued`` audit row written (negative audit assert).
+    - No token issued.
+    - No worktree directory created.
+    """
+    canonical = CanonicalClone(
+        path=tmp_path / "data" / "substrate-canonical",
+        upstream_url=str(upstream_repo),
+        default_branch="main",
+    )
+    await canonical.ensure_provisioned()
+    token_store = TokenStore()
+
+    async def fake_launcher(ctx: DispatchLaunchContext) -> SubprocessHandle:
+        raise AssertionError(
+            "launcher must not run on the CanonicalNotFoundError path"
+        )
+
+    canonical_registry = CanonicalCloneRegistry(storage=storage)
+    await canonical_registry.ensure_default(
+        path=canonical.path, upstream_url=canonical.upstream_url
+    )
+    worktrees_root = tmp_path / "data" / "dispatch-worktrees"
+    try:
+        dispatcher = await BridgeDispatcher.create(
+            storage=storage,
+            token_store=token_store,
+            canonical_registry=canonical_registry,
+            worktrees_root=worktrees_root,
+            subprocess_launcher=fake_launcher,
+            poll_interval_seconds=0.02,
+        )
+
+        before_count = await storage.fetch_one(
+            "SELECT COUNT(*) AS n FROM dispatches"
+        )
+        assert before_count is not None
+        baseline_dispatches = int(before_count["n"])
+
+        with pytest.raises(CanonicalNotFoundError) as exc_info:
+            await dispatcher.dispatch(
+                task_id="task-1",
+                role="implementer",
+                role_agent_id="impl-agent-id",
+                prompt="ignored",
+                actor="eng-agent-id",
+                canonical_name="never-registered",
+            )
+
+        # Stable error code (Ratification #3).
+        assert exc_info.value.code == "CANONICAL_NOT_FOUND"
+
+        # Negative DB assert: no dispatch row added.
+        after_count = await storage.fetch_one(
+            "SELECT COUNT(*) AS n FROM dispatches"
+        )
+        assert after_count is not None
+        assert int(after_count["n"]) == baseline_dispatches
+
+        # Negative audit assert: no dispatch.* audit row.
+        audit = await storage.fetch_all(
+            "SELECT action FROM audit_log WHERE action LIKE 'dispatch.%'"
+        )
+        assert audit == []
+
+        # Worktrees root either absent or empty (no dispatch_id minted).
+        assert not worktrees_root.exists() or not any(worktrees_root.iterdir())
+    finally:
+        _dispatcher_owned_canonicals.discard(canonical.path)
+
+
+async def test_dispatch_with_reserved_default_name_routes_identically(
+    storage: SqliteStorage, upstream_repo: Path, tmp_path: Path
+) -> None:
+    """I4 — operator-pin #1. ``canonical_name='default'`` succeeds and
+    resolves identically to the no-arg case (I2). Slice 4 Ratification
+    #5 — reserved name 'default' is callable on dispatch (callability ≠
+    register/unregister-ability)."""
+    import json as _json
+
+    canonical = CanonicalClone(
+        path=tmp_path / "data" / "substrate-canonical",
+        upstream_url=str(upstream_repo),
+        default_branch="main",
+    )
+    await canonical.ensure_provisioned()
+    token_store = TokenStore()
+
+    fake_proc = _FakeSubprocess()
+    background: list[asyncio.Task[None]] = []
+
+    async def fake_launcher(ctx: DispatchLaunchContext) -> SubprocessHandle:
+        async def simulate() -> None:
+            await asyncio.sleep(0)
+            commit_sha = await asyncio.to_thread(
+                _commit_in_worktree, ctx.working_directory, "slice4 I4"
+            )
+            await complete_dispatch(
+                storage=storage,
+                token_store=token_store,
+                request=CompleteDispatchInput(
+                    dispatch_id=ctx.dispatch_id,
+                    status="completed",
+                    commit_hash=commit_sha,
+                    notes="I4 explicit default",
+                ),
+                caller_agent_id="impl-agent-id",
+                caller_role="implementer",
+            )
+            fake_proc.signal_clean_exit()
+
+        background.append(asyncio.create_task(simulate()))
+        return fake_proc
+
+    canonical_registry = CanonicalCloneRegistry(storage=storage)
+    await canonical_registry.ensure_default(
+        path=canonical.path, upstream_url=canonical.upstream_url
+    )
+    try:
+        dispatcher = await BridgeDispatcher.create(
+            storage=storage,
+            token_store=token_store,
+            canonical_registry=canonical_registry,
+            worktrees_root=tmp_path / "data" / "dispatch-worktrees",
+            subprocess_launcher=fake_launcher,
+            poll_interval_seconds=0.02,
+        )
+
+        outcome = await dispatcher.dispatch(
+            task_id="task-1",
+            role="implementer",
+            role_agent_id="impl-agent-id",
+            prompt="ignored",
+            actor="eng-agent-id",
+            canonical_name="default",
+        )
+
+        assert outcome.status == "completed"
+        row = await storage.fetch_one(
+            "SELECT canonical_name FROM dispatches WHERE id = ?",
+            (outcome.dispatch_id,),
+        )
+        assert row is not None
+        assert row["canonical_name"] == "default"
+
+        issued = await storage.fetch_one(
+            "SELECT details_json FROM audit_log "
+            "WHERE target = ? AND action = 'dispatch.issued'",
+            (outcome.dispatch_id,),
+        )
+        assert issued is not None
+        issued_details = _json.loads(issued["details_json"])
+        assert issued_details["canonical_name"] == "default"
+
+        merged = await storage.fetch_one(
+            "SELECT details_json FROM audit_log "
+            "WHERE target = ? AND action = 'dispatch.merged'",
+            (outcome.dispatch_id,),
+        )
+        assert merged is not None
+        merged_details = _json.loads(merged["details_json"])
+        assert merged_details["canonical_name"] == "default"
+    finally:
+        _dispatcher_owned_canonicals.discard(canonical.path)

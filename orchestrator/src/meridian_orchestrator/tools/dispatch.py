@@ -69,6 +69,12 @@ class DispatchImplementerInput(BaseModel):
     working_directory: str
     timeout_override_seconds: int | None = None
     keep_worktree_on_failure: bool = False
+    canonical_name: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=63,
+        pattern=r"^[a-z][a-z0-9-]{0,62}$",
+    )
     engineer_decisions: list[EngineerDecision] = Field(default_factory=list)
 
 
@@ -102,6 +108,12 @@ class DispatchTesterInput(BaseModel):
     assertion_spec: str
     timeout_override_seconds: int | None = None
     keep_worktree_on_failure: bool = False
+    canonical_name: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=63,
+        pattern=r"^[a-z][a-z0-9-]{0,62}$",
+    )
     engineer_decisions: list[EngineerDecision] = Field(default_factory=list)
 
 
@@ -201,6 +213,13 @@ async def dispatch_implementer(
     Returns the terminal-state DispatchOutcome flattened into the public
     output schema. Tester-specific fields (``test_results``) are not exposed
     on the implementer output.
+
+    ``request.canonical_name`` (optional, default ``None``) selects the
+    registered canonical clone to dispatch against per Slice 4 of
+    M5-canonical-clone-mgmt. ``None`` resolves to the default canonical
+    (preserves pre-Slice-4 behavior); a non-None name resolves via
+    ``CanonicalCloneRegistry.get_by_name`` and raises
+    ``CanonicalNotFoundError`` if unknown.
     """
     _require_role(caller_role, "engineer")
     if not request.task_id:
@@ -237,6 +256,7 @@ async def dispatch_implementer(
         requested_working_directory=request.working_directory,
         system_prompt=system_prompt,
         allowed_tools=allowed_tools,
+        canonical_name=request.canonical_name,
     )
     return _outcome_to_implementer_output(outcome)
 
@@ -355,6 +375,13 @@ async def dispatch_tester(
     ``model_tier_default`` → canonical model string for the tps-driven
     timeout. ``None`` means "use legacy timeout default" — see
     :func:`dispatch_implementer` for the full contract.
+
+    ``request.canonical_name`` (optional, default ``None``) selects the
+    registered canonical clone to dispatch against per Slice 4 of
+    M5-canonical-clone-mgmt. ``None`` resolves to the default canonical
+    (preserves pre-Slice-4 behavior); a non-None name resolves via
+    ``CanonicalCloneRegistry.get_by_name`` and raises
+    ``CanonicalNotFoundError`` if unknown.
     """
     _require_role(caller_role, "engineer")
     if not request.task_id:
@@ -385,6 +412,7 @@ async def dispatch_tester(
         commit_hash=request.commit_hash,
         system_prompt=system_prompt,
         allowed_tools=allowed_tools,
+        canonical_name=request.canonical_name,
     )
     return DispatchTesterOutput(
         dispatch_id=outcome.dispatch_id,

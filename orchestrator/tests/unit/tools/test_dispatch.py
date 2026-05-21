@@ -24,9 +24,13 @@ from meridian_orchestrator.storage.migrations import run_migrations
 from meridian_orchestrator.storage.sqlite import SqliteStorage
 from meridian_orchestrator.tools.dispatch import (
     CompleteDispatchInput,
+    DispatchImplementerInput,
+    DispatchTesterInput,
     GetDispatchResultInput,
     GetDispatchStatusInput,
     complete_dispatch,
+    dispatch_implementer,
+    dispatch_tester,
     get_dispatch_result,
     get_dispatch_status,
 )
@@ -450,3 +454,225 @@ async def test_get_dispatch_result_implementer_self_only(
             caller_agent_id="some-other-impl",
             caller_role="implementer",
         )
+
+
+# ----- M5-canonical-clone-mgmt slice 4 — canonical_name parameter ---------
+
+
+# U1 — Pydantic input model validation (DispatchImplementerInput +
+# DispatchTesterInput). Slice 4 adds an optional ``canonical_name`` field
+# constrained by the same regex/length bounds as Slice 3's
+# ``register_canonical_clone`` validation surface, so a name that passes
+# registration also passes dispatch. ``None`` is the default (preserves
+# pre-Slice-4 behavior). ``'default'`` is callable on dispatch even
+# though reserved on register/unregister (Ratification #5).
+
+
+_VALID_CANONICAL_NAMES = ["substrate", "orchestrator", "a", "default", "x-y-z"]
+_INVALID_CANONICAL_NAMES = [
+    "",            # length < 1
+    "A-NAME",      # uppercase
+    "1bad",        # must start with letter
+    "-leading",    # must start with letter
+    "x" * 64,      # length > 63
+    "with_underscore",  # underscores not allowed
+    "with space",  # spaces not allowed
+]
+
+
+@pytest.mark.parametrize("name", _VALID_CANONICAL_NAMES + [None])
+def test_dispatch_implementer_input_accepts_valid_canonical_name(
+    name: str | None,
+) -> None:
+    """``DispatchImplementerInput.canonical_name`` accepts ``None`` (default)
+    and every name passing the Slice 3 registration regex (``^[a-z][a-z0-9-]{0,62}$``).
+    Slice 4 Ratification #5: ``'default'`` is callable on dispatch."""
+    req = DispatchImplementerInput(
+        task_id="task-1",
+        spec_path="/tmp/spec.md",
+        working_directory="/tmp/wd",
+        canonical_name=name,
+    )
+    assert req.canonical_name == name
+
+
+@pytest.mark.parametrize("name", _INVALID_CANONICAL_NAMES)
+def test_dispatch_implementer_input_rejects_invalid_canonical_name(
+    name: str,
+) -> None:
+    """Pydantic rejects names violating the Slice 3 regex/length bounds at
+    the wrapper boundary. The request never reaches the handler;
+    permission/validation failures emit no audit row per Slice 3 Q8."""
+    from pydantic import ValidationError as PydanticValidationError
+
+    with pytest.raises(PydanticValidationError):
+        DispatchImplementerInput(
+            task_id="task-1",
+            spec_path="/tmp/spec.md",
+            working_directory="/tmp/wd",
+            canonical_name=name,
+        )
+
+
+@pytest.mark.parametrize("name", _VALID_CANONICAL_NAMES + [None])
+def test_dispatch_tester_input_accepts_valid_canonical_name(
+    name: str | None,
+) -> None:
+    """Same matrix as the implementer input. Symmetric validation surface."""
+    req = DispatchTesterInput(
+        task_id="task-1",
+        commit_hash="deadbeef" + "0" * 32,
+        working_directory="/tmp/wd",
+        assertion_spec="run tests",
+        canonical_name=name,
+    )
+    assert req.canonical_name == name
+
+
+@pytest.mark.parametrize("name", _INVALID_CANONICAL_NAMES)
+def test_dispatch_tester_input_rejects_invalid_canonical_name(
+    name: str,
+) -> None:
+    """Same rejection matrix as the implementer input."""
+    from pydantic import ValidationError as PydanticValidationError
+
+    with pytest.raises(PydanticValidationError):
+        DispatchTesterInput(
+            task_id="task-1",
+            commit_hash="deadbeef" + "0" * 32,
+            working_directory="/tmp/wd",
+            assertion_spec="run tests",
+            canonical_name=name,
+        )
+
+
+# ----- U8 — handler threading spy -----------------------------------------
+
+
+class _FakeDispatcher:
+    """Minimal spy capturing ``dispatch()`` kwargs for Slice 4 threading
+    verification. Returns a degenerate DispatchOutcome so the handler can
+    flatten it without further machinery."""
+
+    def __init__(self) -> None:
+        self.dispatch_calls: list[dict[str, object]] = []
+
+    async def dispatch(self, **kwargs: object) -> object:
+        from meridian_orchestrator.bridge.dispatcher import DispatchOutcome
+
+        self.dispatch_calls.append(kwargs)
+        return DispatchOutcome(
+            dispatch_id="d-spy", status="completed", commit_hash="cafe" + "0" * 36
+        )
+
+
+async def test_dispatch_implementer_threads_canonical_name_to_dispatcher(
+    tmp_path: Path,
+) -> None:
+    """``dispatch_implementer`` handler propagates ``request.canonical_name``
+    into ``dispatcher.dispatch(...)`` kwargs. Slice 4 routes a registered
+    name end-to-end; this canary pins the handler-level seam so a future
+    refactor can't drop the kwarg silently."""
+    spec_path = tmp_path / "spec.md"
+    spec_path.write_text("implement X\n", encoding="utf-8")
+    fake = _FakeDispatcher()
+
+    await dispatch_implementer(
+        dispatcher=fake,  # type: ignore[arg-type]
+        registry=None,
+        request=DispatchImplementerInput(
+            task_id="task-1",
+            spec_path=str(spec_path),
+            working_directory=str(tmp_path),
+            canonical_name="substrate",
+        ),
+        caller_agent_id="eng-agent-id",
+        caller_role="engineer",
+        implementer_agent_id="impl-agent-id",
+    )
+
+    assert len(fake.dispatch_calls) == 1
+    assert fake.dispatch_calls[0]["canonical_name"] == "substrate"
+
+
+async def test_dispatch_implementer_threads_none_canonical_name(
+    tmp_path: Path,
+) -> None:
+    """Default ``canonical_name=None`` from the input model threads as None
+    into dispatcher kwargs — the resolver swap inside ``dispatch()``
+    interprets None as ``get_default()`` (per Slice 4 § 3b)."""
+    spec_path = tmp_path / "spec.md"
+    spec_path.write_text("implement X\n", encoding="utf-8")
+    fake = _FakeDispatcher()
+
+    await dispatch_implementer(
+        dispatcher=fake,  # type: ignore[arg-type]
+        registry=None,
+        request=DispatchImplementerInput(
+            task_id="task-1",
+            spec_path=str(spec_path),
+            working_directory=str(tmp_path),
+        ),
+        caller_agent_id="eng-agent-id",
+        caller_role="engineer",
+        implementer_agent_id="impl-agent-id",
+    )
+
+    assert fake.dispatch_calls[0]["canonical_name"] is None
+
+
+async def test_dispatch_tester_threads_canonical_name_to_dispatcher(
+    tmp_path: Path,
+) -> None:
+    """Same as the implementer canary, on the tester boundary."""
+    fake = _FakeDispatcher()
+
+    await dispatch_tester(
+        dispatcher=fake,  # type: ignore[arg-type]
+        registry=None,
+        request=DispatchTesterInput(
+            task_id="task-1",
+            commit_hash="deadbeef" + "0" * 32,
+            working_directory=str(tmp_path),
+            assertion_spec="run tests",
+            canonical_name="orchestrator",
+        ),
+        caller_agent_id="eng-agent-id",
+        caller_role="engineer",
+        tester_agent_id="tester-agent-id",
+    )
+
+    assert len(fake.dispatch_calls) == 1
+    assert fake.dispatch_calls[0]["canonical_name"] == "orchestrator"
+
+
+# ----- U7 — reserved-name interaction -------------------------------------
+
+
+async def test_dispatch_implementer_input_accepts_reserved_default_name(
+    tmp_path: Path,
+) -> None:
+    """Slice 4 Ratification #5: ``canonical_name='default'`` is callable on
+    dispatch even though reserved on register/unregister. The Pydantic
+    boundary admits it; the handler threads it; the dispatcher's
+    resolver (per § 3d) resolves it identically to ``None``. This U7
+    pins the boundary acceptance."""
+    spec_path = tmp_path / "spec.md"
+    spec_path.write_text("implement X\n", encoding="utf-8")
+    fake = _FakeDispatcher()
+
+    await dispatch_implementer(
+        dispatcher=fake,  # type: ignore[arg-type]
+        registry=None,
+        request=DispatchImplementerInput(
+            task_id="task-1",
+            spec_path=str(spec_path),
+            working_directory=str(tmp_path),
+            canonical_name="default",
+        ),
+        caller_agent_id="eng-agent-id",
+        caller_role="engineer",
+        implementer_agent_id="impl-agent-id",
+    )
+
+    assert fake.dispatch_calls[0]["canonical_name"] == "default"

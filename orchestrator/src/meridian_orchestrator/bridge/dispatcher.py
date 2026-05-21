@@ -818,6 +818,7 @@ class BridgeDispatcher:
         commit_hash: str | None = None,
         system_prompt: str = "",
         allowed_tools: list[str] | None = None,
+        canonical_name: str | None = None,
     ) -> DispatchOutcome:
         """Run the full dispatch lifecycle and return the final outcome.
 
@@ -879,13 +880,25 @@ class BridgeDispatcher:
         if role not in ("implementer", "tester"):
             raise DispatcherError(f"unsupported role for dispatch: {role!r}")
 
-        # Slice 2: resolve the canonical per-dispatch via the registry.
-        # ``get_default()`` is the lookup until Slice 4 introduces
-        # ``get_by_name(dispatch.canonical_name)`` per-dispatch routing.
-        # Thread the local ``canonical`` through the rest of the
-        # lifecycle (worktree, fetch, merge audit) so all reads come
-        # from this single resolution.
-        canonical = await self._canonical_registry.get_default()
+        # Slice 4: resolve the canonical per-dispatch via the registry,
+        # routed by the optional ``canonical_name`` kwarg. ``None``
+        # resolves to the default canonical (preserves pre-Slice-4
+        # behavior for every existing caller); a non-None name resolves
+        # via ``get_by_name`` and propagates ``CanonicalNotFoundError``
+        # verbatim on unknown names (Ratification #3 — no try/except
+        # wrap; the resolver fails BEFORE any dispatch row insert,
+        # token issuance, or worktree provision, so nothing to clean
+        # up). ``resolved_canonical_name`` captures the explicit literal
+        # for INSERT + audit threading per Ratification #4 (no reliance
+        # on the migration-0014 column DEFAULT).
+        canonical = (
+            await self._canonical_registry.get_default()
+            if canonical_name is None
+            else await self._canonical_registry.get_by_name(canonical_name)
+        )
+        resolved_canonical_name = (
+            canonical_name if canonical_name is not None else "default"
+        )
 
         dispatch_id = _new_dispatch_id()
         worktree = DispatchWorktree(
@@ -928,6 +941,7 @@ class BridgeDispatcher:
             keep_worktree_on_failure=keep_worktree_on_failure,
             engineer_decisions=engineer_decisions or [],
             commit_hash=commit_hash,
+            canonical_name=resolved_canonical_name,
         )
         await write_audit(
             self._storage,
@@ -943,6 +957,7 @@ class BridgeDispatcher:
                 "timeout_seconds": effective_timeout,
                 "engineer_decisions": engineer_decisions or [],
                 "requested_working_directory": requested_working_directory,
+                "canonical_name": resolved_canonical_name,
             },
         )
 
@@ -1003,6 +1018,7 @@ class BridgeDispatcher:
                         "dispatch_id": dispatch_id,
                         "canonical_head": await canonical.head_sha(),
                         "error": str(exc),
+                        "canonical_name": resolved_canonical_name,
                     },
                     success=False,
                     error_message=str(exc),
@@ -1117,6 +1133,7 @@ class BridgeDispatcher:
                     outcome=outcome,
                     worktree=worktree,
                     canonical=canonical,
+                    canonical_name=resolved_canonical_name,
                 )
             terminate_reason = outcome.status
             return outcome
@@ -1218,6 +1235,7 @@ class BridgeDispatcher:
         outcome: DispatchOutcome,
         worktree: DispatchWorktree,
         canonical: CanonicalClone,
+        canonical_name: str,
     ) -> DispatchOutcome:
         """Merge the dispatch branch into canonical and record the result.
 
@@ -1266,6 +1284,7 @@ class BridgeDispatcher:
                         "dispatch_id": dispatch_id,
                         "canonical_head": await canonical.head_sha(),
                         "error": str(exc),
+                        "canonical_name": canonical_name,
                     },
                     success=False,
                     error_message=str(exc),
@@ -1294,6 +1313,7 @@ class BridgeDispatcher:
                         "original_commit_hash": merge.original_commit_hash,
                         "conflicting_files": list(merge.conflicting_files),
                         "reason": merge.reason,
+                        "canonical_name": canonical_name,
                     },
                 )
                 from dataclasses import replace as _replace
@@ -1313,6 +1333,7 @@ class BridgeDispatcher:
                     "branch": worktree.branch,
                     "original_commit_hash": merge.original_commit_hash,
                     "new_upstream_head": merge.new_head,
+                    "canonical_name": canonical_name,
                 },
             )
 
@@ -1350,6 +1371,7 @@ class BridgeDispatcher:
         keep_worktree_on_failure: bool,
         engineer_decisions: list[dict[str, Any]],
         commit_hash: str | None,
+        canonical_name: str,
     ) -> None:
         import json as _json
 
@@ -1357,8 +1379,8 @@ class BridgeDispatcher:
             "INSERT INTO dispatches "
             "(id, task_id, role, status, working_directory, spec_path, "
             "timeout_seconds, timeout_override_seconds, keep_worktree_on_failure, "
-            "engineer_decisions_json, commit_hash) "
-            "VALUES (?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?)",
+            "engineer_decisions_json, commit_hash, canonical_name) "
+            "VALUES (?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 dispatch_id,
                 task_id,
@@ -1370,6 +1392,7 @@ class BridgeDispatcher:
                 1 if keep_worktree_on_failure else 0,
                 _json.dumps(engineer_decisions, sort_keys=True),
                 commit_hash,
+                canonical_name,
             ),
         )
 

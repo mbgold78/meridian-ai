@@ -31,7 +31,10 @@ import pytest
 import pytest_asyncio
 
 from meridian_orchestrator.bridge.canonical import CanonicalClone
-from meridian_orchestrator.bridge.canonical_registry import CanonicalCloneRegistry
+from meridian_orchestrator.bridge.canonical_registry import (
+    CanonicalCloneRegistry,
+    CanonicalNotFoundError,
+)
 from meridian_orchestrator.bridge.dispatcher import (
     BridgeDispatcher,
     _dispatcher_owned_canonicals,
@@ -300,5 +303,346 @@ async def test_dispatcher_owned_canonicals_populated_after_create(
                 canonical_registry=registry,
                 worktrees_root=tmp_path / "data" / "dispatch-worktrees-2",
             )
+    finally:
+        _dispatcher_owned_canonicals.discard(canonical.path)
+
+
+# ----- M5-canonical-clone-mgmt slice 4 -----------------------------------
+#
+# U2 — resolver swap (None → get_default; named → get_by_name; missing →
+# CanonicalNotFoundError propagates; no row/token/worktree on failure).
+# U3 — _insert_dispatch_row writes the resolved name (explicit literal
+# per Ratification #4, not column DEFAULT reliance).
+# U6 — dispatch.issued audit payload contains the canonical_name field.
+#
+# All three exercise the dispatcher up to (but not including) token
+# issuance by injecting `_SpyTokenStore.issue()` which raises after
+# recording its kwargs. The resolver swap, INSERT, and dispatch.issued
+# audit all happen BEFORE token issuance, so the spy lets us observe
+# their effects from storage without provisioning a worktree.
+
+
+@pytest.mark.asyncio
+async def test_dispatch_resolver_uses_get_default_when_canonical_name_is_none(
+    storage_with_task: SqliteStorage,
+    canonical: CanonicalClone,
+    tmp_path: Path,
+) -> None:
+    """``dispatch(canonical_name=None)`` resolves via ``registry.get_default()``
+    once. Verifies no call to ``get_by_name`` (other than the one
+    ``get_default()`` itself makes internally — but the swap should not
+    call the public ``get_by_name`` directly).
+    """
+    registry = await _make_registry(storage_with_task, canonical)
+
+    get_default_calls = 0
+    get_by_name_calls: list[str] = []
+    original_get_default = registry.get_default
+    original_get_by_name = registry.get_by_name
+
+    async def counting_get_default() -> CanonicalClone:
+        nonlocal get_default_calls
+        get_default_calls += 1
+        return await original_get_default()
+
+    async def counting_get_by_name(name: str) -> CanonicalClone:
+        get_by_name_calls.append(name)
+        return await original_get_by_name(name)
+
+    registry.get_default = counting_get_default  # type: ignore[method-assign]
+    registry.get_by_name = counting_get_by_name  # type: ignore[method-assign]
+
+    try:
+        dispatcher = await BridgeDispatcher.create(
+            storage=storage_with_task,
+            token_store=_SpyTokenStore(),  # type: ignore[arg-type]
+            canonical_registry=registry,
+            worktrees_root=tmp_path / "data" / "dispatch-worktrees",
+        )
+        get_default_calls = 0
+        get_by_name_calls.clear()
+
+        with pytest.raises(RuntimeError, match="spy: short-circuit"):
+            await dispatcher.dispatch(
+                task_id="task-1",
+                role="implementer",
+                role_agent_id="impl-agent-id",
+                prompt="ignored",
+                actor="eng-agent-id",
+                canonical_name=None,
+            )
+
+        assert get_default_calls == 1
+        # get_by_name may be called by get_default()'s own internal
+        # implementation (Slice 1 has get_default() delegate to
+        # get_by_name("default")). The Slice 4 resolver swap MUST NOT
+        # call get_by_name directly when canonical_name is None.
+        # Discriminator: when the swap chose get_default(), the public
+        # get_by_name call (if any) must be for "default" only, never
+        # for an arbitrary canonical_name string.
+        assert all(n == "default" for n in get_by_name_calls)
+    finally:
+        _dispatcher_owned_canonicals.discard(canonical.path)
+
+
+@pytest.mark.asyncio
+async def test_dispatch_resolver_uses_get_by_name_when_canonical_name_provided(
+    storage_with_task: SqliteStorage,
+    canonical: CanonicalClone,
+    tmp_path: Path,
+) -> None:
+    """``dispatch(canonical_name='default')`` resolves via
+    ``registry.get_by_name('default')``. The default canonical row
+    matches the lookup (per Slice 1's registry contract). The swap
+    must NOT call ``get_default()`` when canonical_name is non-None
+    (the two paths are mutually exclusive per § 3b)."""
+    registry = await _make_registry(storage_with_task, canonical)
+
+    get_default_calls = 0
+    get_by_name_calls: list[str] = []
+    original_get_default = registry.get_default
+    original_get_by_name = registry.get_by_name
+
+    async def counting_get_default() -> CanonicalClone:
+        nonlocal get_default_calls
+        get_default_calls += 1
+        return await original_get_default()
+
+    async def counting_get_by_name(name: str) -> CanonicalClone:
+        get_by_name_calls.append(name)
+        return await original_get_by_name(name)
+
+    registry.get_default = counting_get_default  # type: ignore[method-assign]
+    registry.get_by_name = counting_get_by_name  # type: ignore[method-assign]
+
+    try:
+        dispatcher = await BridgeDispatcher.create(
+            storage=storage_with_task,
+            token_store=_SpyTokenStore(),  # type: ignore[arg-type]
+            canonical_registry=registry,
+            worktrees_root=tmp_path / "data" / "dispatch-worktrees",
+        )
+        get_default_calls = 0
+        get_by_name_calls.clear()
+
+        with pytest.raises(RuntimeError, match="spy: short-circuit"):
+            await dispatcher.dispatch(
+                task_id="task-1",
+                role="implementer",
+                role_agent_id="impl-agent-id",
+                prompt="ignored",
+                actor="eng-agent-id",
+                canonical_name="default",
+            )
+
+        assert get_default_calls == 0, (
+            "dispatch(canonical_name='default') must not call get_default(); "
+            "the resolver swap routes the explicit name through get_by_name."
+        )
+        assert get_by_name_calls == ["default"]
+    finally:
+        _dispatcher_owned_canonicals.discard(canonical.path)
+
+
+@pytest.mark.asyncio
+async def test_dispatch_propagates_canonical_not_found(
+    storage_with_task: SqliteStorage,
+    canonical: CanonicalClone,
+    tmp_path: Path,
+) -> None:
+    """``dispatch(canonical_name='never-registered')`` raises
+    ``CanonicalNotFoundError`` verbatim (Ratification #3 — no
+    try/except wrap). On this path: NO dispatch row insert, NO token
+    issued, NO worktree directory provisioned, NO dispatch.issued
+    audit row. The resolver fails BEFORE any of these side-effects."""
+    registry = await _make_registry(storage_with_task, canonical)
+
+    worktrees_root = tmp_path / "data" / "dispatch-worktrees"
+
+    spy = _SpyTokenStore()
+    try:
+        dispatcher = await BridgeDispatcher.create(
+            storage=storage_with_task,
+            token_store=spy,  # type: ignore[arg-type]
+            canonical_registry=registry,
+            worktrees_root=worktrees_root,
+        )
+
+        with pytest.raises(CanonicalNotFoundError):
+            await dispatcher.dispatch(
+                task_id="task-1",
+                role="implementer",
+                role_agent_id="impl-agent-id",
+                prompt="ignored",
+                actor="eng-agent-id",
+                canonical_name="never-registered",
+            )
+
+        # No dispatch row inserted.
+        rows = await storage_with_task.fetch_all("SELECT id FROM dispatches")
+        assert rows == []
+
+        # No token issued.
+        assert spy.issue_calls == []
+
+        # No dispatch.issued audit row.
+        audit = await storage_with_task.fetch_all(
+            "SELECT action FROM audit_log WHERE action LIKE 'dispatch.%'"
+        )
+        assert audit == []
+
+        # No worktree directory provisioned. The worktree path layout
+        # is `<root>/<dispatch_id>/` at C1 (pre-C2); the dispatch_id
+        # was never minted, so the root either doesn't exist or exists
+        # empty.
+        assert not worktrees_root.exists() or not any(worktrees_root.iterdir())
+    finally:
+        _dispatcher_owned_canonicals.discard(canonical.path)
+
+
+@pytest.mark.asyncio
+async def test_insert_dispatch_row_writes_resolved_name(
+    storage_with_task: SqliteStorage,
+    canonical: CanonicalClone,
+    tmp_path: Path,
+) -> None:
+    """U3: ``_insert_dispatch_row`` writes the explicit resolved name
+    into ``dispatches.canonical_name``, per Ratification #4. The spy
+    raises after recording token issuance kwargs (which fires AFTER
+    INSERT) so the dispatcher's INSERT lands but the rest of the
+    lifecycle short-circuits. Verifies both the named-canonical and
+    None-canonical (default literal) paths."""
+    # Register an additional named canonical for the named-route test.
+    named_path = tmp_path / "named-canonical"
+    await canonical.ensure_provisioned()
+    # Use the same upstream URL and provisioned path object trick:
+    # for the INSERT test we only need a row that exists; the
+    # dispatcher's resolver re-reads it and re-fetches against the
+    # path. To keep the test cheap, register a row whose path is the
+    # same as the default canonical's (the SELECTed row drives the
+    # resolved CanonicalClone, but the test doesn't progress past
+    # INSERT into the fetch/worktree step).
+    registry = await _make_registry(storage_with_task, canonical)
+    await registry.register(
+        name="named-c",
+        path=canonical.path,
+        upstream_url=canonical.upstream_url,
+    )
+
+    # Suppress the second dispatcher's owned-canonical-guard collision
+    # (Slice 2 guard) — the second dispatch path here reuses the same
+    # canonical path that the first dispatcher registered.
+    try:
+        dispatcher = await BridgeDispatcher.create(
+            storage=storage_with_task,
+            token_store=_SpyTokenStore(),  # type: ignore[arg-type]
+            canonical_registry=registry,
+            worktrees_root=tmp_path / "data" / "dispatch-worktrees",
+        )
+
+        # Path 1: canonical_name=None → resolved literal "default".
+        with pytest.raises(RuntimeError, match="spy: short-circuit"):
+            await dispatcher.dispatch(
+                task_id="task-1",
+                role="implementer",
+                role_agent_id="impl-agent-id",
+                prompt="ignored",
+                actor="eng-agent-id",
+                canonical_name=None,
+            )
+
+        # Path 2: canonical_name="named-c" → resolved literal "named-c".
+        with pytest.raises(RuntimeError, match="spy: short-circuit"):
+            await dispatcher.dispatch(
+                task_id="task-1",
+                role="implementer",
+                role_agent_id="impl-agent-id",
+                prompt="ignored",
+                actor="eng-agent-id",
+                canonical_name="named-c",
+            )
+
+        # Path 3: canonical_name="default" → resolved literal "default".
+        with pytest.raises(RuntimeError, match="spy: short-circuit"):
+            await dispatcher.dispatch(
+                task_id="task-1",
+                role="implementer",
+                role_agent_id="impl-agent-id",
+                prompt="ignored",
+                actor="eng-agent-id",
+                canonical_name="default",
+            )
+
+        rows = await storage_with_task.fetch_all(
+            "SELECT canonical_name FROM dispatches ORDER BY issued_at, rowid"
+        )
+        assert [r["canonical_name"] for r in rows] == [
+            "default",
+            "named-c",
+            "default",
+        ]
+    finally:
+        _dispatcher_owned_canonicals.discard(canonical.path)
+
+
+@pytest.mark.asyncio
+async def test_dispatch_issued_audit_payload_contains_canonical_name(
+    storage_with_task: SqliteStorage,
+    canonical: CanonicalClone,
+    tmp_path: Path,
+) -> None:
+    """U6 (subset): ``dispatch.issued`` audit payload contains a
+    ``canonical_name`` field equal to the resolved name. Ratification #2
+    minimal-4 — this kind is one of the four that gain the field. The
+    other three (``dispatch.merged``, ``dispatch.merge_conflict``,
+    ``dispatch.canonical_diverged``) fire later in the lifecycle and
+    are exercised through the full-lifecycle integration tests in
+    ``tests/integration/test_dispatch_lifecycle.py`` (I2/I4) and
+    ``tests/integration/test_dispatch_parallel_and_merge.py``."""
+    import json as _json
+
+    registry = await _make_registry(storage_with_task, canonical)
+    await registry.register(
+        name="named-c",
+        path=canonical.path,
+        upstream_url=canonical.upstream_url,
+    )
+
+    try:
+        dispatcher = await BridgeDispatcher.create(
+            storage=storage_with_task,
+            token_store=_SpyTokenStore(),  # type: ignore[arg-type]
+            canonical_registry=registry,
+            worktrees_root=tmp_path / "data" / "dispatch-worktrees",
+        )
+
+        with pytest.raises(RuntimeError, match="spy: short-circuit"):
+            await dispatcher.dispatch(
+                task_id="task-1",
+                role="implementer",
+                role_agent_id="impl-agent-id",
+                prompt="ignored",
+                actor="eng-agent-id",
+                canonical_name="named-c",
+            )
+
+        with pytest.raises(RuntimeError, match="spy: short-circuit"):
+            await dispatcher.dispatch(
+                task_id="task-1",
+                role="implementer",
+                role_agent_id="impl-agent-id",
+                prompt="ignored",
+                actor="eng-agent-id",
+                canonical_name=None,
+            )
+
+        audit_rows = await storage_with_task.fetch_all(
+            "SELECT details_json FROM audit_log WHERE action = 'dispatch.issued' "
+            "ORDER BY timestamp, rowid"
+        )
+        payloads = [_json.loads(r["details_json"]) for r in audit_rows]
+        assert len(payloads) == 2
+        assert payloads[0]["canonical_name"] == "named-c"
+        assert payloads[1]["canonical_name"] == "default"
     finally:
         _dispatcher_owned_canonicals.discard(canonical.path)
