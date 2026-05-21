@@ -10,6 +10,21 @@ Sketched in `docs/kickoff/12-phase-two-engineering-team.md`.
 
 ## Deferred
 
+- **β-S11-18 — SQLite-backed OAuth client registry (2026-05-21; durable follow-up to hotfix `92b5cae`).** Production incident 2026-05-21T17:09Z: PM Claude Code MCP `/register` returned HTTP 500 after a daemon restart. Root cause is the same architectural shape as β-S11-5 transient-tokens index bleed but for the OAuth clients aggregator. `auth.TokenStore._write_oauth_clients_index()` persists the entire JSON list of accumulated OAuth `client_ids` under one keyring credential (`OAUTH_CLIENTS_INDEX_USERNAME`). Every dynamic-client-registration grows that blob. Once it exceeds Windows Credential Manager's ~2560-byte CredWrite limit, `OSError(winerror=1783, 'The stub received bad data')` propagates through the OAuth `/register` handler.
+
+  **Hotfix shipped (commit `92b5cae`; tactical only):** Wrap `keyring.set_password` in `_write_oauth_clients_index` in a narrow try/except that suppresses `OSError(winerror=1783)` / `OSError(errno=1783)` and emits a structured `auth.oauth_clients_index_write_overflow` warning. The per-client `oauth_client:<id>` write is NOT in the suppression path, so `get_oauth_client(client_id)` (the only path OAuth token validation depends on) still resolves newly-registered clients. Cost of the hotfix: `list_oauth_clients()` enumeration silently misses clients added after the overflow.
+
+  **Durable fix (this entry):** Mirror β-S11-15's transient-tokens SQLite migration for OAuth clients. Specifically:
+  - New migration that creates `oauth_clients` table (`client_id`, `client_secret`, `client_name`, `redirect_uris`, `scope`, `grant_types`, `response_types`, `token_endpoint_auth_method`, `registered_at`, `extra_json`, `created_at`, `revoked_at`).
+  - New `SqliteOAuthClientStore` class with the same surface as the keyring-backed methods: `register_oauth_client`, `get_oauth_client`, `list_oauth_clients`, `revoke_oauth_client` (if a revocation path exists).
+  - `TokenStore` accepts an optional `oauth_client_store` constructor parameter; production wires the SQLite-backed store; keyring fallback retained only for tests that exercise the keyring path explicitly.
+  - Remove the keyring `OAUTH_CLIENTS_INDEX_USERNAME` aggregator entirely. Removes the blob-overflow failure mode + recovers `list_oauth_clients` correctness.
+  - Migration plan: read existing keyring `oauth_client:<id>` entries via the (overflowed) index plus any direct lookups; insert into SQLite; delete keyring entries. β-S11-8 "wipe-requires-reissue" trap applies — document recovery path for clients whose records the corrupt index missed.
+
+  **Touchpoint when implemented:** `auth.py` (new `SqliteOAuthClientStore` class + `TokenStore` wiring); new SQL migration file; `tests/unit/test_auth.py` (port the β-S11-18 hotfix tests to assert SQLite-backed semantics + remove the contained-degradation `test_list_oauth_clients_misses_post_overflow_clients` assertion once the durable fix lands); `tests/integration/` (e2e OAuth registration round-trip via SQLite).
+
+  **Relationship to β-S11-5 / β-S11-15:** identical architectural shape (monolithic keyring aggregator blob overflows Windows CredWrite limit; SQLite migration removes the blob). β-S11-15 closed the issue for transient tokens; β-S11-18 closes it for OAuth clients. After this lands, the only remaining keyring-aggregator pattern is the static-token `_index` (low-churn; not at risk of overflow under current usage).
+
 - **β-S11-17 — Dispatch cold-start hang detection and early retry (2026-05-21).** Implementer/Tester subprocesses can sit for the full 1800s (~30 min) `timeout_seconds` with no useful activity, no commit landed, and no early failure signal. Current mitigation is retry-after-timeout, which wastes 30-35 minutes per hang before Engineer can re-dispatch. Recent trigger: Slice 5 Implementer dispatch `84f98435` timed out at 2026-05-21T12:58:41Z (08:58:41 ET) after ~35 minutes with no commit. Engineer is expected to retry within envelope, but the product behavior is not acceptable long-term.
 
   **Required behavior:** if a dispatch shows no useful progress within early thresholds, classify as `cold_start_hang` and retry earlier — do not wait for the full `timeout_seconds`.
