@@ -1,11 +1,22 @@
-"""Per-dispatch stderr drain task for subprocess launchers (M5-flag-flips F4).
+"""Per-dispatch stderr (and β-S11-17.5 stdout) drain task for subprocess launchers (M5-flag-flips F4).
 
 Both ``bridge/dispatcher.py:_default_launcher`` and
 ``bridge/supervisor_base.py:_default_launcher`` use the same drain pattern:
-``stdout=DEVNULL`` (operationally noise per the ``complete_dispatch``
+``stdout=DEVNULL`` (legacy F4 — operationally noise per the ``complete_dispatch``
 architectural choice in ``11-engineer-bridge.md`` § Long-running
 supervisors), ``stderr=PIPE`` captured continuously to a per-dispatch log
 file under ``<data_dir>/dispatches/<dispatch_id>/stderr.log``.
+
+β-S11-17.5 (2026-05-21): the dispatcher's :func:`_default_launcher` now also
+pipes stdout to ``<data_dir>/dispatches/<dispatch_id>/stdout.log`` to close
+the forensic blind spot uncovered by the Slice 5 cold-start hang diagnostic
+(both failed dispatches had 0-byte stderr and a discarded stdout, so the
+silent-startup signal from Claude CLI was unrecoverable). :func:`stdout_log_path`
+mirrors :func:`stderr_log_path`; :class:`DrainingSubprocess` carries an
+optional second drain task; :func:`cancel_drain_task` cancels both. The
+supervisor launcher path is unchanged (supervisors do not currently
+participate in cold-start hang diagnosis; if/when needed, the same wiring
+applies).
 
 The module exists to fix Codex Finding 4 (PIPE without drain → OS buffer
 fills → child blocks; F3 timeout watchdog catches the hang as a timeout).
@@ -85,6 +96,35 @@ def stderr_log_path(dispatches_root: Path, dispatch_id: str) -> Path | None:
     return parent / "stderr.log"
 
 
+def stdout_log_path(dispatches_root: Path, dispatch_id: str) -> Path | None:
+    """Compute and create the per-dispatch stdout log file path.
+
+    β-S11-17.5: mirrors :func:`stderr_log_path`. Same best-effort semantics
+    (None return on :class:`OSError` → launcher falls back to ``DEVNULL``);
+    same ``<dispatches_root>/<dispatch_id>/`` layout. Diagnostic-only —
+    Claude CLI startup output, MCP handshake traces, network-retry chatter,
+    and any other stdout-emitted signal lands here. No control flow reads
+    this file; it exists purely for human + operator forensic review.
+
+    Sharing the parent directory with stderr.log means a single
+    ``mkdir(parents=True, exist_ok=True)`` per dispatch handles both
+    streams; called twice this is idempotent (existing dir + the second
+    call is a no-op).
+    """
+    parent = dispatches_root / dispatch_id
+    try:
+        parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        logger.warning(
+            "dispatch.stdout_log_dir_create_failed",
+            dispatch_id=dispatch_id,
+            path=str(parent),
+            error=str(exc),
+        )
+        return None
+    return parent / "stdout.log"
+
+
 async def _drain_stream_to_file(
     stream: asyncio.StreamReader | None,
     path: Path,
@@ -128,11 +168,13 @@ async def _drain_stream_to_file(
 
 @dataclass
 class DrainingSubprocess:
-    """Wraps an :class:`asyncio.subprocess.Process` with its stderr drain task.
+    """Wraps an :class:`asyncio.subprocess.Process` with its drain task(s).
 
     Satisfies the ``SubprocessHandle`` / ``SupervisorSubprocessHandle``
     Protocols structurally (pid, returncode, wait, terminate, kill) AND
-    exposes ``drain_task`` for cancellation in existing cleanup paths.
+    exposes ``drain_task`` (stderr, kept for backwards-compatible field
+    name across existing call sites) and β-S11-17.5 ``stdout_drain_task``
+    for cancellation in existing cleanup paths.
 
     Production launchers return this. Test launchers (injected via
     ``subprocess_launcher`` constructor parameter) return whatever shape
@@ -142,6 +184,7 @@ class DrainingSubprocess:
 
     proc: asyncio.subprocess.Process
     drain_task: asyncio.Task[None] | None
+    stdout_drain_task: asyncio.Task[None] | None = None
 
     @property
     def pid(self) -> int | None:
@@ -162,13 +205,13 @@ class DrainingSubprocess:
 
 
 async def cancel_drain_task(handle: object) -> None:
-    """Cancel the stderr drain task associated with ``handle``, if any.
+    """Cancel the drain task(s) associated with ``handle``, if any.
 
     Idempotent: a non-:class:`DrainingSubprocess` handle, a
-    :class:`DrainingSubprocess` with ``drain_task=None``, or an
-    already-completed task all return immediately. Suppresses
-    :class:`asyncio.CancelledError` from awaiting the cancelled task per
-    the standard asyncio cancellation idiom.
+    :class:`DrainingSubprocess` with both ``drain_task`` and
+    ``stdout_drain_task`` set to ``None``, or already-completed tasks all
+    return immediately. Suppresses :class:`asyncio.CancelledError` from
+    awaiting cancelled tasks per the standard asyncio cancellation idiom.
 
     Called from ``BridgeDispatcher.dispatch()``'s finally clause and from
     ``LongRunningSupervisor``'s cleanup paths (shutdown,
@@ -176,17 +219,24 @@ async def cancel_drain_task(handle: object) -> None:
     guardrail #5 (drain task cleanup lives in existing cleanup anchors,
     not parallel lifecycle).
 
+    β-S11-17.5: cancels stdout drain task in addition to stderr; both
+    follow identical semantics (best-effort, swallow exceptions from
+    awaited cancellation). Default ``stdout_drain_task=None`` preserves
+    the supervisor launcher path (still stdout=DEVNULL) and any test
+    fixture that constructs ``DrainingSubprocess`` directly without the
+    new field.
+
     The :func:`isinstance` check protects against test fakes that don't
-    use the wrapper — the existing 11 integration tests construct
+    use the wrapper — the existing integration tests construct
     ``BridgeDispatcher`` / supervisors with custom ``subprocess_launcher``
     callables that return bare fake handles. Those paths see this helper
     as a no-op.
     """
     if not isinstance(handle, DrainingSubprocess):
         return
-    drain_task = handle.drain_task
-    if drain_task is None or drain_task.done():
-        return
-    drain_task.cancel()
-    with contextlib.suppress(asyncio.CancelledError):
-        await drain_task
+    for drain in (handle.drain_task, handle.stdout_drain_task):
+        if drain is None or drain.done():
+            continue
+        drain.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await drain
