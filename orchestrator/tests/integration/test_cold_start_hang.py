@@ -46,6 +46,7 @@ import pytest
 import pytest_asyncio
 
 from meridian_orchestrator.bridge.canonical import CanonicalClone
+from meridian_orchestrator.bridge import dispatcher as dispatcher_module
 from meridian_orchestrator.bridge.dispatcher import (
     BridgeDispatcher,
     ColdStartHangClassification,
@@ -921,3 +922,168 @@ async def test_stage_2_true_hang_no_fs_no_mcp_terminates_with_fs_activity_none(
 # launcher test module at
 # tests/integration/test_dispatch_launcher_output_drain.py.
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# β-S11-17.5 throttle: FS-activity probe must not walk the worktree every
+# poll iteration. Without throttling the walk is O(N) per 0.1s — wasteful
+# daemon load under concurrent cold-start-hangs. Required cap: ≤ 1 probe
+# per second per dispatch (interval = _FS_ACTIVITY_PROBE_INTERVAL_SECONDS).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_fs_activity_probe_is_throttled_to_at_most_once_per_second(
+    storage_with_task: SqliteStorage,
+    canonical: CanonicalClone,
+    token_store_with_transient: TokenStore,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """β-S11-17.5 throttle invariant: across the FS-watching window
+    between stage-2 threshold and activity confirmation, the worktree
+    probe walks at most once per
+    ``_FS_ACTIVITY_PROBE_INTERVAL_SECONDS`` (1.0s). Without the
+    throttle, the probe would run at the dispatcher's poll cadence
+    (default 0.1s = ~10 calls/sec) — wasteful daemon load especially
+    risky under concurrent cold-start-hang dispatches.
+
+    Mechanism: wrap the dispatcher's reference to
+    :func:`_has_worktree_activity_since` with a counter + timestamp
+    log. Run a healthy Implementer-shape dispatch where activity
+    appears at ~T=1.5s; the dispatcher polls at 0.1s; stage-2
+    threshold = 0.5s; grace = 2.0s (the recalibration default). The
+    dispatcher's behavior under throttle:
+
+        T=0.5s  → probe #1 fires; worktree empty; schedule next at
+                  T=1.5s; classifier returns None (still inside grace,
+                  no terminal yet).
+        T=0.6-1.4s → ~9 poll iterations, NO probes (within throttle
+                     window).
+        T=1.5s  → probe #2 fires; worktree now has the helper's edit;
+                  fs_activity_confirmed=True; suppression cache locks.
+        T=1.6s+ → no more probes (cache short-circuits the gate).
+
+    Without the throttle (or without the grace window) the probe
+    would fire 10+ times during the ~1s no-activity window between
+    threshold and activity. The cap is 3 probes (1 just in case of
+    timing jitter on the first iteration + 1 confirmation probe + 1
+    extra-just-in-case-of-a-very-slow-startup probe).
+    """
+    captured: dict[str, Path] = {}
+    probe_calls: list[float] = []
+
+    real_probe = dispatcher_module._has_worktree_activity_since
+
+    def counting_probe(worktree: Path, since: datetime) -> bool:
+        loop = asyncio.get_running_loop()
+        probe_calls.append(loop.time())
+        return real_probe(worktree, since)
+
+    monkeypatch.setattr(
+        dispatcher_module,
+        "_has_worktree_activity_since",
+        counting_probe,
+    )
+
+    async def _alive_silent_launcher(
+        ctx: DispatchLaunchContext,
+    ) -> SubprocessHandle:
+        captured["worktree"] = ctx.working_directory
+        return _AliveButSilentHandle()  # type: ignore[return-value]
+
+    dispatcher = BridgeDispatcher(
+        storage=storage_with_task,
+        token_store=token_store_with_transient,
+        canonical=canonical,
+        worktrees_root=tmp_path / "data" / "dispatch-worktrees",
+        subprocess_launcher=_alive_silent_launcher,
+        cold_start_no_subprocess_seconds=10.0,
+        cold_start_no_mcp_activity_seconds=0.5,
+        cold_start_no_useful_activity_seconds=60.0,
+        poll_interval_seconds=0.1,
+    )
+
+    async def _delayed_touch_then_complete() -> None:
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + 10.0
+        dispatch_id: str | None = None
+        while loop.time() < deadline:
+            row = await storage_with_task.fetch_one(
+                "SELECT id, status FROM dispatches "
+                "WHERE task_id = 'task-1' LIMIT 1"
+            )
+            if row is not None and str(row["status"]) == "running":
+                dispatch_id = str(row["id"])
+                break
+            await asyncio.sleep(0.02)
+        assert dispatch_id is not None
+        wt = captured["worktree"]
+        # Hold off the write until ~1.5s after dispatch start so the
+        # dispatcher spends ~1s inside the throttled no-activity
+        # window (between first probe at ~T=0.5 and second probe at
+        # ~T=1.5). During that window an un-throttled probe would
+        # fire ~10 times; the throttle caps it at 0.
+        await asyncio.sleep(1.5)
+        (wt / "implementer-edit.txt").write_text("work\n", encoding="utf-8")
+        # Let the second probe land (at ~T=1.5 by throttle schedule),
+        # find the file, and confirm. Then a settle window before
+        # terminal so we can also count any extra confirmation
+        # iterations that might run before complete_dispatch.
+        await asyncio.sleep(1.5)
+        now_iso = datetime.now(tz=UTC).isoformat(timespec="seconds")
+        await storage_with_task.execute(
+            "UPDATE dispatches SET status = 'completed', "
+            "last_tool_called = ?, last_activity_at = ?, "
+            "completed_at = ? WHERE id = ?",
+            ("complete_dispatch", now_iso, now_iso, dispatch_id),
+        )
+
+    activity_task = asyncio.create_task(_delayed_touch_then_complete())
+    try:
+        outcome = await dispatcher.dispatch(
+            task_id="task-1",
+            role="implementer",
+            role_agent_id="impl-agent-id",
+            prompt="ignored",
+            actor="eng-agent-id",
+        )
+    finally:
+        await activity_task
+
+    # Dispatch must complete (FS suppression worked — regression guard).
+    assert outcome.status == "completed", (
+        f"β-S11-17.5 FS suppression must let this dispatch complete; "
+        f"got {outcome.status!r} notes={outcome.notes!r}"
+    )
+
+    # Throttle invariant: across the ~3s dispatch lifetime, probe must
+    # have fired AT MOST 3 times. Un-throttled rate against the same
+    # ~1s no-activity window + 0.1s poll cadence would be ~10+.
+    assert len(probe_calls) <= 3, (
+        f"β-S11-17.5 throttle: FS-activity probe must fire at most ~3 "
+        f"times across the dispatch lifetime under 1s throttle; got "
+        f"{len(probe_calls)} probes at offsets "
+        f"{[round(t - probe_calls[0], 3) for t in probe_calls]}. "
+        f"Un-throttled rate would be ~10+ for this window — regression."
+    )
+
+    # Sanity-check that the probe DID fire (otherwise the suppression
+    # path didn't run and this test isn't proving anything). With the
+    # grace window we expect at least 2 probes (one negative at
+    # threshold, one positive after the helper writes the file).
+    assert len(probe_calls) >= 2, (
+        f"FS-activity probe ran only {len(probe_calls)} time(s) — "
+        f"throttle or grace window broken (expected ≥2 to validate "
+        f"multi-probe behavior)"
+    )
+
+    # Inter-probe interval invariant: consecutive probes must be
+    # separated by ≥ ~1.0s (allow 50ms jitter for asyncio scheduling).
+    for prev, curr in zip(probe_calls, probe_calls[1:]):
+        gap = curr - prev
+        assert gap >= 0.95, (
+            f"β-S11-17.5 throttle: consecutive probes must be at least "
+            f"~1s apart (jitter-tolerant); got gap={gap:.3f}s "
+            f"between probes at {prev:.3f} and {curr:.3f}"
+        )

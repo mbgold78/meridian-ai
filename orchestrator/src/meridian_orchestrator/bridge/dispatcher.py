@@ -45,7 +45,7 @@ import os
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
@@ -84,6 +84,36 @@ _TERMINAL_STATES: frozenset[str] = frozenset(
 )
 
 _GRACE_SECONDS = 10
+
+# β-S11-17.5: minimum wall-clock interval between FS-activity probes
+# inside a single dispatch's _await_terminal poll loop. Once stage 2's
+# elapsed-past-threshold gate fires, the dispatcher walks the worktree
+# checking mtimes to distinguish healthy work-in-progress from a true
+# silent hang. Without throttling, this O(N) walk would re-fire on
+# every poll iteration (default poll_interval_seconds=0.1) until
+# activity is confirmed — wasteful daemon load especially under
+# concurrent cold-start-hang dispatches. 1.0s probe interval preserves
+# early-detection (stage 2 threshold is ≥ a few seconds even in tests
+# and ≥ 60s in production; one second of probe-granularity is
+# invisible against either) while bounding walk frequency to at most
+# 1 probe per second per dispatch until activity flips the cache.
+_FS_ACTIVITY_PROBE_INTERVAL_SECONDS = 1.0
+
+# β-S11-17.5: grace window AFTER the no-MCP threshold elapses during
+# which the dispatcher continues to re-probe the worktree for activity
+# before firing stage 2 terminal. Without a grace window, stage 2
+# would terminate on the FIRST negative probe — making the throttle a
+# no-op (only one probe per dispatch ever runs) and giving a healthy
+# slow-start Implementer no second chance to register activity. With
+# the grace window, the dispatcher probes at the throttled rate
+# (typically 2 probes in the default 2s grace window — one at
+# threshold + 0s, one at threshold + 1s) before classifying as a true
+# hang. 2.0s is short enough to be invisible in production
+# (180s + 2s = 182s detection vs. legacy 180s) while large enough to
+# make the throttle meaningful and to absorb sub-second scheduling
+# jitter that could otherwise cause a false-positive stage-2 kill on
+# the first poll-iteration after threshold.
+_FS_ACTIVITY_GRACE_SECONDS = 2.0
 
 # Process-wide guard: at most one BridgeDispatcher per canonical clone. The
 # asyncio Lock on canonical-mutating operations is per-instance, so two
@@ -346,6 +376,19 @@ def _check_cold_start_hang_classification(
                 # an Implementer/Tester whose only MCP interaction is
                 # ``complete_dispatch`` at end-of-work. Not a hang;
                 # suppress and continue polling.
+                return None
+            # β-S11-17.5 grace window: the dispatcher re-probes the
+            # worktree at the throttled rate
+            # (_FS_ACTIVITY_PROBE_INTERVAL_SECONDS) during the grace.
+            # Without the grace, stage 2 would terminate on the first
+            # negative probe — making the throttle a no-op and giving
+            # a slow-start Implementer no second chance to register
+            # activity. Terminal only fires after the grace expires
+            # AND every probe in the window came back negative.
+            if elapsed < (
+                thresholds.no_mcp_activity_seconds
+                + _FS_ACTIVITY_GRACE_SECONDS
+            ):
                 return None
             return ColdStartHangClassification(
                 stage="pre_first_mcp_activity",
@@ -1345,6 +1388,15 @@ class BridgeDispatcher:
         # caused by the subprocess".
         fs_probe_since = datetime.now(tz=UTC)
         fs_activity_confirmed = False
+        # β-S11-17.5 throttle: wall-clock time at which the NEXT FS
+        # probe is allowed. ``None`` until the first probe runs (so the
+        # very first stage-2-elapsed iteration probes immediately); set
+        # to ``now + _FS_ACTIVITY_PROBE_INTERVAL_SECONDS`` after each
+        # negative probe so subsequent poll iterations within the
+        # window skip the walk entirely. A positive probe sets
+        # ``fs_activity_confirmed = True`` which short-circuits the
+        # whole gate for the rest of the dispatch lifecycle.
+        next_fs_probe_at: datetime | None = None
         try:
             async with asyncio.timeout(timeout_seconds):
                 while True:
@@ -1383,17 +1435,37 @@ class BridgeDispatcher:
                         started_at_dt = datetime.fromisoformat(
                             str(row["started_at"])
                         )
+                        now_dt = datetime.now(tz=UTC)
                         stage2_elapsed = (
-                            datetime.now(tz=UTC) - started_at_dt
+                            now_dt - started_at_dt
                         ).total_seconds()
                         if (
                             stage2_elapsed
                             >= self._cold_start_thresholds.no_mcp_activity_seconds
+                            and (
+                                next_fs_probe_at is None
+                                or now_dt >= next_fs_probe_at
+                            )
                         ):
                             if _has_worktree_activity_since(
                                 working_directory, fs_probe_since
                             ):
                                 fs_activity_confirmed = True
+                            else:
+                                # β-S11-17.5: schedule the next probe
+                                # at least 1s out so the worktree walk
+                                # doesn't burn CPU at the poll cadence.
+                                # If stage 2 fires terminal on THIS
+                                # iteration (no MCP + no FS), the
+                                # next-probe slot is irrelevant — the
+                                # dispatch is about to be marked
+                                # failed and the loop exits.
+                                next_fs_probe_at = (
+                                    now_dt
+                                    + timedelta(
+                                        seconds=_FS_ACTIVITY_PROBE_INTERVAL_SECONDS
+                                    )
+                                )
 
                     # β-S11-17 / β-S11-17.5 cold-start hang detection.
                     classification = _check_cold_start_hang_classification(
