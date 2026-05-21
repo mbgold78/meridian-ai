@@ -220,6 +220,53 @@ class Settings(BaseSettings):
     # Env var: ``MERIDIAN_ORCH_TRANSIENT_TOKEN_ORPHAN_PROBE_ON_STARTUP``.
     transient_token_orphan_probe_on_startup: bool = Field(default=True)
 
+    # β-S11-17 (2026-05-21) cold-start hang detection thresholds. Pre-fix,
+    # Implementer/Tester dispatches could sit for the full timeout_seconds
+    # (typically 1800s) with no useful activity before being declared
+    # ``timed_out``. These thresholds let the dispatcher early-fail with
+    # an explicit ``cold_start_hang`` classification so Engineer can retry
+    # ~25-30 minutes sooner.
+    #
+    # Threshold 1: how long the launcher coroutine may take before the
+    # dispatch is classified ``cold_start_hang.pre_subprocess_started``.
+    # Wrapped via ``asyncio.wait_for`` in BridgeDispatcher.dispatch().
+    # Default 60s — a healthy claude-code subprocess launches in <5s on
+    # the operator's M2 Pro reference machine; 60s is conservative
+    # against transient OS scheduling / disk contention.
+    #
+    # Env var: ``MERIDIAN_ORCH_DISPATCH_COLD_START_NO_SUBPROCESS_SECONDS``.
+    dispatch_cold_start_no_subprocess_seconds: float = Field(
+        default=60.0, ge=1.0, le=600.0
+    )
+
+    # Threshold 2: how long after ``subprocess_started`` the dispatch may
+    # show ``last_tool_called=NULL`` before being classified
+    # ``cold_start_hang.pre_first_mcp_activity``. The most load-bearing
+    # of the three thresholds — directly addresses the Slice 5 trigger
+    # (dispatch 84f98435 had subprocess_started but zero MCP activity for
+    # the full 1800s timeout). Checked at each poll iteration in
+    # ``_await_terminal``. Default 180s — claude-code subprocesses
+    # typically issue first MCP tool call within ~10-30s of launch.
+    #
+    # Env var: ``MERIDIAN_ORCH_DISPATCH_COLD_START_NO_MCP_ACTIVITY_SECONDS``.
+    dispatch_cold_start_no_mcp_activity_seconds: float = Field(
+        default=180.0, ge=1.0, le=1800.0
+    )
+
+    # Threshold 3: how long after the most recent MCP activity the
+    # dispatch may go silent before emitting a one-shot
+    # ``dispatch.cold_start_hang_warning`` audit event. WARN-only (no
+    # terminal action) — Engineer-side retry policy decides whether to
+    # let the subprocess continue or recycle. Checked at each poll
+    # iteration in ``_await_terminal``. Default 600s (10 min) — a
+    # subprocess making MCP calls every <600s is presumed alive even if
+    # progress is slow; >600s gap is the operationally-meaningful stall.
+    #
+    # Env var: ``MERIDIAN_ORCH_DISPATCH_COLD_START_NO_USEFUL_ACTIVITY_SECONDS``.
+    dispatch_cold_start_no_useful_activity_seconds: float = Field(
+        default=600.0, ge=1.0, le=1800.0
+    )
+
     @model_validator(mode="after")
     def _require_substrate_working_directory_when_supervisor_enabled(
         self,

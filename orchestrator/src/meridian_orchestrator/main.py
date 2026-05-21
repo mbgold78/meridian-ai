@@ -477,6 +477,19 @@ async def _run_lifespan_body(
                     daemon_url=(
                         f"http://{settings.mcp_host}:{settings.mcp_port}/mcp"
                     ),
+                    # β-S11-17 cold-start hang detection thresholds (see
+                    # config.py for default + env-var documentation).
+                    # Stage 1 wraps launcher with asyncio.wait_for;
+                    # stages 2-3 poll-loop checks in _await_terminal.
+                    cold_start_no_subprocess_seconds=(
+                        settings.dispatch_cold_start_no_subprocess_seconds
+                    ),
+                    cold_start_no_mcp_activity_seconds=(
+                        settings.dispatch_cold_start_no_mcp_activity_seconds
+                    ),
+                    cold_start_no_useful_activity_seconds=(
+                        settings.dispatch_cold_start_no_useful_activity_seconds
+                    ),
                 )
                 logger.info(
                     "canonical.provisioning_complete",

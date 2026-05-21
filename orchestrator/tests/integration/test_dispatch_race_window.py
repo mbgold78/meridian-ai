@@ -188,12 +188,19 @@ async def test_select_before_returncode_race_honors_terminal_state(
     ) -> dict[str, Any] | None:
         result = await original_fetch_one(query, params)
         # Gate: only fire on the dispatcher's poll SELECT for *our* dispatch,
-        # only on the first observation of status='running'. complete_dispatch's
-        # internal SELECT uses a different column list and so does not match.
+        # only on the first observation of status='running'. Matches both
+        # the legacy single-column ``SELECT status FROM dispatches WHERE id``
+        # and the β-S11-17 extended ``SELECT status, started_at,
+        # last_tool_called, last_activity_at FROM dispatches WHERE id``;
+        # excludes the β-S11-17 one-shot pre-loop ``SELECT issued_at``
+        # (which has no ``status`` column) and complete_dispatch's
+        # internal SELECT (different column list).
         target = captured.get("dispatch_id")
         if (
             not triggered["fired"]
-            and "SELECT status FROM dispatches WHERE id = ?" in query
+            and "FROM dispatches WHERE id = ?" in query
+            and "status" in query
+            and "issued_at" not in query
             and target is not None
             and params is not None
             and len(params) == 1

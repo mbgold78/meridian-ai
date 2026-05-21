@@ -310,8 +310,16 @@ async def test_timeout_does_not_overwrite_completed_at_deadline_boundary(
     async def wrapped_fetch_one(
         query: str, params: Any = None
     ) -> Any:
+        # β-S11-17 (2026-05-21): match both legacy single-column
+        # ``SELECT status FROM dispatches WHERE id`` (which the except-
+        # path re-read still uses) and the β-S11-17 extended main-loop
+        # ``SELECT status, started_at, last_tool_called, last_activity_at
+        # FROM dispatches WHERE id``. Exclude the β-S11-17 one-shot
+        # pre-loop ``SELECT issued_at`` which has no ``status`` column.
         is_poll_select = (
-            "SELECT status FROM dispatches WHERE id" in query
+            "FROM dispatches WHERE id" in query
+            and "status" in query
+            and "issued_at" not in query
             and params is not None
         )
         if is_poll_select:

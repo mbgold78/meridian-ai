@@ -105,6 +105,153 @@ class DispatcherError(OrchestratorError):
     code = "DISPATCH_ERROR"
 
 
+# β-S11-17 cold-start hang classification ----------------------------------
+#
+# Stages of subprocess hang surfaced by the dispatcher's early-detection
+# thresholds. Used in:
+# - audit event ``dispatch.cold_start_hang_detected`` (terminal action)
+# - audit event ``dispatch.cold_start_hang_warning`` (warn-only)
+# - ``dispatches.notes`` text on terminal cold-start-hang dispatches
+# - PM/Engineer auto-resolve classification (β-S11-12 enum extension; see
+#   ``config/agents/pm.yaml`` § Auto-resolve discipline for the closed
+#   enum that downstream telemetry packets must match).
+#
+# Stage ordering reflects the dispatch lifecycle:
+# 1. ``pre_subprocess_started``: launcher coroutine did not return within
+#    ``cold_start_no_subprocess_seconds``. No subprocess pid recorded; no
+#    worktree work observable; the dispatch row is still
+#    ``status='queued'`` at detection time. Terminal action.
+# 2. ``pre_first_mcp_activity``: subprocess launched but did not issue any
+#    authenticated MCP tool call within
+#    ``cold_start_no_mcp_activity_seconds``. ``last_tool_called`` is NULL
+#    at detection time. Terminal action. Worktree force-preserved for
+#    forensic review. Most load-bearing of the three stages — matches the
+#    Slice 5 ``84f98435`` failure mode.
+# 3. ``pre_filesystem_activity``: subprocess made at least one MCP call
+#    (``last_tool_called`` is non-NULL) but ``last_activity_at`` has not
+#    advanced within ``cold_start_no_useful_activity_seconds``. Warn-only
+#    — dispatcher emits one ``dispatch.cold_start_hang_warning`` audit
+#    per dispatch; Engineer-side retry policy decides whether to
+#    terminate or wait.
+ColdStartHangStage = Literal[
+    "pre_subprocess_started",
+    "pre_first_mcp_activity",
+    "pre_filesystem_activity",
+]
+
+
+@dataclass(frozen=True)
+class ColdStartHangClassification:
+    """Per-dispatch cold-start hang state at detection time.
+
+    ``stage``: which threshold was breached.
+    ``elapsed_seconds``: elapsed time since the lifecycle anchor relevant
+    to this stage (issued_at for stage 1, started_at for stage 2,
+    last_activity_at for stage 3). Integer-rounded for audit readability.
+    ``is_terminal``: True for stages 1+2 (dispatch is failed); False for
+    stage 3 (warn-only).
+    """
+
+    stage: ColdStartHangStage
+    elapsed_seconds: int
+    is_terminal: bool
+
+
+@dataclass(frozen=True)
+class _ColdStartHangThresholds:
+    """Carry the three per-dispatch hang-detection thresholds together.
+
+    Decoupled from ``config.Settings`` so the dispatcher's test fixtures
+    can construct lightweight thresholds without instantiating full
+    Settings (which require ``MERIDIAN_ORCH_SUBSTRATE_WORKING_DIRECTORY``
+    via the engineer-supervisor validator).
+    """
+
+    no_subprocess_seconds: float = 60.0
+    no_mcp_activity_seconds: float = 180.0
+    no_useful_activity_seconds: float = 600.0
+
+
+def _check_cold_start_hang_classification(
+    row: dict[str, Any],
+    issued_at: datetime,
+    now: datetime,
+    thresholds: _ColdStartHangThresholds,
+) -> ColdStartHangClassification | None:
+    """Return a classification if the dispatch row shows a cold-start
+    hang at ``now``; ``None`` otherwise.
+
+    Called from inside ``BridgeDispatcher._await_terminal``'s poll loop.
+    ``row`` must contain ``started_at``, ``last_tool_called``,
+    ``last_activity_at`` — pulled via the dispatch row SELECT each
+    iteration. ``issued_at`` is the dispatch's row-insertion timestamp,
+    sourced once at the top of ``_await_terminal`` (constant across the
+    poll loop).
+
+    Stage decision rules per β-S11-17 spec:
+
+    - ``started_at`` is None AND ``now - issued_at >= no_subprocess_seconds``
+      → stage 1 (``pre_subprocess_started``), terminal.
+    - ``started_at`` is set AND ``last_tool_called`` is None AND
+      ``now - started_at >= no_mcp_activity_seconds`` → stage 2
+      (``pre_first_mcp_activity``), terminal.
+    - ``last_tool_called`` is set AND ``last_activity_at`` is set AND
+      ``now - last_activity_at >= no_useful_activity_seconds`` → stage 3
+      (``pre_filesystem_activity``), warn-only.
+
+    Stage 1 is mostly defensive — in the current production code path,
+    ``_launcher(ctx)`` is awaited in ``dispatch()`` BEFORE
+    ``_await_terminal`` is called, so ``started_at`` is always non-None
+    by the time this helper runs. Stage 1 is therefore detected via
+    ``asyncio.wait_for(self._launcher(ctx), timeout=...)`` in
+    ``dispatch()`` and not here. Kept in this helper for completeness in
+    case future refactors move the launcher call inside the poll loop.
+    """
+    started_at_raw = row.get("started_at")
+
+    # Stage 1: no subprocess_started yet.
+    if started_at_raw is None:
+        elapsed = (now - issued_at).total_seconds()
+        if elapsed >= thresholds.no_subprocess_seconds:
+            return ColdStartHangClassification(
+                stage="pre_subprocess_started",
+                elapsed_seconds=int(elapsed),
+                is_terminal=True,
+            )
+        return None
+
+    last_tool_called = row.get("last_tool_called")
+    started_at = datetime.fromisoformat(started_at_raw)
+
+    # Stage 2: subprocess started but no first MCP activity.
+    if last_tool_called is None:
+        elapsed = (now - started_at).total_seconds()
+        if elapsed >= thresholds.no_mcp_activity_seconds:
+            return ColdStartHangClassification(
+                stage="pre_first_mcp_activity",
+                elapsed_seconds=int(elapsed),
+                is_terminal=True,
+            )
+        return None
+
+    # Stage 3: MCP activity present but last_activity_at stale.
+    last_activity_raw = row.get("last_activity_at")
+    if last_activity_raw is None:
+        # last_tool_called set but last_activity_at not — race window
+        # between MCP-call body and middleware UPDATE. Skip; next poll
+        # will catch a real stall.
+        return None
+    last_activity_at = datetime.fromisoformat(last_activity_raw)
+    elapsed = (now - last_activity_at).total_seconds()
+    if elapsed >= thresholds.no_useful_activity_seconds:
+        return ColdStartHangClassification(
+            stage="pre_filesystem_activity",
+            elapsed_seconds=int(elapsed),
+            is_terminal=False,
+        )
+    return None
+
+
 @dataclass(frozen=True)
 class DispatchLaunchContext:
     """The information a subprocess launcher needs to start a sub-agent."""
@@ -346,6 +493,9 @@ class BridgeDispatcher:
         push_after_merge: bool = True,
         dispatches_root: Path | None = None,
         daemon_url: str | None = None,
+        cold_start_no_subprocess_seconds: float = 60.0,
+        cold_start_no_mcp_activity_seconds: float = 180.0,
+        cold_start_no_useful_activity_seconds: float = 600.0,
     ) -> None:
         if canonical.path in _dispatcher_owned_canonicals:
             raise RuntimeError(
@@ -387,6 +537,19 @@ class BridgeDispatcher:
         # Per-dispatch subprocess work runs in parallel — only canonical
         # mutation is serialized.
         self._canonical_lock = asyncio.Lock()
+
+        # β-S11-17 (2026-05-21) cold-start hang detection thresholds. See
+        # ``_check_cold_start_hang_classification`` for the stage decision
+        # rules. Production wiring: ``main.py`` reads from
+        # ``Settings.dispatch_cold_start_*`` and threads through; the
+        # constructor defaults match those Settings defaults so
+        # ``BridgeDispatcher(... )`` without explicit thresholds runs the
+        # production-correct guards.
+        self._cold_start_thresholds = _ColdStartHangThresholds(
+            no_subprocess_seconds=cold_start_no_subprocess_seconds,
+            no_mcp_activity_seconds=cold_start_no_mcp_activity_seconds,
+            no_useful_activity_seconds=cold_start_no_useful_activity_seconds,
+        )
 
     async def dispatch(
         self,
@@ -640,7 +803,35 @@ class BridgeDispatcher:
                 dispatches_root=self._dispatches_root,
                 mcp_config_path=mcp_config_path_value,
             )
-            proc = await self._launcher(ctx)
+            # β-S11-17 stage 1 cold-start hang: bound the launcher
+            # coroutine by ``cold_start_no_subprocess_seconds``. A healthy
+            # ``claude-code`` subprocess launches in <5s on the operator's
+            # M2 Pro reference machine; the 60s default is conservative
+            # against transient OS scheduling / disk contention. A hung
+            # launcher (e.g., uv-toolchain wedge, claude-code binary
+            # missing, OS-level subprocess-launch failure) used to block
+            # the full ``timeout_seconds`` (typically 1800s); now it
+            # surfaces as ``cold_start_hang:pre_subprocess_started`` in
+            # ``~no_subprocess_seconds`` instead.
+            try:
+                proc = await asyncio.wait_for(
+                    self._launcher(ctx),
+                    timeout=self._cold_start_thresholds.no_subprocess_seconds,
+                )
+            except TimeoutError:
+                classification = ColdStartHangClassification(
+                    stage="pre_subprocess_started",
+                    elapsed_seconds=int(
+                        self._cold_start_thresholds.no_subprocess_seconds
+                    ),
+                    is_terminal=True,
+                )
+                await self._mark_cold_start_hang_terminal(
+                    dispatch_id, classification
+                )
+                terminate_reason = "failed"
+                return await self._build_outcome(dispatch_id)
+
             await self._storage.execute(
                 "UPDATE dispatches SET status = 'running', "
                 "subprocess_pid = ?, started_at = ? WHERE id = ?",
@@ -710,8 +901,28 @@ class BridgeDispatcher:
                     except ValueError:
                         total_elapsed = None
 
+            # β-S11-17: stage 2 cold-start hangs force-preserve the
+            # worktree for forensic review regardless of the caller's
+            # ``keep_worktree_on_failure`` flag. Stage 1 hangs don't —
+            # the worktree was provisioned but nothing wrote to it
+            # (no subprocess launched), so retention has zero diagnostic
+            # value. Stage 3 hangs are warn-only and don't reach this
+            # cleanup path (subprocess still alive).
+            force_keep_worktree_for_cold_start_hang = (
+                notes_for_outcome := await self._storage.fetch_one(
+                    "SELECT notes FROM dispatches WHERE id = ?",
+                    (dispatch_id,),
+                )
+            ) is not None and (
+                str(notes_for_outcome["notes"] or "").startswith(
+                    "cold-start-hang:pre_first_mcp_activity:"
+                )
+            )
             keep = (
-                keep_worktree_on_failure
+                (
+                    keep_worktree_on_failure
+                    or force_keep_worktree_for_cold_start_hang
+                )
                 and terminate_reason in _TERMINAL_STATES
                 and terminate_reason != "completed"
             )
@@ -917,7 +1128,31 @@ class BridgeDispatcher:
         the deadline boundary; only if still non-terminal is it marked
         ``timed_out``. Subprocess termination is unconditional via the
         surrounding ``dispatch()`` finally — no termination plumbing here.
+
+        β-S11-17 (2026-05-21): at each iteration the row is re-read with
+        the cold-start hang detection columns (``started_at``,
+        ``last_tool_called``, ``last_activity_at``) and passed through
+        :func:`_check_cold_start_hang_classification`. Stage 2 hangs
+        (subprocess started, no first MCP activity within
+        ``no_mcp_activity_seconds``) terminate the dispatch ~25-30 min
+        before the legacy ``timeout_seconds`` would have fired. Stage 3
+        hangs (MCP activity present but stale beyond
+        ``no_useful_activity_seconds``) emit a single
+        ``dispatch.cold_start_hang_warning`` audit per dispatch; the
+        subprocess continues running and Engineer-side retry policy
+        decides the next action.
         """
+        # Per-dispatch issued_at and stage-3 warn-once gate. issued_at is
+        # constant across the poll loop; SELECT once and cache.
+        issued_row = await self._storage.fetch_one(
+            "SELECT issued_at FROM dispatches WHERE id = ?", (dispatch_id,)
+        )
+        if issued_row is None or issued_row["issued_at"] is None:
+            raise DispatcherError(
+                f"dispatch row {dispatch_id} has no issued_at"
+            )
+        issued_at = datetime.fromisoformat(str(issued_row["issued_at"]))
+        cold_start_warning_emitted = False
         try:
             async with asyncio.timeout(timeout_seconds):
                 while True:
@@ -927,7 +1162,9 @@ class BridgeDispatcher:
                     # and a clean-exit-after-complete_dispatch race surfaces as a
                     # spurious "failed" with rc=0.
                     row = await self._storage.fetch_one(
-                        "SELECT status FROM dispatches WHERE id = ?", (dispatch_id,)
+                        "SELECT status, started_at, last_tool_called, "
+                        "last_activity_at FROM dispatches WHERE id = ?",
+                        (dispatch_id,),
                     )
                     if row is None:
                         raise DispatcherError(
@@ -936,6 +1173,25 @@ class BridgeDispatcher:
                     status = str(row["status"])
                     if status in _TERMINAL_STATES:
                         return await self._build_outcome(dispatch_id)
+
+                    # β-S11-17 cold-start hang detection.
+                    classification = _check_cold_start_hang_classification(
+                        dict(row),
+                        issued_at=issued_at,
+                        now=datetime.now(tz=UTC),
+                        thresholds=self._cold_start_thresholds,
+                    )
+                    if classification is not None:
+                        if classification.is_terminal:
+                            await self._mark_cold_start_hang_terminal(
+                                dispatch_id, classification
+                            )
+                            return await self._build_outcome(dispatch_id)
+                        elif not cold_start_warning_emitted:
+                            await self._emit_cold_start_hang_warning(
+                                dispatch_id, classification
+                            )
+                            cold_start_warning_emitted = True
 
                     if proc.returncode is not None:
                         # Re-read status before declaring failed: the subprocess can
@@ -1001,6 +1257,82 @@ class BridgeDispatcher:
                 ),
             )
             return await self._build_outcome(dispatch_id)
+
+    async def _mark_cold_start_hang_terminal(
+        self,
+        dispatch_id: str,
+        classification: ColdStartHangClassification,
+    ) -> None:
+        """β-S11-17: mark a dispatch as ``failed`` with cold-start hang
+        classification embedded in ``notes`` + emit
+        ``dispatch.cold_start_hang_detected`` audit event.
+
+        Called from two sites:
+        - ``dispatch()`` after the launcher coroutine timed out (stage 1)
+        - ``_await_terminal`` polling loop on stage 2 detection
+
+        ``notes`` format: ``cold-start-hang:<stage>:elapsed=<seconds>s``.
+        The ``cold-start-hang:`` prefix is parsed by ``dispatch()``'s
+        finally clause to force-preserve the worktree for stage 2 (stage
+        1 has nothing to preserve; the subprocess never ran).
+        """
+        notes = (
+            f"cold-start-hang:{classification.stage}:"
+            f"elapsed={classification.elapsed_seconds}s"
+        )
+        logger.warning(
+            "dispatch.cold_start_hang_detected",
+            dispatch_id=dispatch_id,
+            stage=classification.stage,
+            elapsed_seconds=classification.elapsed_seconds,
+        )
+        await self._storage.execute(
+            "UPDATE dispatches SET status = 'failed', "
+            "completed_at = ?, notes = ? WHERE id = ?",
+            (_now_iso(), notes, dispatch_id),
+        )
+        await write_audit(
+            self._storage,
+            actor="system",
+            action="dispatch.cold_start_hang_detected",
+            target=dispatch_id,
+            details={
+                "dispatch_id": dispatch_id,
+                "stage": classification.stage,
+                "elapsed_seconds": classification.elapsed_seconds,
+            },
+        )
+
+    async def _emit_cold_start_hang_warning(
+        self,
+        dispatch_id: str,
+        classification: ColdStartHangClassification,
+    ) -> None:
+        """β-S11-17: emit a one-shot ``dispatch.cold_start_hang_warning``
+        audit event for stage 3 (``pre_filesystem_activity``). No
+        terminal action — the subprocess continues running and
+        Engineer-side retry policy decides whether to recycle the
+        dispatch or wait. The caller (``_await_terminal``) gates re-emit
+        via a per-dispatch local flag so the audit row appears at most
+        once per dispatch.
+        """
+        logger.warning(
+            "dispatch.cold_start_hang_warning",
+            dispatch_id=dispatch_id,
+            stage=classification.stage,
+            elapsed_seconds=classification.elapsed_seconds,
+        )
+        await write_audit(
+            self._storage,
+            actor="system",
+            action="dispatch.cold_start_hang_warning",
+            target=dispatch_id,
+            details={
+                "dispatch_id": dispatch_id,
+                "stage": classification.stage,
+                "elapsed_seconds": classification.elapsed_seconds,
+            },
+        )
 
     async def _build_outcome(self, dispatch_id: str) -> DispatchOutcome:
         import json as _json
