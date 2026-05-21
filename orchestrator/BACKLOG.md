@@ -10,6 +10,31 @@ Sketched in `docs/kickoff/12-phase-two-engineering-team.md`.
 
 ## Deferred
 
+- **β-S11-17 — Dispatch cold-start hang detection and early retry (2026-05-21).** Implementer/Tester subprocesses can sit for the full 1800s (~30 min) `timeout_seconds` with no useful activity, no commit landed, and no early failure signal. Current mitigation is retry-after-timeout, which wastes 30-35 minutes per hang before Engineer can re-dispatch. Recent trigger: Slice 5 Implementer dispatch `84f98435` timed out at 2026-05-21T12:58:41Z (08:58:41 ET) after ~35 minutes with no commit. Engineer is expected to retry within envelope, but the product behavior is not acceptable long-term.
+
+  **Required behavior:** if a dispatch shows no useful progress within early thresholds, classify as `cold_start_hang` and retry earlier — do not wait for the full `timeout_seconds`.
+
+  **Initial threshold proposal** (operator-tunable; calibrate against operational data):
+  - no `subprocess_started` event within 60s of dispatch issuance → fail / retry
+  - `subprocess_started` but no first MCP activity (i.e., `last_tool_called` still NULL) within 180s → fail / retry
+  - subprocess running with MCP activity but no filesystem / git / test activity (i.e., `actual_touched_files_json` empty + no test run) within 5-10 min → emit telemetry WARN, then retry or escalate depending on role
+
+  **Telemetry requirement (paired with β-S11-13 + β-S11-16):** PM must report cold-start hang classification with a structured packet:
+  - dispatch id
+  - stage where it stalled (`pre_subprocess_started` / `pre_first_mcp_activity` / `pre_filesystem_activity`)
+  - elapsed time
+  - retry count
+  - next action (`retrying` / `escalating` / `out-of-envelope`)
+
+  **Relationship to existing discipline:**
+  - β-S11-12 auto-resolve closed enum gains a `cold_start_hang` classification (or a sub-classification under `liveness_suspect`).
+  - β-S11-13 telemetry contract extends the standard packet's `auto-resolve classification` field with cold-start hang shape.
+  - β-S11-16 `HUMAN_ACTION_REQUIRED` fires when retries exhaust or the hang shape escalates out of envelope.
+
+  **Touchpoint when implemented:** `bridge/dispatcher.py` (subprocess-lifecycle event emission); `bridge/supervisor_base.py` (early-threshold watchdog); `tools/dispatch.py` (status surface for cold-start hang); `config/agents/pm.yaml` § Auto-resolve discipline (classification enum extension); `config/agents/engineer.yaml` § Escalation patterns (cold-start hang retry policy at Engineer altitude).
+
+  **Disposition:** TBD; catalog only for now. Do NOT interrupt the current Slice 5 chain. PM should continue current retry flow within envelope. Pick up as a follow-up hardening item after Slice 5 lands and the broader Slice 2-5 promotion stabilizes.
+
 - **β-S11-16 — `HUMAN_ACTION_REQUIRED` notification contract + low-noise autonomous telemetry (2026-05-17).** PM can stop and report in its own window, but the operator still has to poll or notice the right window. During autonomous execution, silence creates uncertainty; during gates, "standing down" is not enough — PM must distinguish normal progress telemetry from actual human-action-required gates so decision gates do not disappear into chat history.
 
   **Requirements:**
