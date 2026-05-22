@@ -46,6 +46,7 @@ import pytest
 import pytest_asyncio
 
 from meridian_orchestrator.bridge.canonical import CanonicalClone
+from meridian_orchestrator.bridge.canonical_registry import CanonicalCloneRegistry
 from meridian_orchestrator.bridge import dispatcher as dispatcher_module
 from meridian_orchestrator.bridge.dispatcher import (
     BridgeDispatcher,
@@ -54,6 +55,7 @@ from meridian_orchestrator.bridge.dispatcher import (
     SubprocessHandle,
     _ColdStartHangThresholds,
     _check_cold_start_hang_classification,
+    _dispatcher_owned_canonicals,
     _has_worktree_activity_since,
 )
 from meridian_orchestrator.storage.migrations import run_migrations
@@ -119,6 +121,30 @@ async def canonical(tmp_path: Path, upstream_repo: Path) -> CanonicalClone:
     )
     await c.ensure_provisioned()
     return c
+
+
+@pytest_asyncio.fixture
+async def canonical_registry(
+    storage_with_task: SqliteStorage,
+    canonical: CanonicalClone,
+) -> AsyncIterator[CanonicalCloneRegistry]:
+    """Slice 2-shape CanonicalCloneRegistry with the provisioned
+    ``canonical`` registered as 'default'. Required because Slice 2's
+    BridgeDispatcher.create() factory takes a ``canonical_registry``
+    rather than a single ``CanonicalClone``. Teardown discards the
+    canonical's path from the process-wide
+    ``_dispatcher_owned_canonicals`` guard so sequential tests don't
+    collide on the "another dispatcher already targets canonical"
+    RuntimeError.
+    """
+    registry = CanonicalCloneRegistry(storage=storage_with_task)
+    await registry.ensure_default(
+        path=canonical.path, upstream_url=canonical.upstream_url
+    )
+    try:
+        yield registry
+    finally:
+        _dispatcher_owned_canonicals.discard(canonical.path)
 
 
 @pytest_asyncio.fixture
@@ -240,7 +266,7 @@ class _HangingHandle:
 @pytest.mark.asyncio
 async def test_stage_1_launcher_timeout_classifies_pre_subprocess_started(
     storage_with_task: SqliteStorage,
-    canonical: CanonicalClone,
+    canonical_registry: CanonicalCloneRegistry,
     token_store_with_transient: TokenStore,
     tmp_path: Path,
 ) -> None:
@@ -255,10 +281,10 @@ async def test_stage_1_launcher_timeout_classifies_pre_subprocess_started(
         await asyncio.sleep(60)  # never returns within stage-1 threshold
         return _HangingHandle()  # type: ignore[return-value]
 
-    dispatcher = BridgeDispatcher(
+    dispatcher = await BridgeDispatcher.create(
         storage=storage_with_task,
         token_store=token_store_with_transient,
-        canonical=canonical,
+        canonical_registry=canonical_registry,
         worktrees_root=tmp_path / "data" / "dispatch-worktrees",
         subprocess_launcher=_hanging_launcher,
         cold_start_no_subprocess_seconds=0.2,
@@ -319,7 +345,7 @@ class _AliveButSilentHandle:
 @pytest.mark.asyncio
 async def test_stage_2_no_mcp_activity_classifies_pre_first_mcp_activity(
     storage_with_task: SqliteStorage,
-    canonical: CanonicalClone,
+    canonical_registry: CanonicalCloneRegistry,
     token_store_with_transient: TokenStore,
     tmp_path: Path,
 ) -> None:
@@ -335,10 +361,10 @@ async def test_stage_2_no_mcp_activity_classifies_pre_first_mcp_activity(
     ) -> SubprocessHandle:
         return _AliveButSilentHandle()  # type: ignore[return-value]
 
-    dispatcher = BridgeDispatcher(
+    dispatcher = await BridgeDispatcher.create(
         storage=storage_with_task,
         token_store=token_store_with_transient,
-        canonical=canonical,
+        canonical_registry=canonical_registry,
         worktrees_root=tmp_path / "data" / "dispatch-worktrees",
         subprocess_launcher=_alive_but_silent_launcher,
         cold_start_no_subprocess_seconds=10.0,
@@ -392,7 +418,7 @@ async def test_stage_2_no_mcp_activity_classifies_pre_first_mcp_activity(
 @pytest.mark.asyncio
 async def test_stage_3_stale_activity_emits_warning_does_not_terminate(
     storage_with_task: SqliteStorage,
-    canonical: CanonicalClone,
+    canonical_registry: CanonicalCloneRegistry,
     token_store_with_transient: TokenStore,
     tmp_path: Path,
 ) -> None:
@@ -415,10 +441,10 @@ async def test_stage_3_stale_activity_emits_warning_does_not_terminate(
     ) -> SubprocessHandle:
         return _AliveButSilentHandle()  # type: ignore[return-value]
 
-    dispatcher = BridgeDispatcher(
+    dispatcher = await BridgeDispatcher.create(
         storage=storage_with_task,
         token_store=token_store_with_transient,
-        canonical=canonical,
+        canonical_registry=canonical_registry,
         worktrees_root=tmp_path / "data" / "dispatch-worktrees",
         subprocess_launcher=_silent_alive_launcher,
         # Stage 2 disabled (very large threshold) so stage 3 is the
@@ -492,7 +518,7 @@ async def test_stage_3_stale_activity_emits_warning_does_not_terminate(
 @pytest.mark.asyncio
 async def test_no_cold_start_hang_audits_on_normal_completion(
     storage_with_task: SqliteStorage,
-    canonical: CanonicalClone,
+    canonical_registry: CanonicalCloneRegistry,
     token_store_with_transient: TokenStore,
     tmp_path: Path,
 ) -> None:
@@ -505,10 +531,10 @@ async def test_no_cold_start_hang_audits_on_normal_completion(
         handle = _AliveButSilentHandle()
         return handle  # type: ignore[return-value]
 
-    dispatcher = BridgeDispatcher(
+    dispatcher = await BridgeDispatcher.create(
         storage=storage_with_task,
         token_store=token_store_with_transient,
-        canonical=canonical,
+        canonical_registry=canonical_registry,
         worktrees_root=tmp_path / "data" / "dispatch-worktrees",
         subprocess_launcher=_quick_complete_launcher,
         cold_start_no_subprocess_seconds=5.0,
@@ -685,7 +711,7 @@ def test_check_cold_start_hang_classification_stage_2_fs_activity_suppression() 
 @pytest.mark.asyncio
 async def test_stage_2_with_worktree_fs_activity_suppresses_terminal_kill(
     storage_with_task: SqliteStorage,
-    canonical: CanonicalClone,
+    canonical_registry: CanonicalCloneRegistry,
     token_store_with_transient: TokenStore,
     tmp_path: Path,
 ) -> None:
@@ -722,10 +748,10 @@ async def test_stage_2_with_worktree_fs_activity_suppresses_terminal_kill(
     # 2.5s is conservative — the dispatcher's setup is typically <500ms
     # on the operator's reference machine, and the helper writes its
     # file at ~T=0.5s on the wall clock.
-    dispatcher = BridgeDispatcher(
+    dispatcher = await BridgeDispatcher.create(
         storage=storage_with_task,
         token_store=token_store_with_transient,
-        canonical=canonical,
+        canonical_registry=canonical_registry,
         worktrees_root=tmp_path / "data" / "dispatch-worktrees",
         subprocess_launcher=_alive_silent_launcher,
         cold_start_no_subprocess_seconds=10.0,
@@ -834,7 +860,7 @@ async def test_stage_2_with_worktree_fs_activity_suppresses_terminal_kill(
 @pytest.mark.asyncio
 async def test_stage_2_true_hang_no_fs_no_mcp_terminates_with_fs_activity_none(
     storage_with_task: SqliteStorage,
-    canonical: CanonicalClone,
+    canonical_registry: CanonicalCloneRegistry,
     token_store_with_transient: TokenStore,
     tmp_path: Path,
 ) -> None:
@@ -856,10 +882,10 @@ async def test_stage_2_true_hang_no_fs_no_mcp_terminates_with_fs_activity_none(
         # after provisioning, exactly like the Slice 5 reproducer.
         return _AliveButSilentHandle()  # type: ignore[return-value]
 
-    dispatcher = BridgeDispatcher(
+    dispatcher = await BridgeDispatcher.create(
         storage=storage_with_task,
         token_store=token_store_with_transient,
-        canonical=canonical,
+        canonical_registry=canonical_registry,
         worktrees_root=tmp_path / "data" / "dispatch-worktrees",
         subprocess_launcher=_alive_silent_launcher,
         cold_start_no_subprocess_seconds=10.0,
@@ -935,7 +961,7 @@ async def test_stage_2_true_hang_no_fs_no_mcp_terminates_with_fs_activity_none(
 @pytest.mark.asyncio
 async def test_fs_activity_probe_is_throttled_to_at_most_once_per_second(
     storage_with_task: SqliteStorage,
-    canonical: CanonicalClone,
+    canonical_registry: CanonicalCloneRegistry,
     token_store_with_transient: TokenStore,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -992,10 +1018,10 @@ async def test_fs_activity_probe_is_throttled_to_at_most_once_per_second(
         captured["worktree"] = ctx.working_directory
         return _AliveButSilentHandle()  # type: ignore[return-value]
 
-    dispatcher = BridgeDispatcher(
+    dispatcher = await BridgeDispatcher.create(
         storage=storage_with_task,
         token_store=token_store_with_transient,
-        canonical=canonical,
+        canonical_registry=canonical_registry,
         worktrees_root=tmp_path / "data" / "dispatch-worktrees",
         subprocess_launcher=_alive_silent_launcher,
         cold_start_no_subprocess_seconds=10.0,
