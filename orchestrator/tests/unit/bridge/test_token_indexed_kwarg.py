@@ -35,6 +35,7 @@ import pytest_asyncio
 
 from meridian_orchestrator.auth import KEYRING_SERVICE, TokenStore, _record_key
 from meridian_orchestrator.bridge.canonical import CanonicalClone
+from meridian_orchestrator.bridge.canonical_registry import CanonicalCloneRegistry
 from meridian_orchestrator.bridge.dispatcher import (
     BridgeDispatcher,
     DispatchLaunchContext,
@@ -164,10 +165,14 @@ async def test_bridge_dispatcher_passes_indexed_false_for_per_dispatch_tokens(
     Implementer/Tester tokens. Silent removal of this kwarg re-bricks the
     daemon by reintroducing unbounded keyring index growth."""
     spy = _SpyTokenStore()
-    dispatcher = BridgeDispatcher(
+    canonical_registry = CanonicalCloneRegistry(storage=storage_with_task)
+    await canonical_registry.ensure_default(
+        path=canonical.path, upstream_url=canonical.upstream_url
+    )
+    dispatcher = await BridgeDispatcher.create(
         storage=storage_with_task,
         token_store=spy,  # type: ignore[arg-type]
-        canonical=canonical,
+        canonical_registry=canonical_registry,
         worktrees_root=tmp_path / "data" / "dispatch-worktrees",
     )
 
@@ -354,10 +359,14 @@ async def test_dispatcher_per_dispatch_token_lands_in_transient(
     transient_store = TransientTokenStore(storage_with_task)
     token_store = TokenStore(transient_store=transient_store)
 
-    dispatcher = BridgeDispatcher(
+    canonical_registry = CanonicalCloneRegistry(storage=storage_with_task)
+    await canonical_registry.ensure_default(
+        path=canonical.path, upstream_url=canonical.upstream_url
+    )
+    dispatcher = await BridgeDispatcher.create(
         storage=storage_with_task,
         token_store=token_store,
-        canonical=canonical,
+        canonical_registry=canonical_registry,
         worktrees_root=tmp_path / "data" / "dispatch-worktrees",
         subprocess_launcher=_raising_dispatcher_launcher,
     )

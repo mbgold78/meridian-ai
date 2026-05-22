@@ -457,10 +457,10 @@ async def _run_lifespan_body(
                 settings.dispatch_worktrees_root.mkdir(
                     parents=True, exist_ok=True
                 )
-                dispatcher = BridgeDispatcher(
+                dispatcher = await BridgeDispatcher.create(
                     storage=storage,
                     token_store=token_store,
-                    canonical=canonical,
+                    canonical_registry=canonical_registry,
                     worktrees_root=settings.dispatch_worktrees_root,
                     # M5-flag-flips F4: per-dispatch stderr log root.
                     # The default launcher writes per-dispatch stderr

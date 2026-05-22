@@ -57,6 +57,7 @@ from meridian_orchestrator.bridge.canonical import (
     CanonicalClone,
     CanonicalDivergedError,
 )
+from meridian_orchestrator.bridge.canonical_registry import CanonicalCloneRegistry
 from meridian_orchestrator.bridge.launch_env import build_subprocess_env
 from meridian_orchestrator.bridge.mcp_config import mcp_config_path, write_mcp_config
 from meridian_orchestrator.bridge.stderr_drain import (
@@ -666,9 +667,16 @@ async def _default_launcher(ctx: DispatchLaunchContext) -> SubprocessHandle:
 class BridgeDispatcher:
     """Owner of per-dispatch lifecycle for Engineer-driven sub-agents.
 
-    A single instance per daemon. Constructed in the daemon lifespan with the
-    canonical clone, the worktrees root, the storage handle, and the token
-    store. ``subprocess_launcher`` defaults to :func:`_default_launcher`; tests
+    A single instance per daemon. Constructed in the daemon lifespan via
+    the async factory :meth:`create`, which threads the
+    :class:`CanonicalCloneRegistry` through and registers the default
+    canonical's path in the process-wide owned-canonicals guard. Slice 2
+    of M5-canonical-clone-mgmt: the dispatcher holds the registry rather
+    than a single :class:`CanonicalClone` and resolves the canonical
+    per-dispatch (defaulting to 'default' until Slice 4 wires
+    per-dispatch routing through ``dispatches.canonical_name``).
+
+    ``subprocess_launcher`` defaults to :func:`_default_launcher`; tests
     inject a fake for in-process simulation.
     """
 
@@ -677,7 +685,7 @@ class BridgeDispatcher:
         *,
         storage: Storage,
         token_store: TokenStore,
-        canonical: CanonicalClone,
+        canonical_registry: CanonicalCloneRegistry,
         worktrees_root: Path,
         subprocess_launcher: SubprocessLauncher | None = None,
         poll_interval_seconds: float = 0.1,
@@ -688,16 +696,9 @@ class BridgeDispatcher:
         cold_start_no_mcp_activity_seconds: float = 180.0,
         cold_start_no_useful_activity_seconds: float = 600.0,
     ) -> None:
-        if canonical.path in _dispatcher_owned_canonicals:
-            raise RuntimeError(
-                "BridgeDispatcher: another dispatcher already targets canonical "
-                f"at {canonical.path}; per-instance asyncio.Lock on canonical "
-                "operations would race. Production has one dispatcher per daemon."
-            )
-        _dispatcher_owned_canonicals.add(canonical.path)
         self._storage = storage
         self._token_store = token_store
-        self._canonical = canonical
+        self._canonical_registry = canonical_registry
         self._worktrees_root = worktrees_root
         # M5-flag-flips F4: per-dispatch stderr log root. Threaded to the
         # default launcher via DispatchLaunchContext.dispatches_root.
@@ -726,7 +727,10 @@ class BridgeDispatcher:
         # the pre-dispatch fetch+ff-only refresh, and the post-completion
         # merge of the dispatch branch into canonical/main + push to upstream.
         # Per-dispatch subprocess work runs in parallel — only canonical
-        # mutation is serialized.
+        # mutation is serialized. Slice 2 of M5-canonical-clone-mgmt keeps
+        # this a single lock; Slice 4 introduces per-canonical locks
+        # (keyed by canonical name) when concurrent multi-canonical
+        # dispatch is enabled.
         self._canonical_lock = asyncio.Lock()
 
         # β-S11-17 (2026-05-21) cold-start hang detection thresholds. See
@@ -741,6 +745,59 @@ class BridgeDispatcher:
             no_mcp_activity_seconds=cold_start_no_mcp_activity_seconds,
             no_useful_activity_seconds=cold_start_no_useful_activity_seconds,
         )
+
+    @classmethod
+    async def create(
+        cls,
+        *,
+        storage: Storage,
+        token_store: TokenStore,
+        canonical_registry: CanonicalCloneRegistry,
+        worktrees_root: Path,
+        subprocess_launcher: SubprocessLauncher | None = None,
+        poll_interval_seconds: float = 0.1,
+        push_after_merge: bool = True,
+        dispatches_root: Path | None = None,
+        daemon_url: str | None = None,
+        cold_start_no_subprocess_seconds: float = 60.0,
+        cold_start_no_mcp_activity_seconds: float = 180.0,
+        cold_start_no_useful_activity_seconds: float = 600.0,
+    ) -> BridgeDispatcher:
+        """Async factory: build the dispatcher and register the default
+        canonical's path in the process-wide owned-paths guard.
+
+        Constraint #7 of the Slice 2 spec binds the registry surface
+        untouched, so the per-call resolution pattern (``dispatch()``
+        calls ``await self._canonical_registry.get_default()``) starts
+        from an async lookup. ``__init__`` cannot perform that lookup
+        because it is synchronous; this factory performs the lookup,
+        then registers the resolved path. The plain constructor stores
+        the registry only — direct construction skips the guard, so
+        production must use ``await BridgeDispatcher.create(...)``.
+        """
+        instance = cls(
+            storage=storage,
+            token_store=token_store,
+            canonical_registry=canonical_registry,
+            worktrees_root=worktrees_root,
+            subprocess_launcher=subprocess_launcher,
+            poll_interval_seconds=poll_interval_seconds,
+            push_after_merge=push_after_merge,
+            dispatches_root=dispatches_root,
+            daemon_url=daemon_url,
+            cold_start_no_subprocess_seconds=cold_start_no_subprocess_seconds,
+            cold_start_no_mcp_activity_seconds=cold_start_no_mcp_activity_seconds,
+            cold_start_no_useful_activity_seconds=cold_start_no_useful_activity_seconds,
+        )
+        default = await canonical_registry.get_default()
+        if default.path in _dispatcher_owned_canonicals:
+            raise RuntimeError(
+                "BridgeDispatcher: another dispatcher already targets canonical "
+                f"at {default.path}; per-instance asyncio.Lock on canonical "
+                "operations would race. Production has one dispatcher per daemon."
+            )
+        _dispatcher_owned_canonicals.add(default.path)
+        return instance
 
     async def dispatch(
         self,
@@ -822,9 +879,17 @@ class BridgeDispatcher:
         if role not in ("implementer", "tester"):
             raise DispatcherError(f"unsupported role for dispatch: {role!r}")
 
+        # Slice 2: resolve the canonical per-dispatch via the registry.
+        # ``get_default()`` is the lookup until Slice 4 introduces
+        # ``get_by_name(dispatch.canonical_name)`` per-dispatch routing.
+        # Thread the local ``canonical`` through the rest of the
+        # lifecycle (worktree, fetch, merge audit) so all reads come
+        # from this single resolution.
+        canonical = await self._canonical_registry.get_default()
+
         dispatch_id = _new_dispatch_id()
         worktree = DispatchWorktree(
-            canonical=self._canonical,
+            canonical=canonical,
             dispatch_id=dispatch_id,
             worktrees_root=self._worktrees_root,
         )
@@ -926,7 +991,7 @@ class BridgeDispatcher:
                 # under the lock-free middle of the lifecycle; only canonical-
                 # mutating operations are serialized.
                 async with self._canonical_lock:
-                    await self._canonical.fetch_and_fast_forward()
+                    await canonical.fetch_and_fast_forward()
                     await worktree.provision()
             except CanonicalDivergedError as exc:
                 await write_audit(
@@ -936,7 +1001,7 @@ class BridgeDispatcher:
                     target=dispatch_id,
                     details={
                         "dispatch_id": dispatch_id,
-                        "canonical_head": await self._canonical.head_sha(),
+                        "canonical_head": await canonical.head_sha(),
                         "error": str(exc),
                     },
                     success=False,
@@ -1051,6 +1116,7 @@ class BridgeDispatcher:
                     dispatch_id=dispatch_id,
                     outcome=outcome,
                     worktree=worktree,
+                    canonical=canonical,
                 )
             terminate_reason = outcome.status
             return outcome
@@ -1151,6 +1217,7 @@ class BridgeDispatcher:
         dispatch_id: str,
         outcome: DispatchOutcome,
         worktree: DispatchWorktree,
+        canonical: CanonicalClone,
     ) -> DispatchOutcome:
         """Merge the dispatch branch into canonical and record the result.
 
@@ -1188,7 +1255,7 @@ class BridgeDispatcher:
 
         async with self._canonical_lock:
             try:
-                await self._canonical.fetch_and_fast_forward()
+                await canonical.fetch_and_fast_forward()
             except CanonicalDivergedError as exc:
                 await write_audit(
                     self._storage,
@@ -1197,7 +1264,7 @@ class BridgeDispatcher:
                     target=dispatch_id,
                     details={
                         "dispatch_id": dispatch_id,
-                        "canonical_head": await self._canonical.head_sha(),
+                        "canonical_head": await canonical.head_sha(),
                         "error": str(exc),
                     },
                     success=False,
@@ -1251,7 +1318,7 @@ class BridgeDispatcher:
 
             if self._push_after_merge:
                 try:
-                    await self._canonical.push_to_upstream()
+                    await canonical.push_to_upstream()
                 except OrchestratorError as exc:
                     logger.warning(
                         "dispatch.push_failed",

@@ -31,6 +31,7 @@ import pytest_asyncio
 
 from meridian_orchestrator.auth import TokenStore
 from meridian_orchestrator.bridge.canonical import CanonicalClone
+from meridian_orchestrator.bridge.canonical_registry import CanonicalCloneRegistry
 from meridian_orchestrator.bridge.dispatcher import (
     BridgeDispatcher,
     DispatchLaunchContext,
@@ -208,10 +209,14 @@ async def test_parallel_disjoint_dispatches_both_merge_clean(
         background.append(asyncio.create_task(simulate()))
         return proc
 
-    dispatcher = BridgeDispatcher(
+    canonical_registry = CanonicalCloneRegistry(storage=storage)
+    await canonical_registry.ensure_default(
+        path=canonical.path, upstream_url=canonical.upstream_url
+    )
+    dispatcher = await BridgeDispatcher.create(
         storage=storage,
         token_store=token_store,
-        canonical=canonical,
+        canonical_registry=canonical_registry,
         worktrees_root=tmp_path / "data" / "dispatch-worktrees",
         subprocess_launcher=launcher,
         poll_interval_seconds=0.02,
@@ -336,10 +341,14 @@ async def test_parallel_dispatches_same_file_records_conflict(
         background.append(asyncio.create_task(simulate()))
         return proc
 
-    dispatcher = BridgeDispatcher(
+    canonical_registry = CanonicalCloneRegistry(storage=storage)
+    await canonical_registry.ensure_default(
+        path=canonical.path, upstream_url=canonical.upstream_url
+    )
+    dispatcher = await BridgeDispatcher.create(
         storage=storage,
         token_store=token_store,
-        canonical=canonical,
+        canonical_registry=canonical_registry,
         worktrees_root=tmp_path / "data" / "dispatch-worktrees",
         subprocess_launcher=launcher,
         poll_interval_seconds=0.02,
@@ -422,10 +431,14 @@ async def test_rebase_aborts_cleanly_no_residue(
         background.append(asyncio.create_task(simulate()))
         return proc
 
-    dispatcher = BridgeDispatcher(
+    canonical_registry = CanonicalCloneRegistry(storage=storage)
+    await canonical_registry.ensure_default(
+        path=canonical.path, upstream_url=canonical.upstream_url
+    )
+    dispatcher = await BridgeDispatcher.create(
         storage=storage,
         token_store=token_store,
-        canonical=canonical,
+        canonical_registry=canonical_registry,
         worktrees_root=tmp_path / "data" / "dispatch-worktrees",
         subprocess_launcher=launcher,
         poll_interval_seconds=0.02,
@@ -507,10 +520,14 @@ async def test_canonical_divergence_blocks_dispatch_with_audit(
         background.append(asyncio.create_task(simulate()))
         return fake_proc
 
-    dispatcher = BridgeDispatcher(
+    canonical_registry = CanonicalCloneRegistry(storage=storage)
+    await canonical_registry.ensure_default(
+        path=canonical.path, upstream_url=canonical.upstream_url
+    )
+    dispatcher = await BridgeDispatcher.create(
         storage=storage,
         token_store=token_store,
-        canonical=canonical,
+        canonical_registry=canonical_registry,
         worktrees_root=tmp_path / "data" / "dispatch-worktrees",
         subprocess_launcher=launcher,
         poll_interval_seconds=0.02,
@@ -581,10 +598,14 @@ async def test_dispatch_tester_returns_structured_test_results(
         background.append(asyncio.create_task(simulate()))
         return proc
 
-    dispatcher = BridgeDispatcher(
+    canonical_registry = CanonicalCloneRegistry(storage=storage)
+    await canonical_registry.ensure_default(
+        path=canonical.path, upstream_url=canonical.upstream_url
+    )
+    dispatcher = await BridgeDispatcher.create(
         storage=storage,
         token_store=token_store,
-        canonical=canonical,
+        canonical_registry=canonical_registry,
         worktrees_root=tmp_path / "data" / "dispatch-worktrees",
         subprocess_launcher=launcher,
         poll_interval_seconds=0.02,
@@ -668,10 +689,14 @@ async def test_dispatch_tester_records_commit_hash_at_insert(
         background.append(asyncio.create_task(simulate()))
         return proc
 
-    dispatcher = BridgeDispatcher(
+    canonical_registry = CanonicalCloneRegistry(storage=storage)
+    await canonical_registry.ensure_default(
+        path=canonical.path, upstream_url=canonical.upstream_url
+    )
+    dispatcher = await BridgeDispatcher.create(
         storage=storage,
         token_store=token_store,
-        canonical=canonical,
+        canonical_registry=canonical_registry,
         worktrees_root=tmp_path / "data" / "dispatch-worktrees",
         subprocess_launcher=launcher,
         poll_interval_seconds=0.02,

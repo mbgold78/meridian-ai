@@ -29,6 +29,7 @@ import pytest_asyncio
 
 from meridian_orchestrator.auth import TokenStore
 from meridian_orchestrator.bridge.canonical import CanonicalClone
+from meridian_orchestrator.bridge.canonical_registry import CanonicalCloneRegistry
 from meridian_orchestrator.bridge.dispatcher import (
     BridgeDispatcher,
     DispatchLaunchContext,
@@ -234,10 +235,14 @@ async def test_select_before_returncode_race_honors_terminal_state(
     # Bind the hook onto the storage instance the dispatcher will use.
     storage.fetch_one = hooked_fetch_one  # type: ignore[method-assign]
 
-    dispatcher = BridgeDispatcher(
+    canonical_registry = CanonicalCloneRegistry(storage=storage)
+    await canonical_registry.ensure_default(
+        path=canonical.path, upstream_url=canonical.upstream_url
+    )
+    dispatcher = await BridgeDispatcher.create(
         storage=storage,
         token_store=token_store,
-        canonical=canonical,
+        canonical_registry=canonical_registry,
         worktrees_root=tmp_path / "data" / "dispatch-worktrees",
         subprocess_launcher=race_launcher,
         poll_interval_seconds=0.02,

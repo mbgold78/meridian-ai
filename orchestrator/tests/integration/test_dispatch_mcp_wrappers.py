@@ -30,6 +30,7 @@ from mcp.client.streamable_http import streamablehttp_client
 from meridian_orchestrator.agents.registry import AgentRegistry
 from meridian_orchestrator.auth import TokenStore
 from meridian_orchestrator.bridge.canonical import CanonicalClone
+from meridian_orchestrator.bridge.canonical_registry import CanonicalCloneRegistry
 from meridian_orchestrator.bridge.dispatcher import (
     BridgeDispatcher,
     DispatchLaunchContext,
@@ -344,10 +345,14 @@ async def test_engineer_dispatch_implementer_full_lifecycle_over_mcp(
     settings.dispatch_worktrees_root.mkdir(parents=True, exist_ok=True)
 
     launcher, _bg = _make_implementer_launcher(base_url=base_url)
-    dispatcher = BridgeDispatcher(
+    canonical_registry = CanonicalCloneRegistry(storage=storage)
+    await canonical_registry.ensure_default(
+        path=canonical.path, upstream_url=canonical.upstream_url
+    )
+    dispatcher = await BridgeDispatcher.create(
         storage=storage,
         token_store=token_store,
-        canonical=canonical,
+        canonical_registry=canonical_registry,
         worktrees_root=settings.dispatch_worktrees_root,
         subprocess_launcher=launcher,
         poll_interval_seconds=0.02,
@@ -535,10 +540,14 @@ async def test_pm_token_cannot_call_dispatch_implementer(
     await canonical.ensure_provisioned()
     settings.dispatch_worktrees_root.mkdir(parents=True, exist_ok=True)
     launcher, _bg = _make_implementer_launcher(base_url=base_url)
-    dispatcher = BridgeDispatcher(
+    canonical_registry = CanonicalCloneRegistry(storage=storage)
+    await canonical_registry.ensure_default(
+        path=canonical.path, upstream_url=canonical.upstream_url
+    )
+    dispatcher = await BridgeDispatcher.create(
         storage=storage,
         token_store=token_store,
-        canonical=canonical,
+        canonical_registry=canonical_registry,
         worktrees_root=settings.dispatch_worktrees_root,
         subprocess_launcher=launcher,
         poll_interval_seconds=0.02,
@@ -623,10 +632,14 @@ async def test_dispatch_implementer_resolves_model_via_registry(
     settings.dispatch_worktrees_root.mkdir(parents=True, exist_ok=True)
 
     launcher, _bg = _make_implementer_launcher(base_url=base_url)
-    dispatcher = BridgeDispatcher(
+    canonical_registry = CanonicalCloneRegistry(storage=storage)
+    await canonical_registry.ensure_default(
+        path=canonical.path, upstream_url=canonical.upstream_url
+    )
+    dispatcher = await BridgeDispatcher.create(
         storage=storage,
         token_store=token_store,
-        canonical=canonical,
+        canonical_registry=canonical_registry,
         worktrees_root=settings.dispatch_worktrees_root,
         subprocess_launcher=launcher,
         poll_interval_seconds=0.02,

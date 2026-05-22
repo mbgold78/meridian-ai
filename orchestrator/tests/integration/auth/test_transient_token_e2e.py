@@ -44,6 +44,7 @@ import pytest_asyncio
 
 from meridian_orchestrator.auth import KEYRING_SERVICE, TokenStore, _record_key
 from meridian_orchestrator.bridge.canonical import CanonicalClone
+from meridian_orchestrator.bridge.canonical_registry import CanonicalCloneRegistry
 from meridian_orchestrator.bridge.dispatcher import (
     BridgeDispatcher,
     DispatchLaunchContext,
@@ -220,10 +221,14 @@ async def test_dispatch_self_access_resolves_after_transient_revoke(
         background.append(asyncio.create_task(simulate()))
         return fake_proc
 
-    dispatcher = BridgeDispatcher(
+    canonical_registry = CanonicalCloneRegistry(storage=storage)
+    await canonical_registry.ensure_default(
+        path=canonical.path, upstream_url=canonical.upstream_url
+    )
+    dispatcher = await BridgeDispatcher.create(
         storage=storage,
         token_store=token_store,
-        canonical=canonical,
+        canonical_registry=canonical_registry,
         worktrees_root=tmp_path / "data" / "dispatch-worktrees",
         subprocess_launcher=fake_launcher,
         poll_interval_seconds=0.02,

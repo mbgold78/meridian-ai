@@ -37,6 +37,7 @@ import pytest_asyncio
 from meridian_orchestrator.auth import TokenStore
 from meridian_orchestrator.bridge import dispatcher as dispatcher_mod
 from meridian_orchestrator.bridge.canonical import CanonicalClone
+from meridian_orchestrator.bridge.canonical_registry import CanonicalCloneRegistry
 from meridian_orchestrator.bridge.dispatcher import (
     BridgeDispatcher,
     DispatchLaunchContext,
@@ -161,10 +162,14 @@ async def test_dispatch_times_out_when_subprocess_never_completes(
     token_store = TokenStore()
     fake_proc = _FakeSubprocess()
 
-    dispatcher = BridgeDispatcher(
+    canonical_registry = CanonicalCloneRegistry(storage=storage)
+    await canonical_registry.ensure_default(
+        path=canonical.path, upstream_url=canonical.upstream_url
+    )
+    dispatcher = await BridgeDispatcher.create(
         storage=storage,
         token_store=token_store,
-        canonical=canonical,
+        canonical_registry=canonical_registry,
         worktrees_root=tmp_path / "data" / "dispatch-worktrees",
         subprocess_launcher=_make_hung_launcher(fake_proc),
         poll_interval_seconds=0.02,
@@ -194,10 +199,14 @@ async def test_timeout_marks_row_with_completed_at_and_notes(
     token_store = TokenStore()
     fake_proc = _FakeSubprocess()
 
-    dispatcher = BridgeDispatcher(
+    canonical_registry = CanonicalCloneRegistry(storage=storage)
+    await canonical_registry.ensure_default(
+        path=canonical.path, upstream_url=canonical.upstream_url
+    )
+    dispatcher = await BridgeDispatcher.create(
         storage=storage,
         token_store=token_store,
-        canonical=canonical,
+        canonical_registry=canonical_registry,
         worktrees_root=tmp_path / "data" / "dispatch-worktrees",
         subprocess_launcher=_make_hung_launcher(fake_proc),
         poll_interval_seconds=0.02,
@@ -237,10 +246,14 @@ async def test_timeout_subprocess_terminated_via_finally(
     token_store = TokenStore()
     fake_proc = _FakeSubprocess()
 
-    dispatcher = BridgeDispatcher(
+    canonical_registry = CanonicalCloneRegistry(storage=storage)
+    await canonical_registry.ensure_default(
+        path=canonical.path, upstream_url=canonical.upstream_url
+    )
+    dispatcher = await BridgeDispatcher.create(
         storage=storage,
         token_store=token_store,
-        canonical=canonical,
+        canonical_registry=canonical_registry,
         worktrees_root=tmp_path / "data" / "dispatch-worktrees",
         subprocess_launcher=_make_hung_launcher(fake_proc),
         poll_interval_seconds=0.02,
@@ -288,10 +301,14 @@ async def test_timeout_does_not_overwrite_completed_at_deadline_boundary(
     token_store = TokenStore()
     fake_proc = _FakeSubprocess()
 
-    dispatcher = BridgeDispatcher(
+    canonical_registry = CanonicalCloneRegistry(storage=storage)
+    await canonical_registry.ensure_default(
+        path=canonical.path, upstream_url=canonical.upstream_url
+    )
+    dispatcher = await BridgeDispatcher.create(
         storage=storage,
         token_store=token_store,
-        canonical=canonical,
+        canonical_registry=canonical_registry,
         worktrees_root=tmp_path / "data" / "dispatch-worktrees",
         subprocess_launcher=_make_hung_launcher(fake_proc),
         # Long poll so the deadline (1s) fires during the first sleep,
@@ -426,10 +443,14 @@ async def test_timeout_uses_effective_timeout_precedence(
         background.append(asyncio.create_task(simulate()))
         return fake_proc
 
-    dispatcher = BridgeDispatcher(
+    canonical_registry = CanonicalCloneRegistry(storage=storage)
+    await canonical_registry.ensure_default(
+        path=canonical.path, upstream_url=canonical.upstream_url
+    )
+    dispatcher = await BridgeDispatcher.create(
         storage=storage,
         token_store=token_store,
-        canonical=canonical,
+        canonical_registry=canonical_registry,
         worktrees_root=tmp_path / "data" / "dispatch-worktrees",
         subprocess_launcher=fast_complete_launcher,
         poll_interval_seconds=0.02,
