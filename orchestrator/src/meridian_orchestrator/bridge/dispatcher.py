@@ -1386,6 +1386,23 @@ class BridgeDispatcher:
         # strictly after the launcher returned and the subprocess was
         # spawned, so it's a sound lower bound for "any FS activity
         # caused by the subprocess".
+        #
+        # β-S11-17.5 throttle-fix (2026-05-22): the SAME snapshot is
+        # also used as the in-memory reference for stage-2 elapsed
+        # accounting (both the lazy-probe gate below AND the classifier
+        # call), replacing the DB-truncated ``started_at`` parse on
+        # both sites. Without this alignment, the classifier's elapsed
+        # carries a 0–1s forward bias (seconds truncation) while the
+        # throttle's ``next_fs_probe_at`` schedule uses microsecond
+        # ``datetime.now()``. The mismatched clocks let terminal fire
+        # before the next throttled probe gets a chance to observe
+        # activity — i.e. a healthy slow-start dispatch with FS
+        # activity arriving after the second probe-slot would be killed
+        # despite the grace window. Stage-2 elapsed measured from
+        # fs_probe_since is on the same wall-clock as the probe
+        # schedule, restoring the intended invariant: terminal fires
+        # only after every probe inside (threshold + grace) returned
+        # negative.
         fs_probe_since = datetime.now(tz=UTC)
         fs_activity_confirmed = False
         # β-S11-17.5 throttle: wall-clock time at which the NEXT FS
@@ -1432,12 +1449,14 @@ class BridgeDispatcher:
                         and row["started_at"] is not None
                         and row["last_tool_called"] is None
                     ):
-                        started_at_dt = datetime.fromisoformat(
-                            str(row["started_at"])
-                        )
                         now_dt = datetime.now(tz=UTC)
+                        # β-S11-17.5 throttle-fix: measure stage-2
+                        # elapsed against fs_probe_since (microsecond
+                        # in-memory) instead of the seconds-truncated
+                        # DB ``started_at``. See the fs_probe_since
+                        # comment above for the full rationale.
                         stage2_elapsed = (
-                            now_dt - started_at_dt
+                            now_dt - fs_probe_since
                         ).total_seconds()
                         if (
                             stage2_elapsed
@@ -1468,8 +1487,25 @@ class BridgeDispatcher:
                                 )
 
                     # β-S11-17 / β-S11-17.5 cold-start hang detection.
+                    # β-S11-17.5 throttle-fix: override the row's
+                    # seconds-truncated ``started_at`` with the
+                    # microsecond in-memory snapshot ``fs_probe_since``
+                    # for stage-2 elapsed accounting. Without this the
+                    # classifier's elapsed lives on a different clock
+                    # than the throttle's probe schedule, and terminal
+                    # can fire 0–1s before the next throttled probe is
+                    # scheduled — killing healthy dispatches whose FS
+                    # activity arrives inside the would-be grace
+                    # window. Stage 1 (issued_at) and stage 3
+                    # (last_activity_at) read different columns and
+                    # are unaffected.
+                    row_for_classifier = dict(row)
+                    if row_for_classifier.get("started_at") is not None:
+                        row_for_classifier["started_at"] = (
+                            fs_probe_since.isoformat()
+                        )
                     classification = _check_cold_start_hang_classification(
-                        dict(row),
+                        row_for_classifier,
                         issued_at=issued_at,
                         now=datetime.now(tz=UTC),
                         thresholds=self._cold_start_thresholds,
