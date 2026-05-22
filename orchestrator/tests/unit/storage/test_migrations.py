@@ -24,15 +24,13 @@ from meridian_orchestrator.storage.sqlite import SqliteStorage
 #   0011_pm_spin_rationale_log.sql             (M5-continuous-pm-driver commit 3)
 #   0012_audit_sample_log.sql                  (M5-continuous-pm-driver commit 4)
 #   0013_tasks_task_type_and_status_check.sql  (M4d-task-management-surface commit 1)
+#   0014_canonical_clones.sql                  (M5-canonical-clone-mgmt slice 1)
 #   0015_transient_tokens.sql                  (M5-sqlite-transient-token-store slice 1a)
 # Reservation gap remaining: 0004 reserved for inbound_messages +
 # outbound_messages (Telegram notifications); milestone-attribution
 # pending resolution between data-model.md (M6) and the M5 sub-milestone
-# breakdown memory (M5-telegram-foundation). 0014 reserved in fork
-# for canonical-clone-mgmt slice 1 (not promoted to live); live's
-# expected list intentionally skips 14, mirroring the existing 4-skip
-# convention (live-promotion adaptation 2026-05-17, β-S11-12 option-b).
-EXPECTED_VERSIONS = [1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15]
+# breakdown memory (M5-telegram-foundation).
+EXPECTED_VERSIONS = [1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
 
 
 @pytest_asyncio.fixture
@@ -1114,3 +1112,202 @@ async def test_tasks_status_check_rejects_invalid_value(
                 "not-a-real-status",
             ),
         )
+
+
+async def test_canonical_clones_columns_match_spec(
+    storage: SqliteStorage,
+) -> None:
+    """0014_canonical_clones.sql ships the canonical_clones registry
+    table per M5-canonical-clone-mgmt slice 1. Column inventory must
+    match the migration DDL: id (PK), name (NOT NULL UNIQUE),
+    path (NOT NULL), upstream_url (NOT NULL), default_branch (NOT NULL
+    DEFAULT 'main'), created_at (NOT NULL DEFAULT (datetime('now'))).
+    """
+    await run_migrations(storage)
+    cols = await storage.fetch_all("PRAGMA table_info(canonical_clones)")
+    by_name = {c["name"]: c for c in cols}
+
+    expected_names = {
+        "id",
+        "name",
+        "path",
+        "upstream_url",
+        "default_branch",
+        "created_at",
+    }
+    assert set(by_name.keys()) == expected_names, (
+        f"canonical_clones columns drift: got {set(by_name.keys())!r}, "
+        f"expected {expected_names!r}."
+    )
+
+    assert by_name["id"]["pk"] == 1
+    assert by_name["name"]["notnull"] == 1
+    assert by_name["path"]["notnull"] == 1
+    assert by_name["upstream_url"]["notnull"] == 1
+    assert by_name["default_branch"]["notnull"] == 1
+    assert by_name["created_at"]["notnull"] == 1
+    assert by_name["default_branch"]["dflt_value"] == "'main'"
+    # SQLite stores datetime('now') as the raw expression text; assert
+    # on a substring rather than the exact form so future cosmetic
+    # rewrites (e.g., parentheses placement) don't trigger spurious
+    # failures.
+    assert "datetime" in (by_name["created_at"]["dflt_value"] or "")
+
+
+async def test_canonical_clones_name_unique(
+    storage: SqliteStorage,
+) -> None:
+    """name carries a UNIQUE constraint per the migration; a second
+    INSERT with the same name must raise. The registry layer
+    (bridge.canonical_registry.CanonicalCloneRegistry.register) maps
+    this raise to CanonicalAlreadyRegisteredError; the DB-layer
+    constraint is the defense-in-depth backstop."""
+    await run_migrations(storage)
+    await storage.execute(
+        "INSERT INTO canonical_clones "
+        "(id, name, path, upstream_url) "
+        "VALUES (?, ?, ?, ?)",
+        ("clone-1", "default", "/tmp/c1", "https://example.com/r.git"),
+    )
+    with pytest.raises(Exception, match=r"(?i)unique"):
+        await storage.execute(
+            "INSERT INTO canonical_clones "
+            "(id, name, path, upstream_url) "
+            "VALUES (?, ?, ?, ?)",
+            ("clone-2", "default", "/tmp/c2", "https://example.com/r.git"),
+        )
+
+
+async def test_dispatches_canonical_name_column_added(
+    storage: SqliteStorage,
+) -> None:
+    """0014 rewrites dispatches via CREATE-INSERT-DROP-RENAME and adds
+    canonical_name (TEXT NOT NULL DEFAULT 'default'). New writers don't
+    yet thread canonical_name (Slice 1 ships the column for Slices 2+
+    to consume); the default makes existing writers correct."""
+    await run_migrations(storage)
+    cols = await storage.fetch_all("PRAGMA table_info(dispatches)")
+    by_name = {c["name"]: c for c in cols}
+
+    assert "canonical_name" in by_name
+    assert by_name["canonical_name"]["notnull"] == 1
+    assert by_name["canonical_name"]["dflt_value"] == "'default'"
+
+
+async def test_dispatches_indexes_recreated_after_0014(
+    storage: SqliteStorage,
+) -> None:
+    """The dispatches table rewrite drops + recreates the table, which
+    would silently drop the four indexes from 0005_dispatches.sql
+    unless the migration explicitly recreates them post-RENAME.
+    Sentinel against the rewrite losing the indexes."""
+    await run_migrations(storage)
+    rows = await storage.fetch_all(
+        "SELECT name FROM sqlite_master "
+        "WHERE type='index' AND tbl_name='dispatches' "
+        "AND name NOT LIKE 'sqlite_autoindex%'"
+    )
+    index_names = {r["name"] for r in rows}
+    expected = {
+        "idx_dispatches_task",
+        "idx_dispatches_status",
+        "idx_dispatches_role_status",
+        "idx_dispatches_role_completed",
+    }
+    missing = expected - index_names
+    assert not missing, (
+        f"dispatches indexes lost after 0014 rewrite: {missing}"
+    )
+
+
+async def test_dispatches_existing_rows_inherit_default_canonical_name(
+    storage: SqliteStorage,
+) -> None:
+    """A dispatch row INSERTed without canonical_name must inherit
+    'default' from the column default. Pins the greenfield-safety
+    invariant the migration depends on: pre-migration dispatches
+    rows (and Slice 1-era writers that don't yet thread
+    canonical_name) get the only-canonical-that-ever-existed name
+    automatically."""
+    await run_migrations(storage)
+    # Seed company + project + task to satisfy FK + NOT NULL chain.
+    await storage.execute(
+        "INSERT INTO companies (id, name) VALUES ('co-cn', 'co')"
+    )
+    await storage.execute(
+        "INSERT INTO projects (id, company_id, name) "
+        "VALUES ('proj-cn', 'co-cn', 'p')"
+    )
+    await storage.execute(
+        "INSERT INTO tasks (id, company_id, project_id, agent_role, "
+        "description) VALUES ('task-cn', 'co-cn', 'proj-cn', "
+        "'implementer', 'desc')"
+    )
+    await storage.execute(
+        "INSERT INTO dispatches "
+        "(id, task_id, role, working_directory, timeout_seconds) "
+        "VALUES (?, ?, ?, ?, ?)",
+        ("disp-cn", "task-cn", "implementer", "/tmp/wd", 600),
+    )
+    row = await storage.fetch_one(
+        "SELECT canonical_name FROM dispatches WHERE id = 'disp-cn'"
+    )
+    assert row is not None
+    assert row["canonical_name"] == "default"
+
+
+async def test_dispatches_status_check_preserved_after_0014(
+    storage: SqliteStorage,
+) -> None:
+    """0008_dispatches_status_check.sql added the 8-value status enum
+    CHECK; the 0014 rewrite must preserve it. Regression-guard against
+    a future rewrite that silently drops the constraint by forgetting
+    to copy it into the new table DDL."""
+    await run_migrations(storage)
+    await storage.execute(
+        "INSERT INTO companies (id, name) VALUES ('co-sc', 'co')"
+    )
+    await storage.execute(
+        "INSERT INTO projects (id, company_id, name) "
+        "VALUES ('proj-sc', 'co-sc', 'p')"
+    )
+    await storage.execute(
+        "INSERT INTO tasks (id, company_id, project_id, agent_role, "
+        "description) VALUES ('task-sc', 'co-sc', 'proj-sc', "
+        "'implementer', 'desc')"
+    )
+    with pytest.raises(Exception, match=r"(?i)check"):
+        await storage.execute(
+            "INSERT INTO dispatches "
+            "(id, task_id, role, status, working_directory, "
+            "timeout_seconds) VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                "disp-sc-bogus",
+                "task-sc",
+                "implementer",
+                "not-a-real-status",
+                "/tmp/wd",
+                600,
+            ),
+        )
+
+
+async def test_dispatches_task_id_remains_nullable_after_0014(
+    storage: SqliteStorage,
+) -> None:
+    """0007_dispatches_task_id_nullable.sql relaxed task_id to NULL-
+    able (supervisor rows carry no task_id); the 0014 rewrite must
+    preserve that nullability. Regression-guard against a future
+    rewrite that silently reintroduces NOT NULL."""
+    await run_migrations(storage)
+    await storage.execute(
+        "INSERT INTO dispatches "
+        "(id, task_id, role, working_directory, timeout_seconds) "
+        "VALUES (?, ?, ?, ?, ?)",
+        ("disp-null-task", None, "engineer-supervisor", "/tmp/wd", 600),
+    )
+    row = await storage.fetch_one(
+        "SELECT task_id FROM dispatches WHERE id = 'disp-null-task'"
+    )
+    assert row is not None
+    assert row["task_id"] is None

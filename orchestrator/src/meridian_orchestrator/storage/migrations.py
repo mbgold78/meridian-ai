@@ -25,8 +25,15 @@ _SQL_DIR = Path(__file__).parent / "sql"
 _FILENAME_PATTERN = re.compile(r"^(\d{4})_\w+\.sql$")
 
 
-def _discover_migrations(sql_dir: Path) -> list[tuple[int, Path]]:
-    """Return ``(version, path)`` pairs for migration files, sorted by version."""
+def discover_migrations(sql_dir: Path = _SQL_DIR) -> list[tuple[int, Path]]:
+    """Return ``(version, path)`` pairs for migration files, sorted by version.
+
+    Public helper (renamed from ``_discover_migrations`` at M5-canonical-clone-
+    mgmt slice 1) so tests + other callers can derive the live migration-
+    version set from a single source instead of hardcoding parallel-shape
+    assertions. See BACKLOG.md migration-adjacent watch-for-pattern (line 27)
+    for the resolution rationale.
+    """
     migrations: list[tuple[int, Path]] = []
     if not sql_dir.exists():
         return migrations
@@ -81,7 +88,7 @@ async def run_migrations(storage: Storage, sql_dir: Path | None = None) -> list[
         sql_dir = _SQL_DIR
     await _ensure_schema_version_table(storage)
     applied = await _applied_versions(storage)
-    discovered = _discover_migrations(sql_dir)
+    discovered = discover_migrations(sql_dir)
 
     newly_applied: list[int] = []
     for version, path in discovered:

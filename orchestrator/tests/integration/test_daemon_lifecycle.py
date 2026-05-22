@@ -44,7 +44,10 @@ from meridian_orchestrator.bridge.oauth_usage import CachedSnapshot
 from meridian_orchestrator.config import Settings
 from meridian_orchestrator.main import _lifespan, _run_lifespan_body
 from meridian_orchestrator.server import serve as serve_mcp
-from meridian_orchestrator.storage.migrations import run_migrations
+from meridian_orchestrator.storage.migrations import (
+    discover_migrations,
+    run_migrations,
+)
 from meridian_orchestrator.storage.sqlite import SqliteStorage
 
 
@@ -61,7 +64,7 @@ async def test_lifespan_runs_migrations_and_closes(tmp_path: Path) -> None:
         assert "_schema_version" in table_names
 
         version_rows = await storage.fetch_all("SELECT version FROM _schema_version")
-        assert {r["version"] for r in version_rows} == {1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15}
+        assert {r["version"] for r in version_rows} == {1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}
 
     # After the lifespan: storage is closed, no exception raised.
     assert storage._conn is None  # type: ignore[attr-defined]
@@ -75,7 +78,7 @@ async def test_lifespan_idempotent_on_existing_db(tmp_path: Path) -> None:
     async with _lifespan(settings) as storage:
         version_rows = await storage.fetch_all("SELECT version FROM _schema_version")
         # Still exactly one row per migration version — not duplicated.
-        assert {r["version"] for r in version_rows} == {1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15}
+        assert {r["version"] for r in version_rows} == {1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}
 
 
 # ---------------------------------------------------------------------------
