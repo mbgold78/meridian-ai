@@ -806,3 +806,103 @@ async def test_dispatch_against_named_substrate_canonical_lifecycle(
     finally:
         _dispatcher_owned_canonicals.discard(default_canonical.path)
         _dispatcher_owned_canonicals.discard(substrate_canonical.path)
+
+
+async def test_canonical_name_routes_dispatch_to_named_canonical_subdir(
+    storage: SqliteStorage,
+    upstream_repo: Path,
+    substrate_upstream_repo: Path,
+    tmp_path: Path,
+) -> None:
+    """Slice 5 compact — canonical_name='alpha' routes FS/DB/audit triad."""
+    import json as _json
+
+    default_canonical = CanonicalClone(
+        path=tmp_path / "data" / "canonicals" / "default",
+        upstream_url=str(upstream_repo),
+        default_branch="main",
+    )
+    await default_canonical.ensure_provisioned()
+    alpha_canonical = CanonicalClone(
+        path=tmp_path / "data" / "canonicals" / "alpha",
+        upstream_url=str(substrate_upstream_repo),
+        default_branch="main",
+    )
+    await alpha_canonical.ensure_provisioned()
+    await storage.execute(
+        "INSERT INTO tasks (id, company_id, project_id, agent_role, description) "
+        "VALUES ('task-alpha', 'co1', 'proj1', 'implementer', 'alpha task')"
+    )
+    token_store = TokenStore()
+    fake_proc = _FakeSubprocess()
+    background: list[asyncio.Task[None]] = []
+
+    async def fake_launcher(ctx: DispatchLaunchContext) -> SubprocessHandle:
+        async def simulate() -> None:
+            await asyncio.sleep(0)
+            commit_sha = await asyncio.to_thread(
+                _commit_in_worktree, ctx.working_directory, "slice5 compact"
+            )
+            await complete_dispatch(
+                storage=storage,
+                token_store=token_store,
+                request=CompleteDispatchInput(
+                    dispatch_id=ctx.dispatch_id,
+                    status="completed",
+                    commit_hash=commit_sha,
+                    notes="slice5 compact",
+                ),
+                caller_agent_id="impl-agent-id",
+                caller_role="implementer",
+            )
+            fake_proc.signal_clean_exit()
+
+        background.append(asyncio.create_task(simulate()))
+        return fake_proc
+
+    canonical_registry = CanonicalCloneRegistry(storage=storage)
+    await canonical_registry.ensure_default(
+        path=default_canonical.path, upstream_url=default_canonical.upstream_url
+    )
+    await canonical_registry.register(
+        name="alpha",
+        path=alpha_canonical.path,
+        upstream_url=alpha_canonical.upstream_url,
+    )
+    try:
+        dispatcher = await BridgeDispatcher.create(
+            storage=storage,
+            token_store=token_store,
+            canonical_registry=canonical_registry,
+            worktrees_root=tmp_path / "data" / "dispatch-worktrees",
+            subprocess_launcher=fake_launcher,
+            poll_interval_seconds=0.02,
+        )
+        outcome = await dispatcher.dispatch(
+            task_id="task-alpha",
+            role="implementer",
+            role_agent_id="impl-agent-id",
+            prompt="ignored",
+            actor="eng-agent-id",
+            canonical_name="alpha",
+        )
+        assert outcome.status == "completed"
+        row = await storage.fetch_one(
+            "SELECT canonical_name, working_directory FROM dispatches WHERE id = ?",
+            (outcome.dispatch_id,),
+        )
+        assert row is not None
+        wd = Path(row["working_directory"])
+        assert wd.parent.name == "alpha"
+        assert wd.name == outcome.dispatch_id
+        assert row["canonical_name"] == "alpha"
+        issued = await storage.fetch_one(
+            "SELECT details_json FROM audit_log "
+            "WHERE action = 'dispatch.issued' AND target = ?",
+            (outcome.dispatch_id,),
+        )
+        assert issued is not None
+        assert _json.loads(issued["details_json"])["canonical_name"] == "alpha"
+    finally:
+        _dispatcher_owned_canonicals.discard(default_canonical.path)
+        _dispatcher_owned_canonicals.discard(alpha_canonical.path)
