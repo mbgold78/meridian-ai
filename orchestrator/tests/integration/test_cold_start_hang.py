@@ -1334,10 +1334,28 @@ async def test_stage_2_with_session_jsonl_activity_suppresses_kill(
     touch the worktree but DOES advance the Claude-session jsonl (the
     failure shape of dispatches 4f9c568d + c93b5170 — 142-174s of
     Read/Bash/Grep work invisible to the worktree probe). Must NOT be
-    killed at stage 2."""
-    monkeypatch.setenv("USERPROFILE", str(tmp_path))
-    monkeypatch.setenv("HOME", str(tmp_path))
+    killed at stage 2.
+
+    Mechanism: monkeypatch ``_has_claude_session_activity_since`` to
+    flip from ``(False, "none")`` to ``(True, "present")`` mid-grace
+    window. Sidesteps the Windows MAX_PATH issue with the encoded-cwd
+    project dir under pytest's deeply-nested ``tmp_path`` (encoded
+    names approach 260 chars when rooted at
+    ``AppData/Local/Temp/pytest-of-.../...``).
+    """
     captured: dict[str, Path] = {}
+    activity_state = {"present": False}
+
+    def fake_session_probe(worktree: Path, since: datetime):
+        if activity_state["present"]:
+            return (True, "present")
+        return (False, "none")
+
+    monkeypatch.setattr(
+        dispatcher_module,
+        "_has_claude_session_activity_since",
+        fake_session_probe,
+    )
 
     async def _alive_silent_launcher(
         ctx: DispatchLaunchContext,
@@ -1356,7 +1374,7 @@ async def test_stage_2_with_session_jsonl_activity_suppresses_kill(
         cold_start_no_useful_activity_seconds=60.0,
     )
 
-    async def _touch_session_then_complete() -> None:
+    async def _flip_session_then_complete() -> None:
         loop = asyncio.get_event_loop()
         deadline = loop.time() + 10.0
         dispatch_id: str | None = None
@@ -1376,16 +1394,18 @@ async def test_stage_2_with_session_jsonl_activity_suppresses_kill(
                 )
             await asyncio.sleep(0.02)
         assert dispatch_id is not None
-        wt = captured["worktree"]
-        proj_dir = dispatcher_module._claude_project_dir_for(wt)
-        assert proj_dir is not None
-        proj_dir.mkdir(parents=True, exist_ok=True)
-        jsonl = proj_dir / f"{dispatch_id}.jsonl"
-        await asyncio.sleep(0.1)
-        jsonl.write_text('{"type":"queue-operation"}\n', encoding="utf-8")
-        # Wait past the stage-2 threshold so the dispatcher's probe runs.
+        # Hold off session-positive until just after the stage-2 threshold
+        # so the dispatcher's gate fires once with session silent, then
+        # flips. Exercises the throttle + grace window: second probe
+        # catches the flipped state.
+        await asyncio.sleep(0.4)
+        activity_state["present"] = True
+        # Wait past stage-2 threshold + grace so the dispatcher has time
+        # to (a) hit the gate with session silent → schedule next probe,
+        # (b) wait throttle interval, (c) probe again with session
+        # positive → suppress.
         await asyncio.sleep(2.5)
-        # Land terminal.
+        # Land terminal so the dispatch completes cleanly.
         now_iso = datetime.now(tz=UTC).isoformat(timespec="seconds")
         await storage_with_task.execute(
             "UPDATE dispatches SET status = 'completed', "
@@ -1394,7 +1414,7 @@ async def test_stage_2_with_session_jsonl_activity_suppresses_kill(
             ("complete_dispatch", now_iso, now_iso, dispatch_id),
         )
 
-    activity_task = asyncio.create_task(_touch_session_then_complete())
+    activity_task = asyncio.create_task(_flip_session_then_complete())
     try:
         outcome = await dispatcher.dispatch(
             task_id="task-1", role="implementer",
