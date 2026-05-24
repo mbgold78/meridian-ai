@@ -177,15 +177,47 @@ ColdStartHangStage = Literal[
 ]
 
 
-# β-S11-17.5 FS-activity probe states:
+# β-S11-17.5 FS-activity probe states (worktree-only signal — Edit/Write
+# inside the dispatch worktree):
 # - "present": at least one non-.git file inside the worktree has an mtime
 #   strictly newer than the dispatch's started_at. The subprocess is
 #   doing real work (Edit/Write/Bash output); stage 2 is suppressed.
-# - "none": probe ran and found no fresh mtimes. Combined with
-#   ``last_tool_called IS NULL`` past threshold, this is a true hang.
+# - "none": probe ran and found no fresh mtimes. May still be alive via
+#   the session signal below.
 # - "not_probed": probe was not invoked for this classification (stage 1,
 #   stage 3, or stage 2 short-circuited before threshold).
 ColdStartHangFsActivity = Literal["present", "none", "not_probed"]
+
+
+# β-S11-17.5 session-signal probe states (Claude-Code session jsonl —
+# captures Read/Bash/Grep/ToolSearch/built-in tools that don't touch the
+# worktree or the orchestrator MCP):
+# - "present": the per-cwd ``~/.claude/projects/<encoded>/<uuid>.jsonl``
+#   file has an mtime newer than the dispatch's started_at. Claude is
+#   making tool calls (even read-only / built-in ones); stage 2 is
+#   suppressed.
+# - "none": probe ran and the file is older / unchanged.
+# - "not_probed": probe was not invoked.
+# - "unavailable": the Claude project directory does not exist or the
+#   path encoding failed. Treated like "none" for terminal-decision
+#   purposes; recorded separately so post-mortem can distinguish "Claude
+#   was silent" from "we couldn't tell". Falls back to worktree-only
+#   behavior — preserves the pre-fix posture when the secondary probe
+#   has no signal to read.
+ColdStartHangSessionActivity = Literal[
+    "present", "none", "not_probed", "unavailable"
+]
+
+
+# β-S11-17.5 session-signal-fix (2026-05-24): unified progress-signal
+# label combining the two probes. "worktree" = FS-only positive; "session"
+# = jsonl-only positive; "both" = both positive (rare but normal for an
+# Implementer mid-Edit); "none" = neither positive (true hang). Recorded
+# in notes + audit so post-mortem can tell which signal caught the work
+# without unpacking the per-probe enums.
+ColdStartHangProgressSignal = Literal[
+    "worktree", "session", "both", "none", "not_probed"
+]
 
 
 @dataclass(frozen=True)
@@ -198,18 +230,51 @@ class ColdStartHangClassification:
     last_activity_at for stage 3). Integer-rounded for audit readability.
     ``is_terminal``: True for stages 1+2 (dispatch is failed); False for
     stage 3 (warn-only).
-    ``fs_activity`` (β-S11-17.5): outcome of the worktree filesystem
-    probe. "present" means stage 2 was suppressed (returned via separate
-    code path — not constructed here). "none" means stage 2 fired
-    terminally despite the probe (true hang). "not_probed" is the
-    default for stage 1, stage 3, and any classification constructed
-    outside the production code path (tests, future stages).
+    ``fs_activity`` (β-S11-17.5): outcome of the WORKTREE filesystem
+    probe. Backward-compatible field; existing parsers read this and
+    continue to work. "present" means stage 2 was suppressed (returned
+    via separate code path — not constructed here). "none" means the
+    probe found no fresh mtimes. "not_probed" is the default for stages
+    1+3 and for stage 2 short-circuited before threshold.
+    ``session_activity`` (β-S11-17.5 session-signal-fix, 2026-05-24):
+    outcome of the CLAUDE-SESSION-JSONL probe — orthogonal to the
+    worktree probe. Captures Read/Bash/Grep/ToolSearch/built-in tool
+    activity that doesn't touch the worktree or the orchestrator MCP
+    (the failure shape of dispatches ``4f9c568d`` + ``c93b5170``:
+    142-174s of continuous Claude tool calls invisible to the worktree
+    probe). "present" / "none" / "not_probed" / "unavailable" per
+    :data:`ColdStartHangSessionActivity`.
+    ``progress_signal`` (computed convenience): unified label combining
+    the two probe outcomes — "worktree" / "session" / "both" / "none" /
+    "not_probed". Use this for telemetry; use the per-probe fields for
+    diagnostics.
     """
 
     stage: ColdStartHangStage
     elapsed_seconds: int
     is_terminal: bool
     fs_activity: ColdStartHangFsActivity = "not_probed"
+    session_activity: ColdStartHangSessionActivity = "not_probed"
+
+    @property
+    def progress_signal(self) -> ColdStartHangProgressSignal:
+        """Combined progress signal for telemetry. "worktree" if only FS
+        positive, "session" if only jsonl positive, "both" if both, "none"
+        if both probed-and-negative, "not_probed" if neither probed."""
+        fs = self.fs_activity == "present"
+        ss = self.session_activity == "present"
+        if fs and ss:
+            return "both"
+        if fs:
+            return "worktree"
+        if ss:
+            return "session"
+        if (
+            self.fs_activity == "not_probed"
+            and self.session_activity == "not_probed"
+        ):
+            return "not_probed"
+        return "none"
 
 
 @dataclass(frozen=True)
@@ -300,6 +365,100 @@ def _has_worktree_activity_since(
     return False
 
 
+def _claude_project_dir_for(worktree: Path) -> Path | None:
+    """β-S11-17.5 session-signal-fix (2026-05-24): compute the Claude-Code
+    project directory that corresponds to a subprocess ``cwd``.
+
+    Claude Code encodes each cwd as a directory under
+    ``~/.claude/projects/<encoded>/``. The encoding replaces three
+    characters with ``-``:
+
+    - ``:`` (drive separator on Windows)
+    - ``\\`` (Windows path separator)
+    - ``.`` (any dot — leading-dot dirs like ``.meridian-orchestrator``
+      end up as ``-meridian-orchestrator``)
+
+    POSIX paths produce the same encoding via the ``/`` → no-op chain
+    (``/`` is not in the replacement set; Windows is the supported
+    target). Verified against six existing project-dir names under
+    ``~/.claude/projects/`` as of 2026-05-24.
+
+    Returns ``None`` on any path-resolution failure so the caller can
+    treat the session signal as ``unavailable`` (falls back to
+    worktree-only behavior — the conservative posture)."""
+    try:
+        s = str(worktree.resolve())
+    except OSError:
+        s = str(worktree)
+    try:
+        encoded = s.replace(":", "-").replace("\\", "-").replace(".", "-")
+        return Path.home() / ".claude" / "projects" / encoded
+    except (OSError, ValueError):  # pragma: no cover
+        return None
+
+
+def _has_claude_session_activity_since(
+    worktree: Path, since: datetime
+) -> tuple[bool, ColdStartHangSessionActivity]:
+    """β-S11-17.5 session-signal-fix (2026-05-24): probe whether the
+    Claude-Code session log for ``worktree`` has been appended-to since
+    ``since``.
+
+    Returns a 2-tuple ``(active, status)`` where:
+
+    - ``active`` is True iff the most-recently-modified ``*.jsonl`` under
+      the per-cwd project directory has mtime > ``since``. Treated as a
+      positive activity signal — the subprocess is making tool calls
+      (even read-only built-in ones like ``Read``/``Bash``/``Grep``/
+      ``ToolSearch`` that update neither the worktree nor the
+      orchestrator MCP last_tool_called column).
+    - ``status`` is one of ``"present"`` / ``"none"`` / ``"unavailable"``
+      for recording in the classification. ``"unavailable"`` covers the
+      case where the project directory does not exist (Claude Code
+      hasn't written yet, OR has changed its encoding scheme) — the
+      caller treats this like ``"none"`` for terminal-decision purposes
+      but the post-mortem can tell the two states apart.
+
+    Best-effort: any OS-level error returns ``(False, "unavailable")``
+    so a session-probe failure NEVER raises out of the poll loop. The
+    failure-mode posture matches the worktree probe ("when in doubt,
+    don't suppress" — a genuine hang failing to be detected because the
+    probe crashed is the lesser risk than killing an active subprocess
+    because the probe couldn't read).
+    """
+    proj_dir = _claude_project_dir_for(worktree)
+    if proj_dir is None:
+        return (False, "unavailable")
+    try:
+        if not proj_dir.is_dir():
+            return (False, "unavailable")
+    except OSError:
+        return (False, "unavailable")
+    try:
+        since_ts = since.timestamp()
+    except (ValueError, OSError):  # pragma: no cover
+        return (False, "unavailable")
+    found_jsonl = False
+    try:
+        with os.scandir(proj_dir) as it:
+            for entry in it:
+                if not entry.name.endswith(".jsonl"):
+                    continue
+                found_jsonl = True
+                try:
+                    if entry.stat(follow_symlinks=False).st_mtime > since_ts:
+                        return (True, "present")
+                except OSError:
+                    continue
+    except (OSError, PermissionError):
+        return (False, "unavailable")
+    if not found_jsonl:
+        # Directory exists but no jsonls yet (Claude pre-first-turn).
+        # Treat as "none" — we have probe access but no activity yet.
+        return (False, "none")
+    return (False, "none")
+
+
 def _check_cold_start_hang_classification(
     row: dict[str, Any],
     issued_at: datetime,
@@ -307,6 +466,8 @@ def _check_cold_start_hang_classification(
     thresholds: _ColdStartHangThresholds,
     *,
     has_worktree_activity: bool = False,
+    has_session_activity: bool = False,
+    session_probe_status: ColdStartHangSessionActivity = "not_probed",
 ) -> ColdStartHangClassification | None:
     """Return a classification if the dispatch row shows a cold-start
     hang at ``now``; ``None`` otherwise.
@@ -325,11 +486,13 @@ def _check_cold_start_hang_classification(
     - ``started_at`` is set AND ``last_tool_called`` is None AND
       ``now - started_at >= no_mcp_activity_seconds`` → stage 2
       (``pre_first_mcp_activity``):
-        * if ``has_worktree_activity`` is True (β-S11-17.5): SUPPRESS
-          — return ``None``. The subprocess is alive and editing files
-          even though no MCP call has landed yet. Continue polling.
-        * else: terminal classification with ``fs_activity="none"``.
-          Both signals absent — true hang shape.
+        * if ``has_worktree_activity`` OR ``has_session_activity`` is
+          True: SUPPRESS — return ``None``. Either signal positive
+          means the subprocess is alive (writing files, reading files,
+          grep'ing the codebase, running bash). Continue polling.
+        * else: terminal classification with both probe outcomes
+          recorded (``fs_activity="none"`` + ``session_activity=<probe
+          status>``).
     - ``last_tool_called`` is set AND ``last_activity_at`` is set AND
       ``now - last_activity_at >= no_useful_activity_seconds`` → stage 3
       (``pre_filesystem_activity``), warn-only.
@@ -342,13 +505,20 @@ def _check_cold_start_hang_classification(
     ``dispatch()`` and not here. Kept in this helper for completeness in
     case future refactors move the launcher call inside the poll loop.
 
-    β-S11-17.5: the ``has_worktree_activity`` kwarg is the *caller's*
-    decision (the dispatcher's poll loop calls
-    :func:`_has_worktree_activity_since` lazily, only when the stage-2
-    elapsed condition fires, and caches the boolean across the
-    remainder of the dispatch via a poll-loop-local flag). This keeps
+    β-S11-17.5: ``has_worktree_activity`` and ``has_session_activity``
+    are the *caller's* decisions (the dispatcher's poll loop calls
+    :func:`_has_worktree_activity_since` and
+    :func:`_has_claude_session_activity_since` lazily, only when the
+    stage-2 elapsed condition fires, and caches the OR across the
+    remainder of the dispatch via two poll-loop-local flags). This keeps
     the helper a pure function for unit testing and decouples the
-    classification rules from the filesystem-probe implementation.
+    classification rules from the probe implementations.
+
+    Backward-compat: ``has_worktree_activity`` defaults to False;
+    callers from the pre-2026-05-24 code path that pass only the
+    worktree kwarg keep working. The session signal defaults to
+    ``not_probed`` + False, which is identical to the pre-fix behavior
+    (worktree-only).
     """
     started_at_raw = row.get("started_at")
 
@@ -361,6 +531,7 @@ def _check_cold_start_hang_classification(
                 elapsed_seconds=int(elapsed),
                 is_terminal=True,
                 fs_activity="not_probed",
+                session_activity="not_probed",
             )
         return None
 
@@ -371,21 +542,20 @@ def _check_cold_start_hang_classification(
     if last_tool_called is None:
         elapsed = (now - started_at).total_seconds()
         if elapsed >= thresholds.no_mcp_activity_seconds:
-            if has_worktree_activity:
-                # β-S11-17.5 recalibration: the subprocess is alive and
-                # editing files. No MCP call yet is the normal shape for
-                # an Implementer/Tester whose only MCP interaction is
-                # ``complete_dispatch`` at end-of-work. Not a hang;
-                # suppress and continue polling.
+            if has_worktree_activity or has_session_activity:
+                # β-S11-17.5 recalibration + session-signal-fix:
+                # Either signal positive = subprocess is alive. The
+                # session signal catches Read/Bash/Grep/ToolSearch work
+                # that has no worktree footprint (the failure shape of
+                # dispatches 4f9c568d + c93b5170: 142-174s of
+                # continuous read-only work invisible to the worktree
+                # probe). Suppress and continue polling.
                 return None
-            # β-S11-17.5 grace window: the dispatcher re-probes the
-            # worktree at the throttled rate
+            # β-S11-17.5 grace window: the dispatcher re-probes both
+            # signals at the throttled rate
             # (_FS_ACTIVITY_PROBE_INTERVAL_SECONDS) during the grace.
-            # Without the grace, stage 2 would terminate on the first
-            # negative probe — making the throttle a no-op and giving
-            # a slow-start Implementer no second chance to register
-            # activity. Terminal only fires after the grace expires
-            # AND every probe in the window came back negative.
+            # Terminal only fires after the grace expires AND every
+            # probe-pair in the window came back negative.
             if elapsed < (
                 thresholds.no_mcp_activity_seconds
                 + _FS_ACTIVITY_GRACE_SECONDS
@@ -396,6 +566,7 @@ def _check_cold_start_hang_classification(
                 elapsed_seconds=int(elapsed),
                 is_terminal=True,
                 fs_activity="none",
+                session_activity=session_probe_status,
             )
         return None
 
@@ -414,6 +585,7 @@ def _check_cold_start_hang_classification(
             elapsed_seconds=int(elapsed),
             is_terminal=False,
             fs_activity="not_probed",
+            session_activity="not_probed",
         )
     return None
 
@@ -1496,14 +1668,27 @@ class BridgeDispatcher:
         # negative.
         fs_probe_since = datetime.now(tz=UTC)
         fs_activity_confirmed = False
-        # β-S11-17.5 throttle: wall-clock time at which the NEXT FS
-        # probe is allowed. ``None`` until the first probe runs (so the
-        # very first stage-2-elapsed iteration probes immediately); set
-        # to ``now + _FS_ACTIVITY_PROBE_INTERVAL_SECONDS`` after each
-        # negative probe so subsequent poll iterations within the
-        # window skip the walk entirely. A positive probe sets
-        # ``fs_activity_confirmed = True`` which short-circuits the
-        # whole gate for the rest of the dispatch lifecycle.
+        # β-S11-17.5 session-signal-fix (2026-05-24): mirror flag for the
+        # session-jsonl probe. Either flag positive → suppress stage 2
+        # for the remainder of the dispatch. Tracked separately so the
+        # terminal classification can record which signal caught (or,
+        # at terminal, what each probe last returned). Monotonic per
+        # dispatch — never resets to False.
+        session_activity_confirmed = False
+        # β-S11-17.5 session-signal-fix: last observed status of the
+        # session probe (worktree probe's "last status" is implicit in
+        # fs_activity_confirmed). Recorded onto the terminal
+        # classification so audit/notes show whether Claude was visibly
+        # silent vs whether the probe couldn't read the session dir.
+        last_session_probe_status: ColdStartHangSessionActivity = "not_probed"
+        # β-S11-17.5 throttle: wall-clock time at which the NEXT probe
+        # pair (worktree + session) is allowed. ``None`` until the first
+        # probe runs (so the very first stage-2-elapsed iteration probes
+        # immediately); set to ``now + _FS_ACTIVITY_PROBE_INTERVAL_SECONDS``
+        # after each negative probe-pair so subsequent poll iterations
+        # within the window skip the walks entirely. Either signal
+        # positive sets the corresponding ``*_confirmed`` flag which
+        # short-circuits the gate for the rest of the dispatch.
         next_fs_probe_at: datetime | None = None
         try:
             async with asyncio.timeout(timeout_seconds):
@@ -1535,7 +1720,7 @@ class BridgeDispatcher:
                     # entire first stage-2-threshold window of every
                     # dispatch.
                     if (
-                        not fs_activity_confirmed
+                        not (fs_activity_confirmed or session_activity_confirmed)
                         and working_directory is not None
                         and row["started_at"] is not None
                         and row["last_tool_called"] is None
@@ -1557,18 +1742,35 @@ class BridgeDispatcher:
                                 or now_dt >= next_fs_probe_at
                             )
                         ):
-                            if _has_worktree_activity_since(
+                            # β-S11-17.5 session-signal-fix (2026-05-24):
+                            # run BOTH probes when the gate fires. Either
+                            # signal positive = subprocess alive. Failure
+                            # shape of dispatches 4f9c568d + c93b5170:
+                            # 142-174s of continuous Read/Bash/Grep/
+                            # ToolSearch work that hit neither the
+                            # worktree nor the orchestrator MCP — visible
+                            # ONLY through the session-jsonl mtime.
+                            worktree_active = _has_worktree_activity_since(
                                 working_directory, fs_probe_since
-                            ):
+                            )
+                            session_active, session_status = (
+                                _has_claude_session_activity_since(
+                                    working_directory, fs_probe_since
+                                )
+                            )
+                            last_session_probe_status = session_status
+                            if worktree_active:
                                 fs_activity_confirmed = True
-                            else:
-                                # β-S11-17.5: schedule the next probe
-                                # at least 1s out so the worktree walk
-                                # doesn't burn CPU at the poll cadence.
-                                # If stage 2 fires terminal on THIS
-                                # iteration (no MCP + no FS), the
-                                # next-probe slot is irrelevant — the
-                                # dispatch is about to be marked
+                            if session_active:
+                                session_activity_confirmed = True
+                            if not (worktree_active or session_active):
+                                # Both probes negative. Schedule the
+                                # next probe-pair at least 1s out so the
+                                # walk/scan doesn't burn CPU at the poll
+                                # cadence. If stage 2 fires terminal on
+                                # THIS iteration (both signals absent),
+                                # the next-probe slot is irrelevant —
+                                # the dispatch is about to be marked
                                 # failed and the loop exits.
                                 next_fs_probe_at = (
                                     now_dt
@@ -1601,6 +1803,8 @@ class BridgeDispatcher:
                         now=datetime.now(tz=UTC),
                         thresholds=self._cold_start_thresholds,
                         has_worktree_activity=fs_activity_confirmed,
+                        has_session_activity=session_activity_confirmed,
+                        session_probe_status=last_session_probe_status,
                     )
                     if classification is not None:
                         if classification.is_terminal:
@@ -1694,12 +1898,18 @@ class BridgeDispatcher:
 
         ``notes`` format:
         - stage 1 / 3: ``cold-start-hang:<stage>:elapsed=<seconds>s``
-        - stage 2 (β-S11-17.5): the same prefix with an
-          ``:fs_activity=<state>`` suffix appended. The existing prefix
-          test ``startswith("cold-start-hang:pre_first_mcp_activity:")``
-          still matches. The new suffix records the FS probe outcome
-          for forensic correlation with the daemon log and worktree
-          contents at termination time.
+        - stage 2 (β-S11-17.5): the same prefix with two suffixes
+          appended in order — ``:fs_activity=<state>`` then (β-S11-17.5
+          session-signal-fix, 2026-05-24) ``:session_activity=<state>``.
+          The existing prefix test
+          ``startswith("cold-start-hang:pre_first_mcp_activity:")``
+          still matches. The existing
+          ``in notes:"fs_activity=none"`` substring test still matches.
+          The new ``session_activity=`` suffix records the orthogonal
+          Claude-session-jsonl probe outcome — captures
+          Read/Bash/Grep/ToolSearch work that doesn't touch the
+          worktree (the failure shape of dispatches ``4f9c568d`` +
+          ``c93b5170``).
 
         The ``cold-start-hang:`` prefix is parsed by ``dispatch()``'s
         finally clause to force-preserve the worktree for stage 2 (stage
@@ -1711,12 +1921,18 @@ class BridgeDispatcher:
         )
         if classification.fs_activity != "not_probed":
             notes = f"{notes}:fs_activity={classification.fs_activity}"
+        if classification.session_activity != "not_probed":
+            notes = (
+                f"{notes}:session_activity={classification.session_activity}"
+            )
         logger.warning(
             "dispatch.cold_start_hang_detected",
             dispatch_id=dispatch_id,
             stage=classification.stage,
             elapsed_seconds=classification.elapsed_seconds,
             fs_activity=classification.fs_activity,
+            session_activity=classification.session_activity,
+            progress_signal=classification.progress_signal,
         )
         await self._storage.execute(
             "UPDATE dispatches SET status = 'failed', "
@@ -1733,6 +1949,8 @@ class BridgeDispatcher:
                 "stage": classification.stage,
                 "elapsed_seconds": classification.elapsed_seconds,
                 "fs_activity": classification.fs_activity,
+                "session_activity": classification.session_activity,
+                "progress_signal": classification.progress_signal,
             },
         )
 

@@ -910,9 +910,20 @@ async def test_stage_2_true_hang_no_fs_no_mcp_terminates_with_fs_activity_none(
         f"notes prefix must remain stable for downstream parsing "
         f"(worktree force-keep gate); got {outcome.notes!r}"
     )
-    assert outcome.notes.endswith(":fs_activity=none"), (
+    # β-S11-17.5 session-signal-fix (2026-05-24): notes now carry BOTH
+    # probe outcomes in stable order — fs_activity first (legacy),
+    # session_activity second (new). The previous endswith assertion is
+    # relaxed to a substring check so the legacy parser contract
+    # (looking for ``:fs_activity=none``) still holds while the new
+    # ``:session_activity=`` suffix lands behind it.
+    assert ":fs_activity=none" in outcome.notes, (
         f"β-S11-17.5: terminal stage-2 notes must record the FS probe "
-        f"result so post-mortem reviewers see both signals were absent; "
+        f"result so post-mortem reviewers see the worktree was silent; "
+        f"got {outcome.notes!r}"
+    )
+    assert ":session_activity=" in outcome.notes, (
+        f"β-S11-17.5 session-signal-fix: terminal stage-2 notes must "
+        f"also record the Claude-session-jsonl probe result; "
         f"got {outcome.notes!r}"
     )
 
@@ -928,6 +939,21 @@ async def test_stage_2_true_hang_no_fs_no_mcp_terminates_with_fs_activity_none(
         f"audit payload must carry fs_activity for telemetry "
         f"correlation; got {details}"
     )
+    assert "session_activity" in details, (
+        f"β-S11-17.5 session-signal-fix: audit payload must carry "
+        f"session_activity orthogonal to fs_activity; got {details}"
+    )
+    assert "progress_signal" in details, (
+        f"β-S11-17.5 session-signal-fix: audit payload must carry the "
+        f"computed progress_signal (worktree/session/both/none); "
+        f"got {details}"
+    )
+    # For a true silent hang via _AliveButSilentHandle (no real claude
+    # subprocess writes a jsonl), session_activity is "unavailable"
+    # (no Claude project dir created) and progress_signal is "none"
+    # (both probes effectively negative).
+    assert details["session_activity"] in ("none", "unavailable")
+    assert details["progress_signal"] == "none"
 
     # Worktree force-preserved (regression check for the existing
     # β-S11-17 behavior — must survive the β-S11-17.5 notes-suffix change).
@@ -1113,3 +1139,281 @@ async def test_fs_activity_probe_is_throttled_to_at_most_once_per_second(
             f"~1s apart (jitter-tolerant); got gap={gap:.3f}s "
             f"between probes at {prev:.3f} and {curr:.3f}"
         )
+
+
+# ===========================================================================
+# β-S11-17.5 session-signal-fix (2026-05-24)
+# ===========================================================================
+#
+# Failure shape diagnosed in dispatches 4f9c568d + c93b5170 (Phase 1 Slice
+# 1 Implementer attempts, 2026-05-24): Claude was actively calling Read +
+# Bash + Grep + ToolSearch for 142-174 seconds. None touch the worktree
+# (Read is read-only; Bash find/grep don't mutate mtimes on NTFS; only
+# Edit/Write would have moved the worktree probe). None touch the
+# orchestrator MCP (those are CLI built-in tools, not orchestrator MCP
+# tools). Both dispatches were killed at the stage-2 threshold despite
+# being fully active. The session-jsonl mtime tracked every turn and
+# would have caught the activity.
+# ---------------------------------------------------------------------------
+
+
+def test_claude_project_dir_encoding() -> None:
+    """``_claude_project_dir_for`` mirrors Claude Code's cwd encoding:
+    ``:`` ``\\`` ``.`` all become ``-``. Verified against existing
+    project-dir names under ``~/.claude/projects/``."""
+    wt = Path(r"C:\Users\mbgol\.meridian-orchestrator\dispatch-worktrees\xyz")
+    encoded = dispatcher_module._claude_project_dir_for(wt)
+    assert encoded is not None
+    assert encoded.name.endswith(
+        "C--Users-mbgol--meridian-orchestrator-dispatch-worktrees-xyz"
+    ), f"unexpected encoding: {encoded.name!r}"
+    assert encoded.parent == Path.home() / ".claude" / "projects"
+
+
+def test_session_probe_unavailable_when_dir_missing(tmp_path: Path) -> None:
+    """Project dir does not exist → ``(False, "unavailable")``. The
+    caller treats this like ``"none"`` for terminal-decision purposes but
+    can distinguish 'no probe data' from 'Claude was silent' in audit."""
+    nonexistent_wt = tmp_path / "no-such-worktree"
+    active, status = dispatcher_module._has_claude_session_activity_since(
+        nonexistent_wt, datetime(2026, 5, 24, tzinfo=UTC)
+    )
+    assert active is False
+    assert status == "unavailable"
+
+
+def test_session_probe_present_when_jsonl_mtime_advances(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fake Claude project dir with jsonl whose mtime is after
+    ``since`` → ``(True, "present")``. Monkeypatches HOME so the
+    resolver doesn't touch the operator's real ~/.claude/projects/."""
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    wt = tmp_path / "fake-worktree"
+    wt.mkdir()
+    proj_dir = dispatcher_module._claude_project_dir_for(wt)
+    assert proj_dir is not None
+    proj_dir.mkdir(parents=True, exist_ok=True)
+    jsonl = proj_dir / "session-uuid.jsonl"
+    jsonl.write_text('{"type":"x"}\n', encoding="utf-8")
+    import time as _time
+    _time.sleep(0.05)
+    since = datetime.now(tz=UTC)
+    _time.sleep(0.05)
+    active, status = dispatcher_module._has_claude_session_activity_since(
+        wt, since
+    )
+    assert active is False
+    assert status == "none"
+    with jsonl.open("a", encoding="utf-8") as f:
+        f.write('{"type":"user"}\n')
+    active, status = dispatcher_module._has_claude_session_activity_since(
+        wt, since
+    )
+    assert active is True
+    assert status == "present"
+
+
+def test_progress_signal_combinations() -> None:
+    """``progress_signal`` maps the fs+session enum pair to the unified
+    telemetry label."""
+    def mk(fs, ss):
+        return ColdStartHangClassification(
+            stage="pre_first_mcp_activity", elapsed_seconds=200,
+            is_terminal=True, fs_activity=fs, session_activity=ss,
+        ).progress_signal
+
+    assert mk("none", "none") == "none"
+    assert mk("none", "unavailable") == "none"
+    assert mk("present", "none") == "worktree"
+    assert mk("none", "present") == "session"
+    assert mk("present", "present") == "both"
+    assert mk("not_probed", "not_probed") == "not_probed"
+
+
+def test_check_classifier_suppresses_on_session_activity_only() -> None:
+    """β-S11-17.5 session-signal-fix: stage 2 elapsed past threshold +
+    worktree silent + session active → SUPPRESS. The Phase 1 failure
+    shape — both failed Implementer dispatches were in this state for
+    142-174s and got killed pre-fix."""
+    thresholds = _ColdStartHangThresholds(
+        no_subprocess_seconds=10.0, no_mcp_activity_seconds=20.0,
+        no_useful_activity_seconds=30.0,
+    )
+    issued_at = datetime(2026, 5, 24, 12, 0, 0, tzinfo=UTC)
+    row = {
+        "started_at": "2026-05-24T12:00:05+00:00",
+        "last_tool_called": None,
+        "last_activity_at": None,
+    }
+    now_30s = datetime(2026, 5, 24, 12, 0, 30, tzinfo=UTC)
+
+    cls = _check_cold_start_hang_classification(
+        row, issued_at, now_30s, thresholds,
+        has_worktree_activity=False, has_session_activity=True,
+        session_probe_status="present",
+    )
+    assert cls is None, (
+        "session-active-only must suppress stage 2 — the Phase 1 "
+        "regression we just fixed"
+    )
+
+    cls = _check_cold_start_hang_classification(
+        row, issued_at, now_30s, thresholds,
+        has_worktree_activity=False, has_session_activity=False,
+        session_probe_status="none",
+    )
+    assert cls is not None
+    assert cls.is_terminal is True
+    assert cls.fs_activity == "none"
+    assert cls.session_activity == "none"
+    assert cls.progress_signal == "none"
+
+    cls = _check_cold_start_hang_classification(
+        row, issued_at, now_30s, thresholds,
+        has_worktree_activity=False, has_session_activity=False,
+        session_probe_status="unavailable",
+    )
+    assert cls is not None
+    assert cls.session_activity == "unavailable"
+
+    # Worktree-only positive (pre-fix behavior preserved).
+    cls = _check_cold_start_hang_classification(
+        row, issued_at, now_30s, thresholds,
+        has_worktree_activity=True, has_session_activity=False,
+        session_probe_status="none",
+    )
+    assert cls is None
+
+
+def test_check_classifier_backward_compat_worktree_only_kwarg() -> None:
+    """Callers from the pre-2026-05-24 code path that pass only the
+    ``has_worktree_activity`` kwarg continue to work unchanged. Session
+    defaults to absent + not_probed → terminal stays terminal,
+    suppression stays suppression-when-worktree-positive."""
+    thresholds = _ColdStartHangThresholds(
+        no_subprocess_seconds=10.0, no_mcp_activity_seconds=20.0,
+        no_useful_activity_seconds=30.0,
+    )
+    issued_at = datetime(2026, 5, 24, 12, 0, 0, tzinfo=UTC)
+    row = {
+        "started_at": "2026-05-24T12:00:05+00:00",
+        "last_tool_called": None, "last_activity_at": None,
+    }
+    now_30s = datetime(2026, 5, 24, 12, 0, 30, tzinfo=UTC)
+
+    # Worktree positive → suppress (pre-fix behavior).
+    cls = _check_cold_start_hang_classification(
+        row, issued_at, now_30s, thresholds,
+        has_worktree_activity=True,
+    )
+    assert cls is None
+
+    # No kwargs at all → terminal (pre-fix shape).
+    cls = _check_cold_start_hang_classification(
+        row, issued_at, now_30s, thresholds,
+    )
+    assert cls is not None
+    assert cls.is_terminal is True
+    assert cls.fs_activity == "none"
+    # Session not explicitly probed → "not_probed" recorded.
+    assert cls.session_activity == "not_probed"
+
+
+@pytest.mark.asyncio
+async def test_stage_2_with_session_jsonl_activity_suppresses_kill(
+    storage_with_task: SqliteStorage,
+    canonical: CanonicalClone,
+    canonical_registry: CanonicalCloneRegistry,
+    token_store_with_transient: TokenStore,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """β-S11-17.5 session-signal-fix: dispatch whose subprocess does NOT
+    touch the worktree but DOES advance the Claude-session jsonl (the
+    failure shape of dispatches 4f9c568d + c93b5170 — 142-174s of
+    Read/Bash/Grep work invisible to the worktree probe). Must NOT be
+    killed at stage 2."""
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    captured: dict[str, Path] = {}
+
+    async def _alive_silent_launcher(
+        ctx: DispatchLaunchContext,
+    ) -> SubprocessHandle:
+        captured["worktree"] = ctx.working_directory
+        return _AliveButSilentHandle()  # type: ignore[return-value]
+
+    dispatcher = await BridgeDispatcher.create(
+        storage=storage_with_task,
+        token_store=token_store_with_transient,
+        canonical_registry=canonical_registry,
+        worktrees_root=tmp_path / "data" / "dispatch-worktrees",
+        subprocess_launcher=_alive_silent_launcher,
+        cold_start_no_subprocess_seconds=10.0,
+        cold_start_no_mcp_activity_seconds=2.5,
+        cold_start_no_useful_activity_seconds=60.0,
+    )
+
+    async def _touch_session_then_complete() -> None:
+        loop = asyncio.get_event_loop()
+        deadline = loop.time() + 10.0
+        dispatch_id: str | None = None
+        while loop.time() < deadline:
+            row = await storage_with_task.fetch_one(
+                "SELECT id, status FROM dispatches "
+                "WHERE task_id = 'task-1' LIMIT 1"
+            )
+            if row is not None and str(row["status"]) in (
+                "running", "failed", "completed",
+            ):
+                dispatch_id = str(row["id"])
+                if str(row["status"]) == "running":
+                    break
+                raise AssertionError(
+                    f"transitioned to {str(row['status'])!r} before observe"
+                )
+            await asyncio.sleep(0.02)
+        assert dispatch_id is not None
+        wt = captured["worktree"]
+        proj_dir = dispatcher_module._claude_project_dir_for(wt)
+        assert proj_dir is not None
+        proj_dir.mkdir(parents=True, exist_ok=True)
+        jsonl = proj_dir / f"{dispatch_id}.jsonl"
+        await asyncio.sleep(0.1)
+        jsonl.write_text('{"type":"queue-operation"}\n', encoding="utf-8")
+        # Wait past the stage-2 threshold so the dispatcher's probe runs.
+        await asyncio.sleep(2.5)
+        # Land terminal.
+        now_iso = datetime.now(tz=UTC).isoformat(timespec="seconds")
+        await storage_with_task.execute(
+            "UPDATE dispatches SET status = 'completed', "
+            "last_tool_called = ?, last_activity_at = ?, "
+            "completed_at = ? WHERE id = ?",
+            ("complete_dispatch", now_iso, now_iso, dispatch_id),
+        )
+
+    activity_task = asyncio.create_task(_touch_session_then_complete())
+    try:
+        outcome = await dispatcher.dispatch(
+            task_id="task-1", role="implementer",
+            role_agent_id="impl-agent-id", prompt="ignored",
+            actor="eng-agent-id",
+        )
+    finally:
+        await activity_task
+
+    assert outcome.status == "completed", (
+        f"session-jsonl-only activity must NOT be killed by stage 2; "
+        f"got status={outcome.status!r} notes={outcome.notes!r}"
+    )
+    audit_rows = await storage_with_task.fetch_all(
+        "SELECT action FROM audit_log "
+        "WHERE action = 'dispatch.cold_start_hang_detected'"
+    )
+    assert len(audit_rows) == 0, (
+        "β-S11-17.5 session-signal-fix: stage 2 must NOT fire terminal "
+        "when session-jsonl activity is observed, even if worktree is "
+        f"silent; got {len(audit_rows)} cold_start_hang_detected audits"
+    )
