@@ -36,6 +36,10 @@ from meridian_orchestrator.bridge.oauth_usage import (
     OAuthUsagePoller,
 )
 from meridian_orchestrator.bridge.pm_supervisor import PMSupervisor
+from meridian_orchestrator.bridge.autonomy_liveness_watchdog import (
+    AutonomyLivenessWatchdog,
+    WatchdogThresholds,
+)
 from meridian_orchestrator.bridge.transient_token_gc import TransientTokenGc
 from meridian_orchestrator.bridge.transient_token_probe import (
     TransientTokenStartupProbe,
@@ -413,6 +417,40 @@ async def _run_lifespan_body(
         gc_shutdown = asyncio.Event()
         gc_task = asyncio.create_task(
             gc.run(gc_shutdown), name="transient-token-gc"
+        )
+
+        # AutonomyLivenessWatchdog (Operator Fix Window 2026-05-26).
+        # Server-side detection of stalled or unsurfaced autonomous work.
+        # Same lifecycle shape as TransientTokenGc — long-lived task,
+        # cooperative shutdown via asyncio.Event, drain-timeout-bounded.
+        watchdog = AutonomyLivenessWatchdog(
+            storage=storage,
+            interval_seconds=float(
+                settings.autonomy_liveness_watchdog_interval_seconds
+            ),
+            thresholds=WatchdogThresholds(
+                pending_stale=float(
+                    settings.autonomy_liveness_pending_stale_seconds
+                ),
+                in_progress_stale=float(
+                    settings.autonomy_liveness_in_progress_stale_seconds
+                ),
+                terminal_unsurfaced=float(
+                    settings.autonomy_liveness_terminal_unsurfaced_seconds
+                ),
+                artifact_missing_grace=float(
+                    settings.autonomy_liveness_artifact_missing_grace_seconds
+                ),
+                callback_dark=float(
+                    settings.autonomy_liveness_callback_dark_seconds
+                ),
+            ),
+            escalation_ticks=settings.autonomy_liveness_escalation_ticks,
+        )
+        watchdog_shutdown = asyncio.Event()
+        watchdog_task = asyncio.create_task(
+            watchdog.run(watchdog_shutdown),
+            name="autonomy-liveness-watchdog",
         )
 
         # M5-subscription-routing commit 0.5: seed companies + projects
@@ -940,6 +978,32 @@ async def _run_lifespan_body(
                 except Exception as exc:
                     logger.error(
                         "transient_token_gc.drain_failed",
+                        error=str(exc),
+                    )
+
+                # AutonomyLivenessWatchdog drain. Same cooperative-shutdown
+                # contract as GC: set the event, await the task with a
+                # drain timeout, force-cancel on timeout. Failure here
+                # is logged but does not block daemon shutdown.
+                watchdog_shutdown.set()
+                try:
+                    await asyncio.wait_for(
+                        watchdog_task,
+                        timeout=watchdog.drain_timeout_seconds,
+                    )
+                except TimeoutError:
+                    logger.warning(
+                        "autonomy_liveness_watchdog.drain_timeout",
+                        timeout_seconds=watchdog.drain_timeout_seconds,
+                    )
+                    watchdog_task.cancel()
+                    with contextlib.suppress(
+                        asyncio.CancelledError, Exception
+                    ):
+                        await watchdog_task
+                except Exception as exc:
+                    logger.error(
+                        "autonomy_liveness_watchdog.drain_failed",
                         error=str(exc),
                     )
                 if not mcp_task.done():

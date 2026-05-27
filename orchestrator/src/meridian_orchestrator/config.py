@@ -267,6 +267,63 @@ class Settings(BaseSettings):
         default=600.0, ge=1.0, le=1800.0
     )
 
+    # AutonomyLivenessWatchdog (Operator Fix Window 2026-05-26).
+    # Server-side daemon tick that detects stalled or unsurfaced autonomous
+    # work and forces PM to address it. Decoupled from PM prompt behavior.
+    # See bridge/autonomy_liveness_watchdog.py for the rule semantics.
+
+    # Tick cadence. Default 60s matches the spec's "every 30-60s" guidance.
+    # Lower bound 10s keeps the daemon's load floor honest under stress
+    # tests; upper bound enforces ≤5 min between checks.
+    autonomy_liveness_watchdog_interval_seconds: int = Field(
+        default=60, ge=10, le=300
+    )
+
+    # Rule A: pending priority-1 task unclaimed for this long → stale.
+    # Default 300s (5 min) — gives Engineer subprocess respawn + claim
+    # ample headroom; anything past that is genuinely stuck.
+    autonomy_liveness_pending_stale_seconds: int = Field(
+        default=300, ge=30, le=3600
+    )
+
+    # Rule B: claimed/in_progress task with zero dispatch/audit/HEAD
+    # movement for this long → stale. Default 600s (10 min) — covers
+    # legitimate cognitive work windows; gaps past 10 min indicate the
+    # supervised agent is wedged or has stopped emitting MCP activity.
+    autonomy_liveness_in_progress_stale_seconds: int = Field(
+        default=600, ge=60, le=7200
+    )
+
+    # Rule C: terminal child dispatch with no PM follow-up (no new
+    # submit_task, no parent task status change, no notify_human, no
+    # disposition note) for this long → unsurfaced. Default 300s.
+    autonomy_liveness_terminal_unsurfaced_seconds: int = Field(
+        default=300, ge=30, le=3600
+    )
+
+    # Rule D: when a dispatch/task notes declares an artifact path and
+    # the dispatch reaches terminal status, allow this grace period
+    # before flagging expected_artifact_missing. Default 30s — the
+    # daemon may observe terminal status before subprocess stderr drain
+    # has fully closed; the grace lets the artifact materialize.
+    autonomy_liveness_artifact_missing_grace_seconds: int = Field(
+        default=30, ge=5, le=600
+    )
+
+    # Rule E: PM claims active autonomous work (pm_current_focus row OR
+    # claimed parent task) but no server-side monitor/tick/notification/
+    # liveness contract observed for this long → callback dark. Default
+    # 600s (10 min).
+    autonomy_liveness_callback_dark_seconds: int = Field(
+        default=600, ge=60, le=7200
+    )
+
+    # Escalation: a violation that persists across this many ticks
+    # without PM action triggers the HUMAN_ACTION_REQUIRED escalation
+    # path (audit row + notification channel). Default 2 — per Mike's
+    # 2026-05-26 spec § Action behavior #3.
+    autonomy_liveness_escalation_ticks: int = Field(default=2, ge=1, le=20)
+
     @model_validator(mode="after")
     def _require_substrate_working_directory_when_supervisor_enabled(
         self,

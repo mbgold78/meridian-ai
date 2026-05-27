@@ -403,6 +403,20 @@ def build_server(
     for path, methods, handler in make_approval_routes(oauth_provider):
         mcp.custom_route(path, methods=methods)(handler)
 
+    # AutonomyLivenessWatchdog read API (Operator Fix Window 2026-05-26).
+    # GET /api/liveness — returns active violations for orchestrator-ui's
+    # Walk-Away bar + Human Action Inbox surfaces. Loopback-only via the
+    # daemon's TransportSecuritySettings; no extra auth here at v1
+    # because the violation data is already in the audit log (which the
+    # operator can read; the API just precomputes the active set).
+    if storage is not None:
+        from meridian_orchestrator.bridge.liveness_routes import (
+            make_liveness_routes,
+        )
+
+        for path, methods, handler in make_liveness_routes(storage):
+            mcp.custom_route(path, methods=methods)(handler)
+
     @mcp.tool(
         name="ping",
         description="Round-trip health check. Echoes the input and returns the "
