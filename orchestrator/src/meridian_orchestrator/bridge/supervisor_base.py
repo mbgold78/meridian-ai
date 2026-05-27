@@ -63,6 +63,7 @@ from meridian_orchestrator.bridge.stderr_drain import (
     _drain_stream_to_file,
     cancel_drain_task,
     stderr_log_path,
+    system_prompt_file_path,
 )
 from meridian_orchestrator.errors import OrchestratorError
 from meridian_orchestrator.storage.datetime_utils import _coerce_naive_to_utc
@@ -71,6 +72,34 @@ from meridian_orchestrator.storage.interface import Storage
 logger = structlog.get_logger(__name__)
 
 _GRACE_SECONDS_DEFAULT = 10.0
+
+# Operator Fix Window 2026-05-27. Short user-message string passed as the
+# ``claude -p`` argument. The full supervisor playbook (~30-37 KB) lands
+# via ``--append-system-prompt-file`` so the argv stays well under the
+# Windows CreateProcess limit. The kickoff tells the subprocess to read
+# the appended playbook and start the supervisor cycle by checking MCP
+# state. Role substituted via :func:`_supervisor_kickoff`.
+_SUPERVISOR_KICKOFF_TEMPLATE = (
+    "You are the Meridian {role_label} supervisor. Operate continuously "
+    "according to the appended supervisor playbook. Start by checking the "
+    "orchestrator queue/state via MCP, then take the next allowed action."
+)
+
+
+def _supervisor_kickoff(role: str) -> str:
+    """Map ``ctx.role`` (e.g., ``'pm-continuous'`` / ``'engineer-supervisor'``)
+    to the small role-tailored kickoff string passed as ``-p``.
+
+    Unknown roles fall back to the literal role string — defensive against
+    future supervisor types; the subprocess still receives a sensible
+    kickoff and the bulk content via the appended file."""
+    if role.startswith("pm"):
+        label = "PM"
+    elif role.startswith("engineer"):
+        label = "Engineer"
+    else:
+        label = role
+    return _SUPERVISOR_KICKOFF_TEMPLATE.format(role_label=label)
 
 
 class HaltedSupervisorError(OrchestratorError):
@@ -229,27 +258,59 @@ async def _default_launcher(
         else asyncio.subprocess.DEVNULL
     )
 
-    # CLI flag literals verified via `claude --help`:
-    # - `--effort <level>` (2026-05-05): low/medium/high/xhigh/max
-    # - `--allowedTools <tools...>` (2026-05-08, commit 3.6 supervisor
-    #   wiring): comma- or space-separated tool names; single argv
-    #   element with space-separated names.
-    # - `--mcp-config <configs...>` (2026-05-08, commit 3.6 supervisor
-    #   wiring): "Load MCP servers from JSON files or strings".
-    #   `--strict-mcp-config` "Only use MCP servers from --mcp-config,
-    #   ignoring all other MCP configurations" — hermetic semantic
-    #   verified empirically 2026-05-08.
+    # Operator Fix Window 2026-05-27: write the supervisor playbook
+    # (subclass-provided ``ctx.prompt``, ~30-37KB) to a per-dispatch file
+    # and pass it via ``claude --append-system-prompt-file <path>`` so
+    # the argv stays well under the Windows CreateProcess limit
+    # (WinError 206). The ``-p`` argument shrinks to a small role-aware
+    # kickoff string. The file is sibling to ``stderr.log`` +
+    # ``mcp_config.json`` under ``<dispatches_root>/<dispatch_id>/``.
     #
-    # Argv shape (Option A ordering, supervisor-side): ("claude",
-    # "--effort", <level>, ["--allowedTools", <space-joined>],
-    # ["--mcp-config", <path>, "--strict-mcp-config"], "-p", <prompt>).
-    # No --append-system-prompt: supervisor's yaml.system_prompt is the
-    # ``-p <prompt>`` user message (subclass-provided via
-    # :meth:`LongRunningSupervisor._subprocess_prompt`); architectural
-    # difference from dispatcher (which splits system+user message via
-    # --append-system-prompt + -p). Each conditional block is omitted
-    # entirely when its source field is empty/None so test-fixture argv
-    # stays unchanged.
+    # Falls back to the legacy inline ``-p <ctx.prompt>`` shape when
+    # ``dispatches_root`` is None (test fixtures injecting custom
+    # subprocess_launcher) OR when the path helper returns None (mkdir
+    # failure). The fallback preserves test-fixture argv shape exactly
+    # so existing tests don't churn.
+    sysprompt_path: Path | None = None
+    if ctx.dispatches_root is not None:
+        sysprompt_path = system_prompt_file_path(
+            ctx.dispatches_root, ctx.dispatch_id
+        )
+        if sysprompt_path is not None:
+            try:
+                sysprompt_path.write_text(ctx.prompt, encoding="utf-8")
+            except OSError as exc:
+                # Best-effort: if the file write fails, fall back to
+                # inline prompt (same as test-fixture path). Surface
+                # via WARNING so operators can spot persistent IO
+                # failures distinct from the silent fast path.
+                logger.warning(
+                    "supervisor.system_prompt_file_write_failed",
+                    dispatch_id=ctx.dispatch_id,
+                    path=str(sysprompt_path),
+                    error=str(exc),
+                )
+                sysprompt_path = None
+
+    # CLI flag literals verified via `claude --help` + 2026-05-27 probe:
+    # - `--effort <level>`: low/medium/high/xhigh/max
+    # - `--allowedTools <tools...>`: comma- or space-separated tool names
+    # - `--mcp-config <configs...>` + `--strict-mcp-config`: hermetic MCP
+    # - `--append-system-prompt-file <path>`: appends file contents to
+    #   the default Claude Code system prompt (does NOT replace it; tool
+    #   set + MCP behavior preserved). Verified live 2026-05-27 by
+    #   running ``claude --append-system-prompt-file=<file> -p <q>`` and
+    #   observing both the appended sentinel AND Claude Code's default
+    #   tooling (Read/Edit/Grep) in the response.
+    #
+    # Argv shape (post-fix): ("claude", "--effort", <level>,
+    # ["--allowedTools", <space-joined>],
+    # ["--mcp-config", <path>, "--strict-mcp-config"],
+    # ["--append-system-prompt-file", <sysprompt_path>], "-p", <kickoff>).
+    # Legacy fallback when sysprompt_path is None: ("claude", "--effort",
+    # ..., "-p", <ctx.prompt>) — identical to pre-fix shape so test
+    # fixtures injecting custom launchers OR running without
+    # dispatches_root don't see argv churn.
     argv: list[str] = ["claude", "--effort", ctx.effort]
     if ctx.allowed_tools:
         argv.extend(["--allowedTools", " ".join(ctx.allowed_tools)])
@@ -257,7 +318,11 @@ async def _default_launcher(
         argv.extend(
             ["--mcp-config", str(ctx.mcp_config_path), "--strict-mcp-config"]
         )
-    argv.extend(["-p", ctx.prompt])
+    if sysprompt_path is not None:
+        argv.extend(["--append-system-prompt-file", str(sysprompt_path)])
+        argv.extend(["-p", _supervisor_kickoff(ctx.role)])
+    else:
+        argv.extend(["-p", ctx.prompt])
     proc = await asyncio.create_subprocess_exec(
         *argv,
         cwd=str(ctx.working_directory),

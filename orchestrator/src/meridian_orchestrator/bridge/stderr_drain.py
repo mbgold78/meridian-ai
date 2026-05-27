@@ -96,6 +96,45 @@ def stderr_log_path(dispatches_root: Path, dispatch_id: str) -> Path | None:
     return parent / "stderr.log"
 
 
+def system_prompt_file_path(
+    dispatches_root: Path, dispatch_id: str
+) -> Path | None:
+    """Compute and create the per-dispatch system_prompt.md file path.
+
+    Operator Fix Window 2026-05-27 (supervisor-spawn fix). Mirrors
+    :func:`stderr_log_path` and :func:`stdout_log_path` — same best-effort
+    semantics (None return on :class:`OSError` → launcher falls back to
+    the legacy inline ``-p <prompt>`` shape); same ``<dispatches_root>/
+    <dispatch_id>/`` layout.
+
+    Holds the supervisor's ``system_prompt`` body so the subprocess can
+    consume it via ``claude --append-system-prompt-file <path>`` instead
+    of passing the 30-37KB string as an argv element (Windows
+    CreateProcess ``WinError 206`` for argv >~32KB). Retained past
+    dispatch terminal state — mirrors ``mcp_config.json`` retention
+    convention (cf. :mod:`bridge.mcp_config`). No secrets in the
+    content: it's the agent's published yaml ``system_prompt`` field,
+    already plaintext at ``<data_dir>/config/agents/<role>.yaml``.
+
+    Sharing the parent directory with stderr.log + stdout.log +
+    mcp_config.json means a single ``mkdir(parents=True, exist_ok=True)``
+    per dispatch handles all four files; called multiple times this is
+    idempotent.
+    """
+    parent = dispatches_root / dispatch_id
+    try:
+        parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        logger.warning(
+            "dispatch.system_prompt_file_dir_create_failed",
+            dispatch_id=dispatch_id,
+            path=str(parent),
+            error=str(exc),
+        )
+        return None
+    return parent / "system_prompt.md"
+
+
 def stdout_log_path(dispatches_root: Path, dispatch_id: str) -> Path | None:
     """Compute and create the per-dispatch stdout log file path.
 
