@@ -116,6 +116,37 @@ class HaltedSupervisorError(OrchestratorError):
     code = "SUPERVISOR_HALTED"
 
 
+class SupervisorSpawnError(OrchestratorError):
+    """Raised by :func:`_default_launcher` when it cannot compose a safe
+    argv for the subprocess.
+
+    Specifically: the per-dispatch ``system_prompt.md`` could not be
+    written (mkdir / write ``OSError``) AND the supervisor playbook is too
+    large to pass inline via ``-p`` without tripping the Windows
+    CreateProcess argv limit (``WinError 206``). Rather than silently
+    falling back to a known-crashing inline argv — the exact failure mode
+    the file-and-pointer fix exists to prevent — we surface a typed,
+    actionable error so daemon startup fails loudly with a message that
+    names the IO failure instead of an opaque ``FileNotFoundError:
+    [WinError 206]``.
+    """
+
+    code = "SUPERVISOR_SPAWN_FAILED"
+
+
+# Operator Fix Window 2026-05-27. Largest ``ctx.prompt`` we will pass
+# inline via ``-p`` when the file-and-pointer path is unavailable
+# (``dispatches_root`` unset — test fixtures — or the system_prompt.md
+# write failed). Chosen well below the Windows CreateProcess command-line
+# limit (~32767 chars) to leave headroom for the rest of argv + the
+# subprocess module's list2cmdline quoting. Real supervisor playbooks are
+# 28-37 KB and always take the file path; test-fixture prompts are a few
+# hundred bytes. A prompt above this bound with no writable file path is a
+# hard spawn failure (:class:`SupervisorSpawnError`) — see
+# :func:`_default_launcher`.
+_MAX_INLINE_PROMPT_BYTES = 8192
+
+
 def _now_iso() -> str:
     """Tz-aware ISO 8601 with microsecond precision.
 
@@ -296,21 +327,28 @@ async def _default_launcher(
     # - `--effort <level>`: low/medium/high/xhigh/max
     # - `--allowedTools <tools...>`: comma- or space-separated tool names
     # - `--mcp-config <configs...>` + `--strict-mcp-config`: hermetic MCP
-    # - `--append-system-prompt-file <path>`: appends file contents to
+    # - `--append-system-prompt-file=<path>`: appends file contents to
     #   the default Claude Code system prompt (does NOT replace it; tool
     #   set + MCP behavior preserved). Verified live 2026-05-27 by
     #   running ``claude --append-system-prompt-file=<file> -p <q>`` and
     #   observing both the appended sentinel AND Claude Code's default
-    #   tooling (Read/Edit/Grep) in the response.
+    #   tooling (Read/Edit/Grep) in the response. We emit the single-token
+    #   ``--append-system-prompt-file=<path>`` form — byte-identical to the
+    #   live-verified invocation — rather than the two-token
+    #   ``--append-system-prompt-file <path>`` shape, so what ships matches
+    #   what was probed (no parse-form asymmetry).
     #
     # Argv shape (post-fix): ("claude", "--effort", <level>,
     # ["--allowedTools", <space-joined>],
     # ["--mcp-config", <path>, "--strict-mcp-config"],
-    # ["--append-system-prompt-file", <sysprompt_path>], "-p", <kickoff>).
-    # Legacy fallback when sysprompt_path is None: ("claude", "--effort",
+    # ["--append-system-prompt-file=<sysprompt_path>"], "-p", <kickoff>).
+    # Inline path when sysprompt_path is None: ("claude", "--effort",
     # ..., "-p", <ctx.prompt>) — identical to pre-fix shape so test
     # fixtures injecting custom launchers OR running without
-    # dispatches_root don't see argv churn.
+    # dispatches_root don't see argv churn. Guarded by
+    # _MAX_INLINE_PROMPT_BYTES: a large prompt with no writable file path
+    # raises SupervisorSpawnError rather than re-creating the WinError 206
+    # condition this fix exists to prevent.
     argv: list[str] = ["claude", "--effort", ctx.effort]
     if ctx.allowed_tools:
         argv.extend(["--allowedTools", " ".join(ctx.allowed_tools)])
@@ -319,9 +357,25 @@ async def _default_launcher(
             ["--mcp-config", str(ctx.mcp_config_path), "--strict-mcp-config"]
         )
     if sysprompt_path is not None:
-        argv.extend(["--append-system-prompt-file", str(sysprompt_path)])
+        argv.append(f"--append-system-prompt-file={sysprompt_path}")
         argv.extend(["-p", _supervisor_kickoff(ctx.role)])
     else:
+        # No writable file path (dispatches_root unset, or mkdir/write
+        # failed above). Inline is only safe for small prompts — a 28-37 KB
+        # supervisor playbook passed inline is precisely the WinError 206
+        # crash this fix removes. Fail loudly with an actionable typed
+        # error instead of composing an argv that CreateProcess will reject
+        # with an opaque FileNotFoundError.
+        prompt_bytes = len(ctx.prompt.encode("utf-8"))
+        if prompt_bytes > _MAX_INLINE_PROMPT_BYTES:
+            raise SupervisorSpawnError(
+                f"cannot launch {ctx.role} supervisor (dispatch "
+                f"{ctx.dispatch_id}): system_prompt.md could not be written "
+                f"and the {prompt_bytes}-byte playbook is too large to pass "
+                f"inline via -p (Windows CreateProcess argv limit ~32 KB, "
+                f"WinError 206). Check disk space / permissions for the "
+                f"dispatches directory under dispatches_root."
+            )
         argv.extend(["-p", ctx.prompt])
     proc = await asyncio.create_subprocess_exec(
         *argv,

@@ -108,7 +108,7 @@ def system_prompt_file_path(
     <dispatch_id>/`` layout.
 
     Holds the supervisor's ``system_prompt`` body so the subprocess can
-    consume it via ``claude --append-system-prompt-file <path>`` instead
+    consume it via ``claude --append-system-prompt-file=<path>`` instead
     of passing the 30-37KB string as an argv element (Windows
     CreateProcess ``WinError 206`` for argv >~32KB). Retained past
     dispatch terminal state — mirrors ``mcp_config.json`` retention

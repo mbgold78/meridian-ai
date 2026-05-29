@@ -132,10 +132,14 @@ async def test_launcher_argv_uses_append_system_prompt_file_flag(
     await _default_launcher(ctx)
     assert len(captured_subprocess_args) == 1
     argv = list(captured_subprocess_args[0])
-    # Flag present with the correct path.
-    assert "--append-system-prompt-file" in argv
-    flag_idx = argv.index("--append-system-prompt-file")
-    path_str = argv[flag_idx + 1]
+    # Flag present with the correct path. We emit the single-token
+    # ``--append-system-prompt-file=<path>`` form (matches the live-verified
+    # invocation), so split on the first ``=`` to recover the path.
+    sysprompt_tokens = [
+        a for a in argv if a.startswith("--append-system-prompt-file=")
+    ]
+    assert len(sysprompt_tokens) == 1
+    path_str = sysprompt_tokens[0].split("=", 1)[1]
     assert path_str.endswith("system_prompt.md")
     assert "dispatch-shape-test" in path_str
     # -p argument is the small kickoff, not the playbook.
@@ -202,7 +206,7 @@ async def test_launcher_falls_back_to_inline_prompt_when_dispatches_root_none(
     ctx = _make_ctx(prompt=legacy_prompt, dispatches_root=None)
     await _default_launcher(ctx)
     argv = list(captured_subprocess_args[0])
-    assert "--append-system-prompt-file" not in argv
+    assert not any(a.startswith("--append-system-prompt-file") for a in argv)
     # -p still carries the literal prompt
     assert legacy_prompt in argv
 
@@ -230,8 +234,42 @@ async def test_launcher_falls_back_when_dir_create_fails(
     )
     await _default_launcher(ctx)
     argv = list(captured_subprocess_args[0])
-    assert "--append-system-prompt-file" not in argv
+    assert not any(a.startswith("--append-system-prompt-file") for a in argv)
     assert inline in argv
+
+
+async def test_launcher_raises_when_file_unavailable_and_prompt_too_large(
+    captured_subprocess_args: list[tuple[Any, ...]],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """If the system_prompt.md path is unavailable (mkdir/write failure)
+    AND the playbook is too large to pass inline, the launcher MUST raise
+    rather than silently composing a ``-p <30+ KB>`` argv — that argv is
+    the exact WinError 206 condition this fix removes. Failing loudly with
+    a typed, actionable error beats an opaque CreateProcess crash gated
+    behind a rare IO failure (review finding 2026-05-28)."""
+    from meridian_orchestrator.bridge.supervisor_base import (
+        SupervisorSpawnError,
+    )
+
+    # Simulate the helper's OSError → None path so the launcher reaches the
+    # inline branch with no writable file.
+    monkeypatch.setattr(
+        "meridian_orchestrator.bridge.supervisor_base.system_prompt_file_path",
+        lambda *a, **k: None,
+    )
+    # A real-size playbook: 30 KB > _MAX_INLINE_PROMPT_BYTES (8 KB).
+    huge_prompt = "P" * (30 * 1024)
+    ctx = _make_ctx(
+        prompt=huge_prompt,
+        dispatches_root=tmp_path / "dispatches",
+        dispatch_id="dispatch-too-large",
+    )
+    with pytest.raises(SupervisorSpawnError, match="WinError 206"):
+        await _default_launcher(ctx)
+    # No subprocess was ever spawned.
+    assert captured_subprocess_args == []
 
 
 # --- Stderr-drain path helper -----------------------------------------

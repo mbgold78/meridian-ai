@@ -20,7 +20,7 @@ import asyncio
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 import pytest_asyncio
@@ -76,6 +76,12 @@ def captured_subprocess_args(
         proc.pid = 9999
         proc.returncode = None
         proc.stderr = None
+        # terminate()/kill() are sync on the SupervisorSubprocessHandle
+        # Protocol; without these overrides AsyncMock auto-creates async
+        # children whose coroutines are never awaited in shutdown() →
+        # noisy RuntimeWarning. wait() stays async (AsyncMock default).
+        proc.terminate = Mock()
+        proc.kill = Mock()
         return proc
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create)
@@ -146,9 +152,12 @@ async def test_pm_supervisor_start_with_real_37k_prompt_keeps_argv_small(
             f"argv total {total} bytes — regression vs Windows 32KB limit"
         )
 
-        # 2. --append-system-prompt-file <path> present.
-        assert "--append-system-prompt-file" in argv
-        path_str = argv[argv.index("--append-system-prompt-file") + 1]
+        # 2. --append-system-prompt-file=<path> present (single-token form).
+        sysprompt_tokens = [
+            a for a in argv if a.startswith("--append-system-prompt-file=")
+        ]
+        assert len(sysprompt_tokens) == 1
+        path_str = sysprompt_tokens[0].split("=", 1)[1]
         sysprompt_path = Path(path_str)
         assert sysprompt_path.name == "system_prompt.md"
         assert sysprompt_path.parent.parent == dispatches_root
@@ -212,8 +221,11 @@ async def test_engineer_supervisor_start_with_real_prompt_keeps_argv_small(
         argv = list(captured_subprocess_args[0])
         total = sum(len(str(a)) for a in argv)
         assert total < 4096, f"argv total {total} bytes"
-        assert "--append-system-prompt-file" in argv
-        path_str = argv[argv.index("--append-system-prompt-file") + 1]
+        sysprompt_tokens = [
+            a for a in argv if a.startswith("--append-system-prompt-file=")
+        ]
+        assert len(sysprompt_tokens) == 1
+        path_str = sysprompt_tokens[0].split("=", 1)[1]
         assert Path(path_str).read_text(encoding="utf-8") == expected_prompt
         assert "Meridian Engineer supervisor" in argv[argv.index("-p") + 1]
     finally:
