@@ -338,6 +338,27 @@ class Settings(BaseSettings):
     # 2026-05-26 spec § Action behavior #3.
     autonomy_liveness_escalation_ticks: int = Field(default=2, ge=1, le=20)
 
+    # Operator Fix Window 2026-05-28 spam guards. The watchdog historically
+    # created ~2015 pending priority-0 PM tasks because PM-task creation had
+    # no cap. Two ceilings now bound it (the dedupe-by-violation_key layer
+    # already prevents duplicate tasks for the SAME live violation):
+    #
+    # Per-tick cap: at most this many NEW PM tasks created in a single tick.
+    # Guards against an O(N) explosion if a malformed rule detects many
+    # fresh violations at once. When hit, a structured WARNING audit fires.
+    autonomy_liveness_max_pm_tasks_per_tick: int = Field(
+        default=10, ge=1, le=200
+    )
+
+    # Outstanding cap: the system-wide ceiling on OPEN (pending/claimed/
+    # in_progress) watchdog-created PM tasks. Once this many are
+    # outstanding, the watchdog stops creating new ones (structured WARNING)
+    # until PM drains the backlog. This is the hard floor against the
+    # historical spam even across many distinct violation_keys.
+    autonomy_liveness_max_outstanding_pm_tasks: int = Field(
+        default=50, ge=1, le=1000
+    )
+
     @model_validator(mode="after")
     def _require_substrate_working_directory_when_supervisor_enabled(
         self,

@@ -446,6 +446,16 @@ async def _run_lifespan_body(
                 ),
             ),
             escalation_ticks=settings.autonomy_liveness_escalation_ticks,
+            max_pm_tasks_per_tick=(
+                settings.autonomy_liveness_max_pm_tasks_per_tick
+            ),
+            max_outstanding_pm_tasks=(
+                settings.autonomy_liveness_max_outstanding_pm_tasks
+            ),
+            # Best-effort CP autonomy-intent read gates rules by mode
+            # (suppress Frozen/Manual). Same URL the event emitter mirrors
+            # to; None disables the read (fail open to unconditional checks).
+            control_plane_url=settings.control_plane_url,
         )
         watchdog_shutdown = asyncio.Event()
         watchdog_task = asyncio.create_task(

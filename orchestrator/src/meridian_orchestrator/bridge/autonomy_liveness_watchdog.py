@@ -29,9 +29,29 @@ Action shape on detection:
 
 1. Write audit row ``liveness.violation_detected`` with project/canonical/
    task/dispatch ids, violation type, observed state, recommended action.
-2. Create or update a priority-0 PM task (``agent_role='pm'``,
+2. Create a priority-0 PM task (``agent_role='pm'``,
    ``task_type='monitoring'``, ``submitted_by='system:liveness_watchdog'``).
-   Deduped by ``violation_key`` so the same violation doesn't spam.
+   Two spam guards bound this (Operator Fix Window 2026-05-28):
+
+   * **Dedupe by violation_key.** A second task is never created while an
+     OPEN (pending/claimed/in_progress) watchdog task already exists for
+     the same ``violation_key`` (via the ``liveness_violations.pm_task_id``
+     back-link). A skip emits a structured ``liveness.pm_task_creation_skipped``
+     audit naming the existing task. This is what fixes the historical
+     ~2015-task spam.
+   * **Caps.** A per-tick cap (default 10) and a system-wide outstanding
+     cap (default 50) stop runaway creation; hitting either emits a
+     structured WARNING audit so operators see the floor.
+
+Autonomy-mode gating (Operator Fix Window 2026-05-28): before persisting
+detected violations, the watchdog best-effort reads each project's
+autonomy MODE + callback arming from the Control Plane
+(``GET /api/daemon/intent``, cached, failures swallowed) and SUPPRESSES
+all rules for ``Frozen``/``Manual`` projects — autonomous work is
+intentionally not running there, so a "stalled" task is not a violation.
+The read fails open: if the CP is unconfigured/down, every rule runs
+unconditionally (the conservative pre-existing behavior). The watchdog
+stays independent of the CP for its core liveness decision.
 3. If unhandled across ``escalation_ticks`` ticks (default 2): emit
    ``liveness.violation_escalated`` audit + a ``HUMAN_ACTION_REQUIRED``
    audit row.
@@ -61,6 +81,11 @@ from typing import Any
 import structlog
 
 from meridian_orchestrator.audit.logger import write_audit
+from meridian_orchestrator.bridge.autonomy_intent import (
+    DEFAULT_CACHE_TTL_SECONDS,
+    AutonomyIntentSnapshot,
+    fetch_autonomy_intent,
+)
 from meridian_orchestrator.storage.interface import Storage
 
 logger = structlog.get_logger(__name__)
@@ -71,10 +96,27 @@ DETECT_AUDIT_ACTION: str = "liveness.violation_detected"
 ESCALATE_AUDIT_ACTION: str = "liveness.violation_escalated"
 RESOLVE_AUDIT_ACTION: str = "liveness.violation_resolved"
 HUMAN_ACTION_REQUIRED_ACTION: str = "liveness.human_action_required"
+PM_TASK_SKIPPED_ACTION: str = "liveness.pm_task_creation_skipped"
 
 WATCHDOG_ACTOR: str = "system:liveness_watchdog"
 
 DEFAULT_DRAIN_TIMEOUT_SECONDS: int = 5
+
+#: Hard cap on the number of NEW priority-0 PM tasks the watchdog will
+#: create in a single tick. Guards against an O(N) explosion if a
+#: malformed rule (or rule interaction) detects many fresh violations at
+#: once. When the cap is hit, the watchdog emits a structured WARNING
+#: audit (``task_creation_capped``) so operators see the floor.
+DEFAULT_MAX_PM_TASKS_PER_TICK: int = 10
+
+#: Hard cap on the total number of OUTSTANDING (pending, unresolved-by-PM)
+#: watchdog-created PM tasks across all ticks. The dedupe-by-violation_key
+#: layer already prevents duplicate tasks for the SAME violation; this is
+#: the system-wide ceiling that prevents the historical ~2015-task spam
+#: even if many distinct violation_keys fire. Once this many watchdog PM
+#: tasks are pending, the watchdog stops creating new ones and emits a
+#: structured WARNING until PM drains the backlog.
+DEFAULT_MAX_OUTSTANDING_PM_TASKS: int = 50
 
 # Terminal task statuses for Rule C parent-follow-up detection.
 _TERMINAL_TASK_STATUSES = ("completed", "failed", "declined", "cancelled")
@@ -176,12 +218,24 @@ class AutonomyLivenessWatchdog:
         thresholds: WatchdogThresholds | None = None,
         escalation_ticks: int = 2,
         drain_timeout_seconds: int = DEFAULT_DRAIN_TIMEOUT_SECONDS,
+        max_pm_tasks_per_tick: int = DEFAULT_MAX_PM_TASKS_PER_TICK,
+        max_outstanding_pm_tasks: int = DEFAULT_MAX_OUTSTANDING_PM_TASKS,
+        control_plane_url: str | None = None,
+        intent_cache_ttl_seconds: float = DEFAULT_CACHE_TTL_SECONDS,
     ) -> None:
         self._storage = storage
         self._interval_seconds = float(interval_seconds)
         self._thresholds = thresholds or WatchdogThresholds()
         self._escalation_ticks = max(1, int(escalation_ticks))
         self._drain_timeout_seconds = drain_timeout_seconds
+        self._max_pm_tasks_per_tick = max(1, int(max_pm_tasks_per_tick))
+        self._max_outstanding_pm_tasks = max(1, int(max_outstanding_pm_tasks))
+        self._control_plane_url = control_plane_url
+        self._intent_cache_ttl_seconds = float(intent_cache_ttl_seconds)
+        # Cached CP autonomy-intent snapshot + its monotonic fetch time.
+        # ``None`` means "no usable snapshot" → fail open (check all rules).
+        self._intent_snapshot: AutonomyIntentSnapshot | None = None
+        self._intent_fetched_at: float | None = None
 
     @property
     def interval_seconds(self) -> float:
@@ -241,6 +295,12 @@ class AutonomyLivenessWatchdog:
         the heartbeat audit."""
         perf_start = time.perf_counter()
         now = _now_utc()
+
+        # Best-effort CP autonomy-intent read (cached). Used to SUPPRESS
+        # rules for Frozen/Manual projects. Fail-open: a None snapshot
+        # leaves every project checkable.
+        intent = await self._get_autonomy_intent()
+
         detected: list[DetectedViolation] = []
         for rule in (
             self._detect_pending_stale,
@@ -259,19 +319,66 @@ class AutonomyLivenessWatchdog:
                     error_type=type(exc).__name__,
                 )
 
+        # Honor CP autonomy mode: drop violations for projects the CP
+        # reports as Frozen/Manual (autonomous work intentionally not
+        # running there, so a "stalled"/"unsurfaced" task is not a real
+        # violation). Fail open when no snapshot / project unknown.
+        suppressed_count = 0
+        if intent is not None:
+            kept: list[DetectedViolation] = []
+            for v in detected:
+                if intent.is_suppressed(v.project_id):
+                    suppressed_count += 1
+                    continue
+                kept.append(v)
+            if suppressed_count:
+                logger.info(
+                    "autonomy_liveness_watchdog.rules_suppressed_by_mode",
+                    suppressed_count=suppressed_count,
+                )
+            detected = kept
+
         seen_keys = {v.violation_key for v in detected}
 
         # Persist / update detected violations.
         new_count = 0
         updated_count = 0
+        pm_tasks_created = 0
+        pm_tasks_capped = 0
         for v in detected:
             outcome = await self._persist_violation(v, now=now)
             if outcome == "new":
                 new_count += 1
                 await self._emit_detect_audit(v)
-                await self._create_pm_task(v)
             elif outcome == "updated":
                 updated_count += 1
+
+            # PM-task creation is gated on the dedupe-by-violation_key check
+            # inside _create_pm_task, NOT on the persist outcome. This is
+            # what makes the spam fix robust: a violation that recurs after
+            # PM closed its task (persist outcome 'updated') still gets a
+            # FRESH task, while a continuously-live violation that already
+            # has an OPEN task is deduped every tick. We skip the call only
+            # when the row already carries an open back-link (cheap fast
+            # path) to avoid a redundant query per active violation.
+            if await self._violation_has_open_pm_task(v.violation_key):
+                continue
+            # Per-tick cap: never create more than max_pm_tasks_per_tick
+            # fresh PM tasks in one tick (O(N)-explosion guard).
+            if pm_tasks_created >= self._max_pm_tasks_per_tick:
+                pm_tasks_capped += 1
+                continue
+            created = await self._create_pm_task(v)
+            if created:
+                pm_tasks_created += 1
+
+        if pm_tasks_capped:
+            await self._emit_cap_audit(
+                reason="per_tick",
+                count_capped=pm_tasks_capped,
+                detected_count=pm_tasks_created + pm_tasks_capped,
+                limit=self._max_pm_tasks_per_tick,
+            )
 
         # Resolve violations no longer present.
         resolved_count = await self._resolve_absent_violations(seen_keys, now=now)
@@ -286,6 +393,9 @@ class AutonomyLivenessWatchdog:
             "updated": updated_count,
             "resolved": resolved_count,
             "escalated": escalated_count,
+            "suppressed_by_mode": suppressed_count,
+            "pm_tasks_created": pm_tasks_created,
+            "pm_tasks_capped": pm_tasks_capped,
             "scan_duration_ms": scan_duration_ms,
             "ticked_at_iso": now.isoformat(timespec="seconds"),
         }
@@ -304,6 +414,47 @@ class AutonomyLivenessWatchdog:
                 error_type=type(exc).__name__,
             )
         return summary
+
+    # ------------------------------------------------------------------
+    # CP autonomy-intent (mode gating)
+    # ------------------------------------------------------------------
+
+    async def _get_autonomy_intent(self) -> AutonomyIntentSnapshot | None:
+        """Return the CP autonomy-intent snapshot, fetching if the cache
+        is cold or stale.
+
+        Best-effort: returns ``None`` when the CP is unconfigured or the
+        fetch fails, so the caller fails open (runs every rule). A stale
+        cached snapshot is kept across a failed refresh — better to honor
+        a slightly-old Frozen/Manual signal than to revert to spamming.
+        """
+        if not self._control_plane_url:
+            return None
+        nowm = time.monotonic()
+        if (
+            self._intent_snapshot is not None
+            and self._intent_fetched_at is not None
+            and (nowm - self._intent_fetched_at) < self._intent_cache_ttl_seconds
+        ):
+            return self._intent_snapshot
+        snapshot = await fetch_autonomy_intent(
+            control_plane_url=self._control_plane_url,
+        )
+        if snapshot is not None:
+            self._intent_snapshot = snapshot
+            self._intent_fetched_at = nowm
+            return snapshot
+        # Refresh failed. Keep any prior snapshot (honor last-known
+        # Frozen/Manual signals) but don't reset its age — we want a
+        # retry on the next tick rather than holding a dead snapshot
+        # forever, so only return it within the TTL window.
+        if (
+            self._intent_snapshot is not None
+            and self._intent_fetched_at is not None
+            and (nowm - self._intent_fetched_at) < self._intent_cache_ttl_seconds
+        ):
+            return self._intent_snapshot
+        return None
 
     # ------------------------------------------------------------------
     # Detection rules
@@ -943,14 +1094,67 @@ class AutonomyLivenessWatchdog:
                 error_type=type(exc).__name__,
             )
 
-    async def _create_pm_task(self, v: DetectedViolation) -> None:
+    async def _create_pm_task(self, v: DetectedViolation) -> bool:
         """Insert a priority-0 PM monitoring task for this violation.
 
         Daemon-internal write — bypasses MCP submit_task wrapper (which
         gates priority to 1..5). The watchdog's ``submitted_by =
         'system:liveness_watchdog'`` literal distinguishes these rows
         from PM-authored tasks.
+
+        Two spam guards run BEFORE the INSERT:
+
+        * **Dedupe by violation_key.** If an OPEN (pending / claimed /
+          in_progress) watchdog PM task already exists for this
+          ``violation_key`` (via the ``liveness_violations.pm_task_id``
+          back-link), skip — never create a second task for the same
+          live violation. A previously-created task that PM already
+          closed (terminal status) does NOT block a fresh task when the
+          violation genuinely recurs.
+        * **Outstanding cap.** If the count of OPEN watchdog PM tasks
+          system-wide is already at ``max_outstanding_pm_tasks``, skip —
+          this is the ceiling that prevents the historical ~2015-task
+          spam even across many distinct violation_keys.
+
+        Returns ``True`` when a task was actually inserted, ``False`` when
+        skipped (deduped, capped, or no resolvable project). The caller
+        uses the boolean to maintain its per-tick creation count.
         """
+        # Guard 1: dedupe by violation_key against an OPEN watchdog task.
+        existing_pm_task_id = await self._open_pm_task_for_violation(
+            v.violation_key
+        )
+        if existing_pm_task_id is not None:
+            logger.debug(
+                "autonomy_liveness_watchdog.pm_task_already_open",
+                violation_key=v.violation_key,
+                existing_pm_task_id=existing_pm_task_id,
+            )
+            await self._emit_skip_audit(
+                v,
+                reason="duplicate",
+                existing_pm_task_id=existing_pm_task_id,
+            )
+            return False
+
+        # Guard 2: system-wide outstanding cap.
+        outstanding = await self._outstanding_pm_task_count()
+        if outstanding >= self._max_outstanding_pm_tasks:
+            logger.warning(
+                "autonomy_liveness_watchdog.pm_task_outstanding_cap",
+                violation_key=v.violation_key,
+                outstanding=outstanding,
+                limit=self._max_outstanding_pm_tasks,
+            )
+            await self._emit_cap_audit(
+                reason="outstanding",
+                count_capped=1,
+                detected_count=outstanding,
+                limit=self._max_outstanding_pm_tasks,
+                violation_key=v.violation_key,
+            )
+            return False
+
         # Resolve company_id + project_id for the new task.
         company_id, project_id = await self._resolve_company_project(
             project_id=v.project_id
@@ -960,7 +1164,7 @@ class AutonomyLivenessWatchdog:
                 "autonomy_liveness_watchdog.pm_task_skipped_no_project",
                 violation_key=v.violation_key,
             )
-            return
+            return False
         body = self._compose_pm_task_body(v)
         task_id = uuid.uuid4().hex
         await self._storage.execute(
@@ -984,6 +1188,128 @@ class AutonomyLivenessWatchdog:
             "WHERE violation_key = ?",
             (task_id, v.violation_key),
         )
+        return True
+
+    async def _open_pm_task_for_violation(
+        self, violation_key: str
+    ) -> str | None:
+        """Return the id of an OPEN watchdog PM task for ``violation_key``,
+        or ``None`` if none exists.
+
+        Uses the ``liveness_violations.pm_task_id`` back-link joined to
+        ``tasks`` filtered to open statuses + the watchdog ``submitted_by``
+        literal. A task that PM already moved to a terminal status does
+        not count — the violation can recur after being handled."""
+        row = await self._storage.fetch_one(
+            "SELECT t.id AS task_id FROM liveness_violations lv "
+            "JOIN tasks t ON t.id = lv.pm_task_id "
+            "WHERE lv.violation_key = ? AND lv.pm_task_id IS NOT NULL "
+            "AND t.submitted_by = ? "
+            "AND t.status IN ('pending', 'claimed', 'in_progress') "
+            "LIMIT 1",
+            (violation_key, WATCHDOG_ACTOR),
+        )
+        if row is None or row["task_id"] is None:
+            return None
+        return str(row["task_id"])
+
+    async def _violation_has_open_pm_task(self, violation_key: str) -> bool:
+        """Cheap boolean wrapper over :meth:`_open_pm_task_for_violation`,
+        used by the tick loop's fast-path dedupe gate."""
+        return (await self._open_pm_task_for_violation(violation_key)) is not None
+
+    async def _outstanding_pm_task_count(self) -> int:
+        """Count OPEN (pending/claimed/in_progress) watchdog-created PM
+        tasks system-wide. Drives the outstanding cap."""
+        row = await self._storage.fetch_one(
+            "SELECT COUNT(*) AS n FROM tasks "
+            "WHERE submitted_by = ? AND agent_role = 'pm' "
+            "AND status IN ('pending', 'claimed', 'in_progress')",
+            (WATCHDOG_ACTOR,),
+        )
+        if row is None or row["n"] is None:
+            return 0
+        return int(row["n"])
+
+    async def _emit_skip_audit(
+        self,
+        v: DetectedViolation,
+        *,
+        reason: str,
+        existing_pm_task_id: str | None = None,
+    ) -> None:
+        """Structured audit when a PM-task creation is deduped/skipped.
+
+        Lets operators debug spam suppression without reading source: the
+        row names the violation_key, the reason, and (for dedupe) the
+        existing pm_task_id that blocked a second task."""
+        details: dict[str, Any] = {
+            "reason": reason,
+            "violation_key": v.violation_key,
+            "violation_type": v.violation_type,
+            "project_id": v.project_id,
+        }
+        if existing_pm_task_id is not None:
+            details["existing_pm_task_id"] = existing_pm_task_id
+        try:
+            await write_audit(
+                self._storage,
+                actor=WATCHDOG_ACTOR,
+                action=PM_TASK_SKIPPED_ACTION,
+                target=v.task_id or v.dispatch_id,
+                details=details,
+            )
+        except Exception as exc:
+            logger.error(
+                "autonomy_liveness_watchdog.skip_audit_failed",
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+
+    async def _emit_cap_audit(
+        self,
+        *,
+        reason: str,
+        count_capped: int,
+        detected_count: int,
+        limit: int,
+        violation_key: str | None = None,
+    ) -> None:
+        """Structured WARNING audit when PM-task creation is capped.
+
+        ``reason`` is ``per_tick`` (hit the per-tick ceiling) or
+        ``outstanding`` (hit the system-wide outstanding ceiling). The
+        floor is surfaced so operators see when the watchdog stopped
+        creating tasks and why."""
+        logger.warning(
+            "autonomy_liveness_watchdog.task_creation_capped",
+            reason=reason,
+            count_capped=count_capped,
+            detected_count=detected_count,
+            limit=limit,
+        )
+        details: dict[str, Any] = {
+            "reason": reason,
+            "count_capped": count_capped,
+            "detected_count": detected_count,
+            "limit": limit,
+        }
+        if violation_key is not None:
+            details["violation_key"] = violation_key
+        try:
+            await write_audit(
+                self._storage,
+                actor=WATCHDOG_ACTOR,
+                action=PM_TASK_SKIPPED_ACTION,
+                target=None,
+                details=details,
+            )
+        except Exception as exc:
+            logger.error(
+                "autonomy_liveness_watchdog.cap_audit_failed",
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
 
     @staticmethod
     def _compose_pm_task_body(v: DetectedViolation) -> str:
@@ -1087,9 +1413,12 @@ async def fetch_active_violations(storage: Storage) -> list[dict[str, Any]]:
 
 __all__ = [
     "DEFAULT_DRAIN_TIMEOUT_SECONDS",
+    "DEFAULT_MAX_OUTSTANDING_PM_TASKS",
+    "DEFAULT_MAX_PM_TASKS_PER_TICK",
     "DETECT_AUDIT_ACTION",
     "ESCALATE_AUDIT_ACTION",
     "HUMAN_ACTION_REQUIRED_ACTION",
+    "PM_TASK_SKIPPED_ACTION",
     "RESOLVE_AUDIT_ACTION",
     "TICK_AUDIT_ACTION",
     "WATCHDOG_ACTOR",
