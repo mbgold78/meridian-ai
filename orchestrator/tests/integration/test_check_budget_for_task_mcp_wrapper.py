@@ -216,7 +216,7 @@ async def test_pm_priority_3_returns_opus_via_role_default(
 
     assert getattr(result, "isError", False) is False
     out = _structured(result)
-    assert out["recommended_model"] == "claude-opus-4-7"
+    assert out["recommended_model"] == "claude-opus-4-8"
     assert out["recommended_bucket"] == "subscription_5h"
 
 

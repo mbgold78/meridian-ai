@@ -25,7 +25,7 @@ from meridian_orchestrator.bridge.timeouts import (
 def test_model_for_tier_resolves_three_phase_one_tiers() -> None:
     assert model_for_tier("haiku") == "claude-haiku-4-5"
     assert model_for_tier("sonnet") == "claude-sonnet-4-6"
-    assert model_for_tier("opus") == "claude-opus-4-7"
+    assert model_for_tier("opus") == "claude-opus-4-8"
 
 
 def test_model_for_tier_unknown_tier_raises() -> None:
@@ -60,7 +60,7 @@ def test_calculate_timeout_sonnet_long_task() -> None:
 
 def test_calculate_timeout_opus_long_task() -> None:
     """Opus at 30 tps with 60000 estimated tokens → 2000s (above floor)."""
-    assert calculate_timeout(model="claude-opus-4-7", estimated_tokens=60_000) == 2000
+    assert calculate_timeout(model="claude-opus-4-8", estimated_tokens=60_000) == 2000
 
 
 # ----- calculate_timeout: floor enforcement -------------------------------

@@ -117,6 +117,12 @@ logger = structlog.get_logger(__name__)
 # narrow request.model to ModelString anyway since Pydantic accepts
 # arbitrary strings at the API boundary.
 MODEL_PRICING: dict[str, tuple[float, float]] = {
+    # Opus 4.8 is the current opus-tier routing target (2026-05-29 cutover
+    # from 4.7). Same published rate as 4.7. ``claude-opus-4-7`` is RETAINED
+    # below so cost lookups for historical ``api_usage`` rows recorded under
+    # the prior model id still resolve (the table is a price reference, not a
+    # routing allowlist — routing targets live in ``_TIER_HIERARCHY``).
+    "claude-opus-4-8": (15.00, 75.00),
     "claude-opus-4-7": (15.00, 75.00),
     "claude-sonnet-4-6": (3.00, 15.00),
     "claude-haiku-4-5": (1.00, 5.00),
@@ -1681,7 +1687,7 @@ OPUS_DOWNGRADE_UTILIZATION_THRESHOLD: float = 0.80
 _TIER_HIERARCHY: tuple[str, ...] = (
     "claude-haiku-4-5",
     "claude-sonnet-4-6",
-    "claude-opus-4-7",
+    "claude-opus-4-8",
 )
 
 
@@ -1781,7 +1787,7 @@ class CheckBudgetForTaskOutput(BaseModel):
     """
 
     recommended_model: Literal[
-        "claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-7"
+        "claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-8"
     ]
     recommended_bucket: Literal["subscription_5h", "api_key_overflow"]
     routing_factors: list[str]

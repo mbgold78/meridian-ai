@@ -154,7 +154,7 @@ def test_tier_hierarchy_orders_cheapest_to_capable() -> None:
     assert _TIER_HIERARCHY == (
         "claude-haiku-4-5",
         "claude-sonnet-4-6",
-        "claude-opus-4-7",
+        "claude-opus-4-8",
     )
 
 
@@ -195,7 +195,7 @@ def test_routing_pm_priority_3_normal_pace_returns_opus() -> None:
         caller_role="pm",
         now=_NOW,
     )
-    assert out.recommended_model == "claude-opus-4-7"
+    assert out.recommended_model == "claude-opus-4-8"
     assert "per_role_default_pm" in out.routing_factors
 
 
@@ -208,7 +208,7 @@ def test_routing_engineer_priority_1_upgrades_to_opus() -> None:
         caller_role="engineer",
         now=_NOW,
     )
-    assert out.recommended_model == "claude-opus-4-7"
+    assert out.recommended_model == "claude-opus-4-8"
     assert "priority_1_upgrade_tier" in out.routing_factors
 
 
@@ -235,7 +235,7 @@ def test_routing_pm_priority_1_clamps_at_opus_top() -> None:
         caller_role="pm",
         now=_NOW,
     )
-    assert out.recommended_model == "claude-opus-4-7"
+    assert out.recommended_model == "claude-opus-4-8"
     assert "tier_clamped_at_top" in out.routing_factors
 
 
@@ -294,7 +294,7 @@ def test_routing_pm_priority_1_preserves_opus_when_7d_opus_high() -> None:
         caller_role="pm",
         now=_NOW,
     )
-    assert out.recommended_model == "claude-opus-4-7"
+    assert out.recommended_model == "claude-opus-4-8"
     assert "opus_preserved_for_critical_priority" in out.routing_factors
     assert (
         "opus_downgraded_to_sonnet_due_to_7d_opus_high"
@@ -316,7 +316,7 @@ def test_routing_below_threshold_emits_below_threshold_factor() -> None:
         "subscription_7d_opus_at_67pct_below_threshold" in out.routing_factors
     )
     # Opus preserved (no downgrade).
-    assert out.recommended_model == "claude-opus-4-7"
+    assert out.recommended_model == "claude-opus-4-8"
 
 
 # ---------------------------------------------------------------------------
@@ -713,7 +713,7 @@ def test_routing_malformed_seven_day_opus_collapses_to_fallback() -> None:
     assert "fallback_per_role_defaults" in out.routing_factors
     # PM's role default; no Opus-downgrade check fires (we're in
     # fallback, not the per-role-defaults path that runs the check).
-    assert out.recommended_model == "claude-opus-4-7"
+    assert out.recommended_model == "claude-opus-4-8"
     assert not any(
         "subscription_7d_opus" in f for f in out.routing_factors
     )

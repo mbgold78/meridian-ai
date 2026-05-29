@@ -42,7 +42,7 @@ ModelTier = Literal["haiku", "sonnet", "opus"]
 ModelString = Literal[
     "claude-haiku-4-5",
     "claude-sonnet-4-6",
-    "claude-opus-4-7",
+    "claude-opus-4-8",
 ]
 
 # Tier → canonical model string. Source of truth for Phase-1 model
@@ -52,7 +52,7 @@ ModelString = Literal[
 MODEL_FOR_TIER: dict[ModelTier, ModelString] = {
     "haiku": "claude-haiku-4-5",
     "sonnet": "claude-sonnet-4-6",
-    "opus": "claude-opus-4-7",
+    "opus": "claude-opus-4-8",
 }
 
 # Tokens-per-second starting estimates per ``11-engineer-bridge.md:207-209``.
@@ -62,7 +62,7 @@ MODEL_FOR_TIER: dict[ModelTier, ModelString] = {
 MODEL_THROUGHPUT_TPS: dict[ModelString, int] = {
     "claude-haiku-4-5": 100,
     "claude-sonnet-4-6": 60,
-    "claude-opus-4-7": 30,
+    "claude-opus-4-8": 30,
 }
 
 # Floor for the timeout — five minutes covers startup, auth, and a

@@ -34,7 +34,15 @@ from meridian_orchestrator.tools.budget import (
 
 
 def test_compute_cost_usd_opus_pricing() -> None:
-    """Opus: $15/M input, $75/M output. 1M input + 1M output = $90."""
+    """Opus: $15/M input, $75/M output. 1M input + 1M output = $90.
+
+    Both the current opus-tier id (``claude-opus-4-8``) and the retained
+    legacy id (``claude-opus-4-7``, kept for historical api_usage cost
+    lookups) price identically.
+    """
+    assert (
+        _compute_cost_usd("claude-opus-4-8", 1_000_000, 1_000_000) == 90.00
+    )
     assert (
         _compute_cost_usd("claude-opus-4-7", 1_000_000, 1_000_000) == 90.00
     )
@@ -122,6 +130,7 @@ def test_known_models_have_test_coverage() -> None:
     test_compute_cost_usd_<model>_pricing function.
     """
     tested_models = {
+        "claude-opus-4-8",
         "claude-opus-4-7",
         "claude-sonnet-4-6",
         "claude-haiku-4-5",
