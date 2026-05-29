@@ -41,6 +41,20 @@ class Settings(BaseSettings):
     mcp_port: int = Field(default=8765, ge=1, le=65535)
     mcp_allow_non_loopback: bool = Field(default=False)
 
+    # Control Plane event mirror (bridge/control_plane_emitter.py). Base URL
+    # of the orchestrator-ui Control Plane backend the daemon mirrors audit
+    # events to via POST <url>/callbacks/orchestrator/events. When unset
+    # (default), the emitter is a hard no-op: zero HTTP requests, zero effect
+    # on the daemon lifecycle. Set to e.g. http://127.0.0.1:8000 to enable
+    # the operator dashboard feed. Emission is always best-effort and
+    # fire-and-forget — a slow or down Control Plane never blocks or fails
+    # the daemon (subscription-only / never-block build rule).
+    #
+    # Env var: MERIDIAN_ORCH_CONTROL_PLANE_URL (the MERIDIAN_ORCH_ prefix in
+    # model_config applies automatically — this is service config, not an
+    # external credential, so no validation_alias).
+    control_plane_url: str | None = Field(default=None)
+
     # M4c-engineer-supervisor: shipped dormant; flipped to default True at
     # M5-flag-flips commit 5 after the three-behavior verification checklist
     # closed (subscription_5h attribution, compaction-at-80%, heartbeat

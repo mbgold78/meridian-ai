@@ -20,6 +20,7 @@ import json
 import uuid
 from typing import Any
 
+from meridian_orchestrator.bridge.control_plane_emitter import emit_event
 from meridian_orchestrator.storage.interface import Storage
 
 
@@ -50,6 +51,13 @@ async def write_audit(
     or rollback. Callers that want best-effort audit despite a tool failure
     should wrap their state-changing block separately and emit the audit row
     on the failure path explicitly.
+
+    After the row is written, the event is best-effort mirrored to the
+    Control Plane ingest endpoint via
+    :func:`bridge.control_plane_emitter.emit_event` (fire-and-forget; no-op
+    when ``MERIDIAN_ORCH_CONTROL_PLANE_URL`` is unset). The mirror NEVER
+    blocks or raises into this function — it is a downstream observability
+    feed, not part of the load-bearing audit write.
     """
     audit_id = uuid.uuid4().hex
     details_json = json.dumps(details, sort_keys=True) if details is not None else None
@@ -66,4 +74,11 @@ async def write_audit(
             error_message,
         ),
     )
+
+    # Fire-and-forget mirror to the Control Plane. emit_event is fully
+    # defensive (swallows every failure, no-ops when the CP URL is unset or
+    # the action is not in the contract), so no try/except is needed here —
+    # but we never let it affect the return contract regardless.
+    emit_event(action=action, target=target, details=details)
+
     return audit_id
