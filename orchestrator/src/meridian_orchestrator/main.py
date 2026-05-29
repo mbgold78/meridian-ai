@@ -538,6 +538,12 @@ async def _run_lifespan_body(
                     cold_start_no_useful_activity_seconds=(
                         settings.dispatch_cold_start_no_useful_activity_seconds
                     ),
+                    # op-ultracode-daemon: the dispatcher reads each
+                    # project's ULTRACODE flag from the SAME CP intent seam
+                    # the liveness watchdog uses (GET /api/daemon/intent),
+                    # cached per-dispatch with no new background poller.
+                    # None disables the read (fail closed to ultracode-off).
+                    control_plane_url=settings.control_plane_url,
                 )
                 logger.info(
                     "canonical.provisioning_complete",

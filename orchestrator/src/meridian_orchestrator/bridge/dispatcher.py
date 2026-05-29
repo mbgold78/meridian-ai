@@ -42,6 +42,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+import time
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -53,6 +54,11 @@ import structlog
 
 from meridian_orchestrator.audit.logger import write_audit
 from meridian_orchestrator.auth import IssuedToken, TokenStore
+from meridian_orchestrator.bridge.autonomy_intent import (
+    DEFAULT_CACHE_TTL_SECONDS,
+    AutonomyIntentSnapshot,
+    fetch_autonomy_intent,
+)
 from meridian_orchestrator.bridge.canonical import (
     CanonicalClone,
     CanonicalDivergedError,
@@ -662,6 +668,17 @@ class DispatchLaunchContext:
     # :func:`bridge.mcp_config.write_mcp_config` to materialize the JSON
     # before launcher invocation, then threads the path here.
     mcp_config_path: Path | None = None
+    # op-ultracode-daemon: per-project ULTRACODE toggle. When True the
+    # launcher appends ``--settings '{"ultracode": true}'`` to the claude
+    # argv (a single CLI-flag + JSON-string pair). Resolved per-dispatch in
+    # ``dispatch()`` from the cached CP autonomy-intent snapshot keyed by
+    # the dispatch's canonical-clone name (``AutonomyIntentSnapshot.
+    # ultracode_for``), which fails CLOSED to False when the CP is
+    # unconfigured/unreachable or the canonical is unknown. ``False``
+    # default keeps the subscription-only argv unchanged for every existing
+    # caller and test fixture that constructs DispatchLaunchContext directly
+    # — the launcher omits the flag entirely unless this is explicitly True.
+    ultracode_enabled: bool = False
 
 
 class SubprocessHandle(Protocol):
@@ -794,6 +811,16 @@ async def _default_launcher(ctx: DispatchLaunchContext) -> SubprocessHandle:
     # `-p <prompt>` last (positional adjacency); flags compose freely
     # before the positional per `claude --help`.
     argv: list[str] = ["claude", "--effort", ctx.effort]
+    # op-ultracode-daemon: per-project ULTRACODE toggle. When the
+    # dispatch's project (resolved by canonical in dispatch()) has
+    # ultracode enabled per the CP autonomy-intent snapshot, append
+    # ``--settings '{"ultracode": true}'`` — two argv elements: the flag
+    # name and a compact JSON-object string (claude --settings accepts a
+    # JSON string or a file path). Placed after --effort and before -p,
+    # consistent with the other conditional flags. Omitted entirely when
+    # the flag is off (the subscription-only default argv is unchanged).
+    if ctx.ultracode_enabled:
+        argv.extend(["--settings", '{"ultracode": true}'])
     if ctx.system_prompt:
         argv.extend(["--append-system-prompt", ctx.system_prompt])
     if ctx.allowed_tools:
@@ -867,6 +894,8 @@ class BridgeDispatcher:
         cold_start_no_subprocess_seconds: float = 60.0,
         cold_start_no_mcp_activity_seconds: float = 180.0,
         cold_start_no_useful_activity_seconds: float = 600.0,
+        control_plane_url: str | None = None,
+        intent_cache_ttl_seconds: float = DEFAULT_CACHE_TTL_SECONDS,
     ) -> None:
         self._storage = storage
         self._token_store = token_store
@@ -918,6 +947,21 @@ class BridgeDispatcher:
             no_useful_activity_seconds=cold_start_no_useful_activity_seconds,
         )
 
+        # op-ultracode-daemon: per-project ULTRACODE flag is read from the
+        # CP autonomy-intent snapshot (the SAME ``GET /api/daemon/intent``
+        # seam the liveness watchdog uses). We REUSE the existing
+        # ``fetch_autonomy_intent`` reader + its swallow-all-failures
+        # contract and hold a small TTL cache here — there is NO new
+        # background poller: the snapshot is fetched lazily on the first
+        # dispatch and refreshed only when stale (TTL elapsed). When
+        # ``control_plane_url`` is None the read is skipped entirely and
+        # every dispatch fails CLOSED to ultracode-off (the subscription-
+        # only default argv is unchanged).
+        self._control_plane_url = control_plane_url
+        self._intent_cache_ttl_seconds = float(intent_cache_ttl_seconds)
+        self._intent_snapshot: AutonomyIntentSnapshot | None = None
+        self._intent_fetched_at: float | None = None
+
     @classmethod
     async def create(
         cls,
@@ -934,6 +978,8 @@ class BridgeDispatcher:
         cold_start_no_subprocess_seconds: float = 60.0,
         cold_start_no_mcp_activity_seconds: float = 180.0,
         cold_start_no_useful_activity_seconds: float = 600.0,
+        control_plane_url: str | None = None,
+        intent_cache_ttl_seconds: float = DEFAULT_CACHE_TTL_SECONDS,
     ) -> BridgeDispatcher:
         """Async factory: build the dispatcher and register the default
         canonical's path in the process-wide owned-paths guard.
@@ -960,6 +1006,8 @@ class BridgeDispatcher:
             cold_start_no_subprocess_seconds=cold_start_no_subprocess_seconds,
             cold_start_no_mcp_activity_seconds=cold_start_no_mcp_activity_seconds,
             cold_start_no_useful_activity_seconds=cold_start_no_useful_activity_seconds,
+            control_plane_url=control_plane_url,
+            intent_cache_ttl_seconds=intent_cache_ttl_seconds,
         )
         default = await canonical_registry.get_default()
         if default.path in _dispatcher_owned_canonicals:
@@ -970,6 +1018,67 @@ class BridgeDispatcher:
             )
         _dispatcher_owned_canonicals.add(default.path)
         return instance
+
+    # ------------------------------------------------------------------
+    # op-ultracode-daemon: per-project ULTRACODE flag (CP intent read)
+    # ------------------------------------------------------------------
+
+    async def _get_autonomy_intent(self) -> AutonomyIntentSnapshot | None:
+        """Return the CP autonomy-intent snapshot, fetching if the cache
+        is cold or stale.
+
+        REUSES :func:`bridge.autonomy_intent.fetch_autonomy_intent` (the
+        same reader + swallow-all-failures contract the liveness watchdog
+        uses) behind a small TTL cache. There is NO background poller: the
+        snapshot is fetched lazily here on the first dispatch and refreshed
+        only after ``intent_cache_ttl_seconds`` elapses. Best-effort:
+        returns ``None`` when the CP is unconfigured or the fetch fails, so
+        the caller fails CLOSED (ultracode off). A stale cached snapshot is
+        kept across a failed refresh within the TTL window — better to honor
+        a slightly-old ON/OFF signal than to thrash.
+        """
+        if not self._control_plane_url:
+            return None
+        nowm = time.monotonic()
+        if (
+            self._intent_snapshot is not None
+            and self._intent_fetched_at is not None
+            and (nowm - self._intent_fetched_at) < self._intent_cache_ttl_seconds
+        ):
+            return self._intent_snapshot
+        snapshot = await fetch_autonomy_intent(
+            control_plane_url=self._control_plane_url,
+        )
+        if snapshot is not None:
+            self._intent_snapshot = snapshot
+            self._intent_fetched_at = nowm
+            return snapshot
+        # Refresh failed. Keep any prior snapshot within the TTL window so a
+        # single transient CP blip doesn't flip a live project's ULTRACODE
+        # state mid-run; let the next dispatch retry once the TTL lapses.
+        if (
+            self._intent_snapshot is not None
+            and self._intent_fetched_at is not None
+            and (nowm - self._intent_fetched_at) < self._intent_cache_ttl_seconds
+        ):
+            return self._intent_snapshot
+        return None
+
+    async def _ultracode_enabled_for(self, canonical_name: str | None) -> bool:
+        """Resolve the per-dispatch ULTRACODE flag by canonical-clone name.
+
+        Fail-CLOSED on every uncertainty: no CP URL, fetch failure, missing
+        snapshot, or a canonical absent from the snapshot all yield
+        ``False``. Only an explicit ``ultracode: true`` for THIS canonical
+        in the CP intent payload returns ``True``. ``canonical_name`` is the
+        ``resolved_canonical_name`` literal threaded through
+        ``dispatches.canonical_name`` (the default canonical surfaces as the
+        literal ``"default"`` — which simply won't match a CP row unless the
+        CP keys that project under the same canonical name)."""
+        snapshot = await self._get_autonomy_intent()
+        if snapshot is None:
+            return False
+        return snapshot.ultracode_for(canonical_name)
 
     async def dispatch(
         self,
@@ -1236,6 +1345,16 @@ class BridgeDispatcher:
                 ):
                     mcp_config_path_value = cfg_path
 
+            # op-ultracode-daemon: resolve the per-project ULTRACODE flag
+            # by this dispatch's canonical-clone name from the cached CP
+            # autonomy-intent snapshot. Best-effort + fail-closed: any CP
+            # uncertainty (unconfigured, unreachable, canonical unknown)
+            # yields False so the launcher omits ``--settings`` and the
+            # subscription-only argv is unchanged.
+            ultracode_enabled = await self._ultracode_enabled_for(
+                resolved_canonical_name
+            )
+
             ctx = DispatchLaunchContext(
                 dispatch_id=dispatch_id,
                 role=role,
@@ -1247,6 +1366,7 @@ class BridgeDispatcher:
                 allowed_tools=allowed_tools or [],
                 dispatches_root=self._dispatches_root,
                 mcp_config_path=mcp_config_path_value,
+                ultracode_enabled=ultracode_enabled,
             )
             # β-S11-17 stage 1 cold-start hang: bound the launcher
             # coroutine by ``cold_start_no_subprocess_seconds``. A healthy

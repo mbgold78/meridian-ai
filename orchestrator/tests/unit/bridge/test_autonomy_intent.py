@@ -203,3 +203,106 @@ def test_unknown_mode_not_suppressed() -> None:
     assert intent.rules_suppressed is False
     intent_none = ProjectIntent(project_id="p2", autonomy=None, callback_armed=False)
     assert intent_none.rules_suppressed is False
+
+
+# --- (g) ULTRACODE: by_canonical index + ultracode_for fail-closed ----------
+# op-ultracode-daemon. The dispatcher reads the per-project ULTRACODE flag
+# by canonical-clone name from the same intent snapshot, fail-CLOSED to
+# False on every uncertainty (the inverse of is_suppressed's fail-open).
+
+
+async def test_parse_reads_ultracode_and_canonical(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The parser reads ``ultracode`` + ``canonical`` tolerantly and builds
+    the ``by_canonical`` index for rows that carry a canonical."""
+    body = {
+        "projects": [
+            {
+                "projectId": "p-on",
+                "autonomy": "Continuous",
+                "callbackArmed": True,
+                "ultracode": True,
+                "canonical": "curasync",
+            },
+            {
+                "projectId": "p-off",
+                "autonomy": "Guided",
+                "callbackArmed": False,
+                "ultracode": False,
+                "canonical": "player-kb",
+            },
+        ]
+    }
+    _patch_client(monkeypatch, body=body)
+    snap = await fetch_autonomy_intent(control_plane_url=CP_URL)
+    assert snap is not None
+    # Fields parsed onto ProjectIntent.
+    assert snap.by_project["p-on"].ultracode is True
+    assert snap.by_project["p-on"].canonical == "curasync"
+    assert snap.by_project["p-off"].ultracode is False
+    # by_canonical index populated for both.
+    assert set(snap.by_canonical) == {"curasync", "player-kb"}
+    # ultracode_for resolves by canonical.
+    assert snap.ultracode_for("curasync") is True
+    assert snap.ultracode_for("player-kb") is False
+
+
+async def test_parse_defaults_ultracode_false_and_canonical_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Rows that omit ``ultracode``/``canonical`` default to False/None
+    (fail closed). A canonical-less row stays out of the by_canonical
+    index, so ultracode_for can never find it -> False."""
+    body = {
+        "projects": [
+            {
+                "projectId": "p-bare",
+                "autonomy": "Continuous",
+                "callbackArmed": True,
+            }
+        ]
+    }
+    _patch_client(monkeypatch, body=body)
+    snap = await fetch_autonomy_intent(control_plane_url=CP_URL)
+    assert snap is not None
+    assert snap.by_project["p-bare"].ultracode is False
+    assert snap.by_project["p-bare"].canonical is None
+    assert snap.by_canonical == {}
+    assert snap.ultracode_for("p-bare") is False
+
+
+def test_ultracode_for_fail_closed_for_unknown_and_missing() -> None:
+    """ultracode_for fails CLOSED: unknown canonical, empty, and None all
+    return False even though the snapshot itself is non-None."""
+    snap = AutonomyIntentSnapshot(
+        by_canonical={
+            "curasync": ProjectIntent(
+                project_id="p",
+                autonomy="Continuous",
+                callback_armed=True,
+                ultracode=True,
+                canonical="curasync",
+            )
+        }
+    )
+    assert snap.ultracode_for("curasync") is True
+    assert snap.ultracode_for("unknown-canonical") is False
+    assert snap.ultracode_for(None) is False
+    assert snap.ultracode_for("") is False
+
+
+def test_ultracode_for_off_when_flag_false() -> None:
+    """A known canonical whose ProjectIntent.ultracode is False reads off."""
+    snap = AutonomyIntentSnapshot(
+        by_canonical={
+            "curasync": ProjectIntent(
+                project_id="p",
+                autonomy="Continuous",
+                callback_armed=True,
+                ultracode=False,
+                canonical="curasync",
+            )
+        }
+    )
+    assert snap.ultracode_for("curasync") is False

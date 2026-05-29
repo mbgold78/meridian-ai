@@ -73,6 +73,21 @@ class ProjectIntent:
     autonomy: str | None
     callback_armed: bool
     callback_mechanism: str | None = None
+    # Per-project ULTRACODE toggle (op-ultracode-daemon). The CP stores
+    # this flag per project and surfaces it on ``GET /api/daemon/intent``;
+    # the dispatcher reads it (keyed by canonical) to decide whether to
+    # append ``--settings '{"ultracode": true}'`` to the launched claude
+    # argv. Default ``False`` so a CP that hasn't been extended yet (or a
+    # row that omits the field) reads as ultracode-off — the fail-closed
+    # posture for an expensive fan-out feature.
+    ultracode: bool = False
+    # The daemon canonical-clone name this project routes to (the same
+    # literal threaded through ``dispatches.canonical_name``). Used to
+    # build the snapshot's ``by_canonical`` index so the dispatcher — which
+    # resolves work by canonical, not CP ``projectId`` — can look the flag
+    # up. ``None`` when the CP row omits it (the project simply won't be
+    # found by canonical, so the dispatcher fails closed to ultracode-off).
+    canonical: str | None = None
 
     @property
     def rules_suppressed(self) -> bool:
@@ -91,10 +106,36 @@ class AutonomyIntentSnapshot:
 
     ``by_project`` maps daemon ``project_id`` (== CP ``projectId``) to
     :class:`ProjectIntent`. A project absent from the map has NO known
-    intent — callers fail open (treat it as checkable)."""
+    intent — callers fail open (treat it as checkable).
+
+    ``by_canonical`` maps the daemon canonical-clone name to the same
+    :class:`ProjectIntent`, built only for rows that carry a non-empty
+    ``canonical``. The dispatcher resolves work by canonical (not CP
+    ``projectId``), so :meth:`ultracode_for` uses this index. A canonical
+    absent from the map has NO known ULTRACODE intent — :meth:`ultracode_for`
+    fails CLOSED (returns ``False``)."""
 
     by_project: dict[str, ProjectIntent] = field(default_factory=dict)
+    by_canonical: dict[str, ProjectIntent] = field(default_factory=dict)
     fetched_at_monotonic: float = field(default_factory=time.monotonic)
+
+    def ultracode_for(self, canonical: str | None) -> bool:
+        """Is ULTRACODE enabled for the project routing to ``canonical``?
+
+        Fail-CLOSED semantics (the inverse of :meth:`is_suppressed`'s
+        fail-open): a missing/empty ``canonical``, a canonical absent from
+        the snapshot, or any project whose flag is off all read as
+        ``False``. Callers that hold ``None`` for the whole snapshot (CP
+        unconfigured / unreachable) also fail closed — there is no snapshot
+        to consult, so ULTRACODE stays off. ULTRACODE is an expensive
+        opt-in fan-out feature; the conservative default is OFF unless the
+        CP explicitly says ON for this canonical."""
+        if not canonical:
+            return False
+        intent = self.by_canonical.get(canonical)
+        if intent is None:
+            return False
+        return intent.ultracode
 
     def is_suppressed(self, project_id: str | None) -> bool:
         """Should the watchdog suppress rules for ``project_id``?
@@ -115,8 +156,10 @@ def _parse_snapshot(body: Any) -> AutonomyIntentSnapshot:
 
     Accepts the agreed shape ``{"projects": [{...}, ...]}``. Rows missing
     a ``projectId`` are skipped; missing ``autonomy`` becomes ``None``
-    (fail open). A non-dict body or missing ``projects`` key yields an
-    empty snapshot (fail open everywhere)."""
+    (fail open); missing ``ultracode`` becomes ``False`` and missing
+    ``canonical`` becomes ``None`` (fail CLOSED for the ULTRACODE read).
+    A non-dict body or missing ``projects`` key yields an empty snapshot
+    (fail open everywhere)."""
     snapshot = AutonomyIntentSnapshot()
     if not isinstance(body, dict):
         return snapshot
@@ -134,12 +177,26 @@ def _parse_snapshot(body: Any) -> AutonomyIntentSnapshot:
             raw.get("callbackArmed", raw.get("callback_armed", False))
         )
         mechanism = raw.get("callbackMechanism", raw.get("callback_mechanism"))
-        snapshot.by_project[str(project_id)] = ProjectIntent(
+        # ULTRACODE flag — default False on absence (fail closed). bool()
+        # coerces a JSON true/false; a stray non-bool (e.g. 1/"true") also
+        # coerces sensibly without raising.
+        ultracode = bool(raw.get("ultracode", False))
+        # Canonical-clone name routing this project's daemon work. Read
+        # tolerantly under either camelCase or snake_case; None when absent
+        # so the project simply won't appear in the by_canonical index.
+        canonical_raw = raw.get("canonical", raw.get("canonicalName"))
+        canonical = str(canonical_raw) if canonical_raw else None
+        intent = ProjectIntent(
             project_id=str(project_id),
             autonomy=str(autonomy) if autonomy is not None else None,
             callback_armed=callback_armed,
             callback_mechanism=str(mechanism) if mechanism is not None else None,
+            ultracode=ultracode,
+            canonical=canonical,
         )
+        snapshot.by_project[str(project_id)] = intent
+        if canonical:
+            snapshot.by_canonical[canonical] = intent
     return snapshot
 
 
