@@ -578,7 +578,14 @@ class AutonomyLivenessWatchdog:
             "t.parent_task_id "
             "FROM dispatches d LEFT JOIN tasks t ON t.id = d.task_id "
             "WHERE d.status IN ('completed', 'failed', 'declined') "
-            "AND d.completed_at IS NOT NULL"
+            "AND d.completed_at IS NOT NULL "
+            # task_id IS NULL => parentless supervisor-loop dispatch
+            # (pm-continuous / engineer-supervisor). It has no parent task,
+            # so it can never satisfy the "surfaced" check below (parent
+            # terminal / PM follow-up) and would emit terminal_unsurfaced
+            # forever, cascading into pending_stale up to the cap. This rule
+            # is about CHILD product dispatches only.
+            "AND d.task_id IS NOT NULL"
         )
         out: list[DetectedViolation] = []
         for row in rows:
@@ -648,7 +655,11 @@ class AutonomyLivenessWatchdog:
             "d.completed_at, t.project_id, t.notes "
             "FROM dispatches d LEFT JOIN tasks t ON t.id = d.task_id "
             "WHERE d.status IN ('completed', 'failed', 'declined') "
-            "AND d.completed_at IS NOT NULL"
+            "AND d.completed_at IS NOT NULL "
+            # See _detect_terminal_unsurfaced: parentless supervisor-loop
+            # dispatches carry no task notes and no declared artifacts, so
+            # they cannot meaningfully be flagged here either.
+            "AND d.task_id IS NOT NULL"
         )
         out: list[DetectedViolation] = []
         for row in rows:

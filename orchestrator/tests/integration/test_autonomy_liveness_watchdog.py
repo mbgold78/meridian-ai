@@ -241,6 +241,43 @@ async def test_a1_terminal_tester_with_no_pm_followup_fires_unsurfaced(
     assert summary["new"] >= 1
 
 
+async def test_a1b_parentless_supervisor_dispatch_not_unsurfaced(
+    storage: SqliteStorage, seeded: tuple[str, str]
+) -> None:
+    """Regression (Operator Fix Window 2026-05-30): a terminal dispatch with
+    ``task_id IS NULL`` — a pm-continuous / engineer-supervisor loop iteration
+    — has no parent task to surface, so it must NOT fire terminal_unsurfaced.
+
+    Before the fix, these parentless infra dispatches (84 of them in the live
+    DB) were permanent terminal_unsurfaced violations: the rule's own
+    safe_next_action degenerated to "close parent task None". On every daemon
+    restart they refilled the PM-task pool to the outstanding cap and cascaded
+    into pending_stale. The live supervisors mint a new one each tick, so the
+    spam was self-sustaining. The detect query now excludes task_id IS NULL.
+    """
+    await _insert_dispatch(
+        storage,
+        task_id=None,  # parentless supervisor-loop iteration
+        role="pm-continuous",
+        status="failed",
+        completed_seconds_ago=10,
+    )
+    watchdog = _fast_watchdog(storage, terminal_unsurfaced=1.0)
+    await watchdog._tick_once()
+
+    types = [v["violation_type"] for v in await _violations(storage)]
+    assert "terminal_unsurfaced" not in types
+    detect_audits = await _audit_rows(storage, DETECT_AUDIT_ACTION)
+    assert not any(
+        '"terminal_unsurfaced"' in (a["details_json"] or "")
+        for a in detect_audits
+    )
+    pm = await _pm_tasks(storage)
+    assert not any(
+        "terminal_unsurfaced" in (t["description"] or "") for t in pm
+    )
+
+
 # --- Acceptance A2: expected_artifact_missing -----------------------------
 
 
