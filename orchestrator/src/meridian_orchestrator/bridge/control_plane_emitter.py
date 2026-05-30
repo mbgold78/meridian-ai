@@ -22,10 +22,41 @@ build rules):
 **Mapping.** The daemon's audit ``action`` strings do not map 1:1 to the
 CP's 26 ``event_type`` strings. :data:`_ACTION_CONTRACT` encodes the
 authoritative ``daemon_audit_action → (cp_event_type, payload_field
-extractor)`` table. Actions not present in the contract — and the
-high-frequency observability actions explicitly skipped per the contract
-notes (``dispatch.tool_activity``, ``dispatch.progress_signal``,
-``daemon.healthy``) — are dropped before any HTTP work.
+extractor)`` table. Actions not present in the contract are dropped
+before any HTTP work.
+
+**op-live-activity — LIVE channel vs SNAPSHOT channel.** The original
+build skipped ``dispatch.tool_activity`` / ``dispatch.progress_signal``
+because the CP's *snapshot projectors* deliberately do not project them
+(write-amplification). But the CP still **persists** those raw events in
+its canonical ``orchestrator_events`` log, and the operator cockpit's
+live I/O console + token counter read that log directly. So these are
+exactly the high-frequency "I/O" the operator wants to SEE in real time.
+They are therefore now **first-class live events**, not skipped:
+
+- ``dispatch.tool_activity`` — emitted from the single MCP-call
+  observation hook (:func:`server._observe_caller` → the daemon sees
+  every tool call) carrying ``{dispatch_id, tool_name, role}``.
+- ``dispatch.progress_signal`` — the live catch-all many lifecycle
+  actions already collapse onto.
+- ``api.record_call`` — the per-call token event. Mapped to the
+  ``dispatch.progress_signal`` event_type (a valid CP enum string) but
+  carries the FULL token payload (model, input/output/cache tokens,
+  cost, agent_role, canonical_name, workflow_id, dispatch_id) so the
+  cockpit's national-debt-style token counter can tick live. The
+  ``audit_action="api.record_call"`` marker in the payload lets the CP
+  recognize it as a token event among progress signals.
+
+Only the per-tick ``daemon.healthy`` beacon remains skipped — it carries
+no operator signal as a stream and would flood with no console value.
+
+**Throttle.** The live high-frequency event types are coalesced to at
+most :data:`THROTTLE_MAX_PER_SECOND` POST/sec **per (stream, dispatch)**
+key so a tool-call storm cannot back up the async emitter. Throttling
+drops *intermediate* signals only; lifecycle-terminal and token events
+are never throttled (see :data:`_THROTTLED_EVENT_TYPES`). The throttle is
+opportunistic and lossy by design — the canonical record is the audit
+log, not this mirror.
 
 The audit row is the source of truth; this is a downstream mirror. A
 dropped or failed emission loses an operator-dashboard signal, never a
@@ -35,6 +66,7 @@ forensic audit row.
 from __future__ import annotations
 
 import asyncio
+import time
 import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -65,17 +97,48 @@ DEFAULT_HTTP_TIMEOUT_SECONDS = 5.0
 _BACKGROUND_TASKS: set[asyncio.Task[None]] = set()
 
 #: Actions deliberately NOT mirrored even though they flow through
-#: ``write_audit``. High-frequency observability per the contract notes
-#: (§4 "intentionally skipped — write-amplification concern") plus the
-#: per-tick daemon health beacon. These would flood the CP with no
-#: snapshot benefit.
+#: ``write_audit``. op-live-activity narrowed this to ONLY the per-tick
+#: ``daemon.healthy`` beacon — it carries no operator signal as a stream
+#: and would flood the live console with no value. ``dispatch.tool_activity``
+#: and ``dispatch.progress_signal`` were REMOVED from this set: they are the
+#: live "I/O" the operator wants to see and are now first-class live events
+#: (the CP persists them in its canonical event log even though its snapshot
+#: projectors intentionally skip them).
 HIGH_FREQUENCY_SKIP_ACTIONS: frozenset[str] = frozenset(
     {
-        "dispatch.tool_activity",
-        "dispatch.progress_signal",
         "daemon.healthy",
     }
 )
+
+#: Live-channel high-frequency event types subject to the per-stream
+#: coalescing throttle (:func:`_should_throttle`). These are the
+#: intermediate "still working" signals where dropping a few under load is
+#: harmless. Lifecycle-terminal event types (dispatch.merged/failed/
+#: complete_called, task.completed/failed, commit.landed, …) are NOT here
+#: and are never throttled. ``api.record_call`` token events ARE emitted as
+#: ``dispatch.progress_signal`` but are exempted from the throttle by the
+#: token-event marker check in :func:`_should_throttle` so the token
+#: counter never loses a tick.
+_THROTTLED_EVENT_TYPES: frozenset[str] = frozenset(
+    {
+        "dispatch.tool_activity",
+        "dispatch.progress_signal",
+    }
+)
+
+#: Max live high-frequency POSTs per second per (event_type, dispatch_id)
+#: stream. The operator must see near-real-time activity, so the cap is
+#: per-stream rather than global — one busy dispatch cannot starve another.
+THROTTLE_MAX_PER_SECOND: float = 1.0
+
+#: Minimum seconds between two throttled emissions on the same stream.
+_THROTTLE_MIN_INTERVAL_SECONDS: float = 1.0 / THROTTLE_MAX_PER_SECOND
+
+#: Last-emit monotonic timestamp per throttle key. Bounded in practice by
+#: the live dispatch count (one key per active dispatch per throttled
+#: event type); terminal dispatches stop producing keys. Not LRU-evicted —
+#: the daemon's dispatch cardinality is small (single-digit concurrent).
+_LAST_EMIT_MONOTONIC: dict[tuple[str, str], float] = {}
 
 
 # --- payload extractors ----------------------------------------------------
@@ -239,6 +302,77 @@ def _pm_mode_transition(details: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+#: Marker key set in the ``api.record_call`` token-event payload so the CP
+#: token counter can recognize a token event among generic progress signals.
+#: (The event_type itself is ``dispatch.progress_signal`` — a valid CP enum
+#: string — because the CP's EventType Literal cannot be extended from the
+#: daemon side; the marker is how a consumer distinguishes the token stream.)
+TOKEN_EVENT_MARKER = "api.record_call"
+
+
+def _record_api_call_token_payload(details: dict[str, Any]) -> dict[str, Any]:
+    """Build the first-class TOKEN payload for an ``api.record_call`` audit.
+
+    Carries the full per-call token accounting the cockpit's national-debt
+    token counter drills down on: model, the four token counts (cache
+    read/creation only when present), API-tier-equivalent cost, and the
+    cohort dimensions (agent_role, canonical_name, workflow_id, task_type,
+    dispatch_id, usage_id).
+
+    Token-count fields default to ``0`` when absent so the counter can sum
+    without ``None`` guards; cache fields are included only when the daemon
+    actually recorded them (``RecordApiCallInput`` has no cache fields in
+    Phase 1, so they pass through transparently if a future writer adds
+    them — "cache_read/creation if present" per the op-live-activity spec).
+    """
+    out: dict[str, Any] = {
+        "model": details.get("model"),
+        "input_tokens": details.get("input_tokens", 0),
+        "output_tokens": details.get("output_tokens", 0),
+        "cost_usd": details.get("cost_usd"),
+        "agent_role": details.get("agent_role"),
+        "canonical_name": details.get("canonical_name"),
+        "workflow_id": details.get("workflow_id"),
+        "task_type": details.get("task_type"),
+        "task_id": details.get("task_id"),
+        "dispatch_id": details.get("dispatch_id"),
+        "usage_id": details.get("usage_id"),
+    }
+    # Cache token counts only when the writer supplied them (Phase 1 does
+    # not, but the contract reserves the keys). Tolerant of both the
+    # daemon-side spellings and the CP-contract spellings.
+    cache_creation = details.get(
+        "cache_creation_tokens", details.get("cache_creation_input_tokens")
+    )
+    cache_read = details.get(
+        "cache_read_tokens", details.get("cache_read_input_tokens")
+    )
+    if cache_creation is not None:
+        out["cache_creation_tokens"] = cache_creation
+    if cache_read is not None:
+        out["cache_read_tokens"] = cache_read
+    return out
+
+
+def _tool_activity(details: dict[str, Any]) -> dict[str, Any]:
+    """Live tool-call payload for ``dispatch.tool_activity``.
+
+    Emitted from the daemon's single MCP-call observation hook. Carries the
+    dispatch the call landed on, the tool name, and (when known) the
+    caller's role — enough for the live I/O console to render
+    "dispatch X called tool Y" in real time.
+    """
+    out: dict[str, Any] = {
+        "dispatch_id": details.get("dispatch_id"),
+        "tool_name": details.get("tool_name") or details.get("last_tool_called"),
+    }
+    if details.get("role") is not None:
+        out["role"] = details["role"]
+    if details.get("canonical_name") is not None:
+        out["canonical_name"] = details["canonical_name"]
+    return out
+
+
 # --- contract table --------------------------------------------------------
 #
 # (cp_event_type, payload_extractor) keyed by daemon audit action.
@@ -246,6 +380,17 @@ def _pm_mode_transition(details: dict[str, Any]) -> dict[str, Any]:
 # authoritative event_contract handed down by the CP build. Actions absent
 # from this table are not mirrored (the emitter no-ops on them).
 _ACTION_CONTRACT: dict[str, tuple[str, PayloadExtractor]] = {
+    # op-live-activity: live high-frequency I/O. These actions are emitted
+    # directly (not via write_audit) from the daemon's observation hooks;
+    # they map 1:1 to the CP's same-named live event types. The CP persists
+    # them in its canonical event log (its snapshot projectors skip them by
+    # design — see dispatch_projectors.py), which is what the cockpit's live
+    # console reads.
+    "dispatch.tool_activity": ("dispatch.tool_activity", _tool_activity),
+    "dispatch.progress_signal": (
+        "dispatch.progress_signal",
+        _passthrough,
+    ),
     # dispatcher.py
     "dispatch.issued": ("dispatch.issued", _dispatch_issued),
     "dispatch.token_created": (
@@ -355,16 +500,14 @@ _ACTION_CONTRACT: dict[str, tuple[str, PayloadExtractor]] = {
         "dispatch.progress_signal",
         _pick("name"),
     ),
-    # tools/budget.py
+    # tools/budget.py — first-class TOKEN event. event_type is
+    # dispatch.progress_signal (a valid CP enum string; the EventType
+    # Literal can't be extended daemon-side), but the payload carries the
+    # full token accounting and the TOKEN_EVENT_MARKER so the cockpit token
+    # counter recognizes + sums it. See _record_api_call_token_payload.
     "api.record_call": (
         "dispatch.progress_signal",
-        _pick(
-            "model",
-            "input_tokens",
-            "output_tokens",
-            "cache_creation_tokens",
-            "cache_read_tokens",
-        ),
+        _record_api_call_token_payload,
     ),
     # bridge/oauth_usage.py
     "oauth_usage.polling_ceiling_reached": (
@@ -498,10 +641,55 @@ def build_event(
         event["dispatch_id"] = dispatch_id
     if task_id is not None:
         event["task_id"] = task_id
-    if safe_details.get("role") is not None:
-        event["role"] = safe_details["role"]
+    role = safe_details.get("role") or payload.get("role")
+    if role is not None:
+        event["role"] = role
+
+    # Promote canonical_name to the CP's first-class top-level field (it is
+    # an OrchestratorEvent column the cockpit groups the token counter and
+    # per-project console by). Prefer explicit details, then extractor
+    # payload. op-live-activity: the token event + tool-activity event both
+    # carry it so per-project drill-down works.
+    canonical_name = safe_details.get("canonical_name") or payload.get(
+        "canonical_name"
+    )
+    if canonical_name is not None:
+        event["canonical_name"] = canonical_name
 
     return event
+
+
+def _should_throttle(event: dict[str, Any], *, now: float | None = None) -> bool:
+    """Return True when this high-frequency live event should be DROPPED to
+    keep the live channel at <= :data:`THROTTLE_MAX_PER_SECOND` POST/sec per
+    (event_type, dispatch_id) stream.
+
+    Only :data:`_THROTTLED_EVENT_TYPES` are eligible. ``api.record_call``
+    token events (marked via :data:`TOKEN_EVENT_MARKER` in the payload) are
+    exempt even though they ride the ``dispatch.progress_signal`` type — the
+    token counter must never lose a tick. Events with no ``dispatch_id`` are
+    keyed on ``"-"`` so a global progress-signal stream is still bounded.
+
+    Side effect: when an event passes (is NOT throttled) the stream's
+    last-emit timestamp is updated, so the very next event within the
+    interval is dropped. Lossy by design — the canonical record is the
+    audit log.
+    """
+    event_type = event.get("event_type")
+    if event_type not in _THROTTLED_EVENT_TYPES:
+        return False
+    # Token events ride dispatch.progress_signal but must never be throttled.
+    payload = event.get("payload") or {}
+    if payload.get("audit_action") == TOKEN_EVENT_MARKER:
+        return False
+
+    monotonic_now = time.monotonic() if now is None else now
+    key = (str(event_type), str(event.get("dispatch_id") or "-"))
+    last = _LAST_EMIT_MONOTONIC.get(key)
+    if last is not None and (monotonic_now - last) < _THROTTLE_MIN_INTERVAL_SECONDS:
+        return True
+    _LAST_EMIT_MONOTONIC[key] = monotonic_now
+    return False
 
 
 async def _post_event(url: str, event: dict[str, Any]) -> None:
@@ -552,6 +740,9 @@ def emit_event(
 
     - ``control_plane_url`` resolves to ``None`` (CP not configured).
     - ``action`` is not in the contract / is a high-frequency skip action.
+    - The event is a throttled high-frequency live signal arriving faster
+      than :data:`THROTTLE_MAX_PER_SECOND` on its (event_type, dispatch_id)
+      stream (token events + terminal events are exempt).
     - No running event loop (e.g. called from sync test context) — logged
       and dropped rather than raising.
     """
@@ -566,6 +757,11 @@ def emit_event(
 
         event = build_event(action=action, target=target, details=details)
         if event is None:
+            return
+
+        # Coalesce high-frequency live signals so a tool-call storm can't
+        # back up the async emitter. Lossy by design (best-effort mirror).
+        if _should_throttle(event):
             return
 
         try:
@@ -596,11 +792,58 @@ def emit_event(
         )
 
 
+def emit_tool_activity(
+    *,
+    dispatch_id: str | None,
+    tool_name: str,
+    role: str | None = None,
+    canonical_name: str | None = None,
+    control_plane_url: str | None = None,
+) -> None:
+    """Fire-and-forget LIVE tool-call signal to the Control Plane.
+
+    op-live-activity: the daemon observes every MCP tool call at the single
+    ``server._observe_caller`` hook but, until now, only updated
+    ``dispatches.last_tool_called`` silently (no operator-visible signal).
+    This surfaces that same observation as a ``dispatch.tool_activity`` live
+    event so the cockpit's I/O console can show real activity in real time.
+
+    It is NOT an audit row — emitting one ``audit_log`` row per tool call
+    would write-amplify the load-bearing audit trail (which is exactly why
+    tool activity was never a ``write_audit`` action). This is the
+    observability mirror only: best-effort, fire-and-forget, throttled, and
+    a no-op when the CP URL is unset (same guarantees as :func:`emit_event`).
+
+    Skips emission when ``dispatch_id`` is None — an operator OAuth / static
+    admin token has no dispatch to attribute the call to, and a console row
+    without a dispatch is noise.
+    """
+    if dispatch_id is None:
+        return
+    details: dict[str, Any] = {
+        "dispatch_id": dispatch_id,
+        "tool_name": tool_name,
+    }
+    if role is not None:
+        details["role"] = role
+    if canonical_name is not None:
+        details["canonical_name"] = canonical_name
+    emit_event(
+        action="dispatch.tool_activity",
+        target=dispatch_id,
+        details=details,
+        control_plane_url=control_plane_url,
+    )
+
+
 __all__ = [
     "DEFAULT_HTTP_TIMEOUT_SECONDS",
     "EVENT_SOURCE",
     "HIGH_FREQUENCY_SKIP_ACTIONS",
     "INGEST_PATH",
+    "THROTTLE_MAX_PER_SECOND",
+    "TOKEN_EVENT_MARKER",
     "build_event",
     "emit_event",
+    "emit_tool_activity",
 ]

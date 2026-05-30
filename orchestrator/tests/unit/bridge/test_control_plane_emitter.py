@@ -30,13 +30,23 @@ from meridian_orchestrator.audit.logger import write_audit
 from meridian_orchestrator.bridge import control_plane_emitter as cpe
 from meridian_orchestrator.bridge.control_plane_emitter import (
     INGEST_PATH,
+    TOKEN_EVENT_MARKER,
     build_event,
     emit_event,
+    emit_tool_activity,
 )
 from meridian_orchestrator.storage.migrations import run_migrations
 from meridian_orchestrator.storage.sqlite import SqliteStorage
 
 CP_URL = "http://127.0.0.1:8000"
+
+
+@pytest.fixture(autouse=True)
+def _reset_throttle_state() -> None:
+    """Clear the emitter's per-stream throttle clock between tests so a
+    throttled emission in one test never suppresses an unrelated stream in
+    the next (module-global state)."""
+    cpe._LAST_EMIT_MONOTONIC.clear()
 
 
 @pytest_asyncio.fixture
@@ -126,14 +136,35 @@ async def test_emit_noops_and_spawns_no_request_when_url_unset(
 async def test_emit_noops_for_high_frequency_skip_action(
     recording_client: type[_RecordingClient],
 ) -> None:
+    # op-live-activity: daemon.healthy is the ONLY remaining skip action.
     emit_event(
-        action="dispatch.tool_activity",
-        target="d-1",
-        details={"dispatch_id": "d-1", "tool_name": "Read"},
+        action="daemon.healthy",
+        target=None,
+        details={"tick": 1},
         control_plane_url=CP_URL,
     )
     await _drain_tasks()
     assert recording_client.calls == []
+
+
+async def test_emit_tool_activity_is_now_a_live_event(
+    recording_client: type[_RecordingClient],
+) -> None:
+    # op-live-activity: dispatch.tool_activity was REMOVED from the skip set —
+    # it is now a first-class live I/O event the cockpit console reads.
+    emit_event(
+        action="dispatch.tool_activity",
+        target="d-1",
+        details={"dispatch_id": "d-1", "tool_name": "Read", "role": "engineer"},
+        control_plane_url=CP_URL,
+    )
+    await _drain_tasks()
+    assert len(recording_client.calls) == 1
+    body = recording_client.calls[0]["json"]
+    assert body["event_type"] == "dispatch.tool_activity"
+    assert body["dispatch_id"] == "d-1"
+    assert body["role"] == "engineer"
+    assert body["payload"]["tool_name"] == "Read"
 
 
 async def test_emit_noops_for_action_not_in_contract(
@@ -224,12 +255,23 @@ def test_build_event_missing_projector_action_maps_to_progress_signal() -> None:
 
 
 def test_build_event_returns_none_for_skip_and_unknown() -> None:
+    # daemon.healthy is the only remaining skip action (op-live-activity).
     assert build_event(action="daemon.healthy", target=None, details={}) is None
-    assert (
-        build_event(action="dispatch.progress_signal", target=None, details={})
-        is None
-    )
     assert build_event(action="totally.unknown", target=None, details={}) is None
+
+
+def test_build_event_progress_signal_is_now_a_live_event() -> None:
+    # op-live-activity: dispatch.progress_signal as a direct action now emits
+    # (it is the live catch-all the cockpit console reads), not None.
+    event = build_event(
+        action="dispatch.progress_signal",
+        target="d-7",
+        details={"dispatch_id": "d-7", "note": "still working"},
+    )
+    assert event is not None
+    assert event["event_type"] == "dispatch.progress_signal"
+    assert event["dispatch_id"] == "d-7"
+    assert event["payload"]["note"] == "still working"
 
 
 def test_build_event_task_submit_maps_to_task_submitted() -> None:
@@ -410,3 +452,221 @@ async def test_write_audit_with_real_emitter_set_url_mirrors_event(
     assert body["dispatch_id"] == "d-3"
     assert body["payload"]["subprocess_pid"] == 4321
     assert body["payload"]["working_directory"] == "/work/tree"
+
+
+# --- op-live-activity: token event (api.record_call) -----------------------
+
+
+def test_build_event_api_record_call_is_first_class_token_event() -> None:
+    """api.record_call builds a TOKEN event: full token accounting in the
+    payload, canonical_name promoted to the CP's top-level field, and the
+    TOKEN_EVENT_MARKER so the cockpit token counter recognizes it. The
+    event_type stays dispatch.progress_signal (a valid CP enum string)."""
+    event = build_event(
+        action="api.record_call",
+        target="d-tok",
+        details={
+            "usage_id": "u-1",
+            "model": "claude-opus-4-8",
+            "input_tokens": 1200,
+            "output_tokens": 340,
+            "cost_usd": 0.0435,
+            "task_id": "t-9",
+            "dispatch_id": "d-tok",
+            "canonical_name": "curasync",
+            "workflow_id": "wf-1",
+            "agent_role": "engineer",
+            "task_type": "feature",
+        },
+    )
+    assert event is not None
+    assert event["event_type"] == "dispatch.progress_signal"
+    # Top-level correlation fields the CP indexes on.
+    assert event["dispatch_id"] == "d-tok"
+    assert event["task_id"] == "t-9"
+    assert event["canonical_name"] == "curasync"
+    p = event["payload"]
+    # The marker that distinguishes the token stream from generic signals.
+    assert p["audit_action"] == TOKEN_EVENT_MARKER
+    # Full token accounting carried for the national-debt counter.
+    assert p["model"] == "claude-opus-4-8"
+    assert p["input_tokens"] == 1200
+    assert p["output_tokens"] == 340
+    assert p["cost_usd"] == 0.0435
+    assert p["agent_role"] == "engineer"
+    assert p["workflow_id"] == "wf-1"
+    assert p["task_type"] == "feature"
+    assert p["canonical_name"] == "curasync"
+    assert p["usage_id"] == "u-1"
+    # Phase 1 has no cache fields → keys absent (not fabricated as 0).
+    assert "cache_read_tokens" not in p
+    assert "cache_creation_tokens" not in p
+
+
+def test_build_event_api_record_call_includes_cache_tokens_when_present() -> None:
+    """When a writer supplies cache token counts, they pass through into the
+    token payload ('cache_read/creation if present')."""
+    event = build_event(
+        action="api.record_call",
+        target="d-c",
+        details={
+            "model": "claude-sonnet-4-6",
+            "input_tokens": 10,
+            "output_tokens": 5,
+            "cache_read_tokens": 800,
+            "cache_creation_tokens": 200,
+        },
+    )
+    assert event is not None
+    p = event["payload"]
+    assert p["cache_read_tokens"] == 800
+    assert p["cache_creation_tokens"] == 200
+
+
+def test_build_event_token_defaults_counts_to_zero() -> None:
+    """A degenerate token event with missing counts surfaces 0 (summable)
+    rather than None."""
+    event = build_event(
+        action="api.record_call", target=None, details={"model": "m"}
+    )
+    assert event is not None
+    assert event["payload"]["input_tokens"] == 0
+    assert event["payload"]["output_tokens"] == 0
+
+
+async def test_emit_api_record_call_token_event_posts(
+    recording_client: type[_RecordingClient],
+) -> None:
+    emit_event(
+        action="api.record_call",
+        target="d-tok",
+        details={
+            "model": "claude-opus-4-8",
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "agent_role": "tester",
+            "canonical_name": "proj-x",
+            "dispatch_id": "d-tok",
+        },
+        control_plane_url=CP_URL,
+    )
+    await _drain_tasks()
+    assert len(recording_client.calls) == 1
+    body = recording_client.calls[0]["json"]
+    assert body["event_type"] == "dispatch.progress_signal"
+    assert body["payload"]["audit_action"] == TOKEN_EVENT_MARKER
+    assert body["payload"]["input_tokens"] == 100
+    assert body["canonical_name"] == "proj-x"
+
+
+# --- op-live-activity: emit_tool_activity helper ---------------------------
+
+
+async def test_emit_tool_activity_posts_live_event(
+    recording_client: type[_RecordingClient],
+) -> None:
+    emit_tool_activity(
+        dispatch_id="d-9",
+        tool_name="Edit",
+        role="implementer",
+        canonical_name="proj-y",
+        control_plane_url=CP_URL,
+    )
+    await _drain_tasks()
+    assert len(recording_client.calls) == 1
+    body = recording_client.calls[0]["json"]
+    assert body["event_type"] == "dispatch.tool_activity"
+    assert body["dispatch_id"] == "d-9"
+    assert body["role"] == "implementer"
+    assert body["canonical_name"] == "proj-y"
+    assert body["payload"]["tool_name"] == "Edit"
+
+
+async def test_emit_tool_activity_noops_without_dispatch_id(
+    recording_client: type[_RecordingClient],
+) -> None:
+    # OAuth / static admin tokens have no dispatch → no console row.
+    emit_tool_activity(
+        dispatch_id=None, tool_name="ping", control_plane_url=CP_URL
+    )
+    await _drain_tasks()
+    assert recording_client.calls == []
+
+
+# --- op-live-activity: throttle --------------------------------------------
+
+
+def test_should_throttle_coalesces_same_stream() -> None:
+    """Two tool_activity events on the same dispatch within the interval:
+    the first passes, the second is throttled (dropped)."""
+    e1 = build_event(
+        action="dispatch.tool_activity",
+        target="d-1",
+        details={"dispatch_id": "d-1", "tool_name": "Read"},
+    )
+    e2 = build_event(
+        action="dispatch.tool_activity",
+        target="d-1",
+        details={"dispatch_id": "d-1", "tool_name": "Edit"},
+    )
+    assert e1 is not None and e2 is not None
+    # now=0.0 for first (passes, stamps), now=0.5 (< 1s interval) for second.
+    assert cpe._should_throttle(e1, now=0.0) is False
+    assert cpe._should_throttle(e2, now=0.5) is True
+    # After the interval elapses, the stream opens again.
+    e3 = build_event(
+        action="dispatch.tool_activity",
+        target="d-1",
+        details={"dispatch_id": "d-1", "tool_name": "Bash"},
+    )
+    assert e3 is not None
+    assert cpe._should_throttle(e3, now=1.5) is False
+
+
+def test_should_throttle_is_per_dispatch_stream() -> None:
+    """A busy dispatch does not starve another dispatch's stream."""
+    a = build_event(
+        action="dispatch.tool_activity",
+        target="d-a",
+        details={"dispatch_id": "d-a", "tool_name": "Read"},
+    )
+    b = build_event(
+        action="dispatch.tool_activity",
+        target="d-b",
+        details={"dispatch_id": "d-b", "tool_name": "Read"},
+    )
+    assert a is not None and b is not None
+    assert cpe._should_throttle(a, now=0.0) is False
+    # Different dispatch_id → different stream key → not throttled.
+    assert cpe._should_throttle(b, now=0.0) is False
+
+
+def test_token_event_is_never_throttled() -> None:
+    """api.record_call token events ride dispatch.progress_signal but must
+    never be throttled — the token counter cannot lose a tick."""
+    tok1 = build_event(
+        action="api.record_call",
+        target="d-1",
+        details={"model": "m", "input_tokens": 1, "output_tokens": 1, "dispatch_id": "d-1"},
+    )
+    tok2 = build_event(
+        action="api.record_call",
+        target="d-1",
+        details={"model": "m", "input_tokens": 2, "output_tokens": 2, "dispatch_id": "d-1"},
+    )
+    assert tok1 is not None and tok2 is not None
+    assert cpe._should_throttle(tok1, now=0.0) is False
+    # Same stream, immediately after — still NOT throttled (token exemption).
+    assert cpe._should_throttle(tok2, now=0.01) is False
+
+
+def test_terminal_events_are_never_throttled() -> None:
+    """Lifecycle-terminal event types are not in the throttled set."""
+    merged = build_event(
+        action="dispatch.merged",
+        target="d-1",
+        details={"dispatch_id": "d-1", "commit_hash": "abc"},
+    )
+    assert merged is not None
+    assert cpe._should_throttle(merged, now=0.0) is False
+    assert cpe._should_throttle(merged, now=0.0) is False

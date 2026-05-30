@@ -417,6 +417,18 @@ def build_server(
         for path, methods, handler in make_liveness_routes(storage):
             mcp.custom_route(path, methods=methods)(handler)
 
+    # op-live-activity: raw subprocess output tail for the cockpit's live I/O
+    # console. GET /dispatches/{id}/log?stream=stdout|stderr&lines=N returns
+    # the tail of <data_dir>/dispatches/<id>/{stdout,stderr}.log — the raw
+    # agent output the daemon already drains to disk but never surfaced.
+    # Read-only; loopback-only via TransportSecuritySettings; no storage dep.
+    from meridian_orchestrator.bridge.dispatch_log_routes import (
+        make_dispatch_log_routes,
+    )
+
+    for path, methods, handler in make_dispatch_log_routes(settings):
+        mcp.custom_route(path, methods=methods)(handler)
+
     @mcp.tool(
         name="ping",
         description="Round-trip health check. Echoes the input and returns the "

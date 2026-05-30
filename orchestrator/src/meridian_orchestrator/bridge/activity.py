@@ -75,6 +75,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from meridian_orchestrator.audit.logger import write_audit
+from meridian_orchestrator.bridge.control_plane_emitter import emit_tool_activity
 from meridian_orchestrator.bridge.dispatcher import _TERMINAL_STATES
 from meridian_orchestrator.storage.interface import Storage
 from meridian_orchestrator.tools.pm_mode import PAUSED_MODES, read_current_pm_mode
@@ -108,6 +109,16 @@ _UPDATE_SQL = (
     f"AND status NOT IN ({_TERMINAL_STATES_SQL_LIST})"
 )
 
+# op-live-activity: identity of the (non-terminal) dispatch the activity
+# update lands on, for the live tool-activity CP signal. Same token_id +
+# non-terminal guard as _UPDATE_SQL so the SELECT and UPDATE agree on which
+# row (if any) is the live target. Read-only; never writes.
+_SELECT_ACTIVE_DISPATCH_SQL = (
+    "SELECT id, role, canonical_name FROM dispatches "
+    "WHERE token_id = ? "
+    f"AND status NOT IN ({_TERMINAL_STATES_SQL_LIST})"
+)
+
 
 def _now_iso() -> str:
     """Tz-aware ISO 8601 timestamp with microsecond precision.
@@ -137,8 +148,30 @@ async def record_mcp_call(
     See ``11-engineer-bridge.md`` § `last_activity_at` and
     `last_tool_called` writer for the full rationale (current-state
     columns, not audit-log derivation).
+
+    **op-live-activity live mirror**: after the activity-clock UPDATE, the
+    same tool call is mirrored to the Control Plane as a
+    ``dispatch.tool_activity`` live event (best-effort, fire-and-forget,
+    throttled, no-op when the CP URL is unset) so the operator cockpit's
+    I/O console can show real tool activity in real time. The mirror is
+    NOT an audit row — one audit row per tool call would write-amplify the
+    load-bearing audit trail. The resolving SELECT is read-only and shares
+    the same token_id + non-terminal guard as the UPDATE, so the live
+    signal fires only when the activity clock was actually a candidate to
+    advance (zero rows → no signal, mirroring both skip cases).
     """
+    active = await storage.fetch_one(_SELECT_ACTIVE_DISPATCH_SQL, (token_id,))
     await storage.execute(_UPDATE_SQL, (_now_iso(), tool_name, token_id))
+    if active is not None:
+        # Fire-and-forget live mirror. emit_tool_activity is fully
+        # defensive (swallows every failure, no-ops when the CP URL is
+        # unset); it never affects this writer's contract.
+        emit_tool_activity(
+            dispatch_id=active["id"],
+            tool_name=tool_name,
+            role=active["role"],
+            canonical_name=active["canonical_name"],
+        )
 
 
 async def record_oauth_pm_auto_flip(

@@ -466,12 +466,19 @@ async def record_api_call(
         # is the dispatch SELECT, the workflow-chain CTE, the INSERT,
         # the conditional UPDATE, or the audit write.
         dispatch_row = await storage.fetch_one(
-            "SELECT id FROM dispatches "
+            "SELECT id, canonical_name FROM dispatches "
             f"WHERE token_id = ? AND status NOT IN ({_TERMINAL_STATES_SQL_LIST})",
             (caller_token_id,),
         )
         dispatch_id: str | None = (
             dispatch_row["id"] if dispatch_row is not None else None
+        )
+        # op-live-activity: canonical_name (project) of the bound dispatch,
+        # carried into the api.record_call audit details so the CP token
+        # event can drill the national-debt counter down per project. None
+        # for OAuth-PM callers with no bound dispatch.
+        dispatch_canonical_name: str | None = (
+            dispatch_row["canonical_name"] if dispatch_row is not None else None
         )
 
         # Resolve cohort keys (workflow_id + task_type) alpha-
@@ -580,6 +587,7 @@ async def record_api_call(
                 "cost_usd": cost_usd,
                 "task_id": request.task_id,
                 "dispatch_id": dispatch_id,
+                "canonical_name": dispatch_canonical_name,
                 "notes": request.notes,
                 "workflow_id": resolved_workflow_id,
                 "agent_role": caller_agent_role,
