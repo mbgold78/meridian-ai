@@ -1,0 +1,94 @@
+# Per-engagement variable file for the MAIN stack.
+# Copy to engagements/<id>/engagement.tfvars and adjust.
+#
+# NOTE: external_id is INTENTIONALLY ABSENT from this file. It is supplied via
+# the TF_VAR_external_id environment variable in the operator session — never
+# committed in tfvars.
+
+# --- Engagement identity & provider wiring ----------------------------------
+engagement_id   = "acme-hold"                                          # 3-20 chars, ^[a-z0-9][a-z0-9-]*$
+aws_region      = "eu-west-1"                                          # agreed with the customer
+deploy_role_arn = "arn:aws:iam::111122223333:role/meridian-acme-hold-deploy" # CFN handoff output
+
+# --- Application image -------------------------------------------------------
+# MUST be digest-pinned (validation enforces @sha256:...). Resolve a CI tag to
+# a digest with `crane digest <uri>`. On the very first deploy the engagement
+# ECR repo does not exist yet — see the two-pass flow in docs/deploy.md step 4.
+image_uri = "111122223333.dkr.ecr.eu-west-1.amazonaws.com/meridian-acme-hold-substrate@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+
+# --- Auth (customer IdP — input only, never provisioned) ---------------------
+oidc_issuer_uri = "https://login.example-customer.com/oauth2/default"
+auth_mode       = "oidc"
+
+# --- TLS / reachability -------------------------------------------------------
+# Internal ALB (default): imported / private-CA certificate; customer VPN or
+# peering provides reachability. Public ALB: ACM public certificate.
+certificate_arn           = "arn:aws:acm:eu-west-1:111122223333:certificate/00000000-0000-0000-0000-000000000000"
+alb_internal              = true
+alb_allowed_ingress_cidrs = ["10.0.0.0/8"] # customer network ranges — REQUIRED, no default-open
+
+# Customer-owned DNS name (never provisioned here). Drives the CORS default,
+# app_url output, and the OIDC redirect-URI hint.
+app_fqdn = "substrate.example-customer.com"
+
+# Browser origins; empty list falls back to https://<app_fqdn>. If app_fqdn is
+# also empty, set this to the ALB DNS name after the first apply (deploy.md).
+cors_allowed_origins = []
+
+# --- Database -----------------------------------------------------------------
+db_name                     = "substrate"
+db_user                     = "substrate"
+db_instance_class           = "db.t4g.medium"
+db_multi_az                 = false # flip per engagement contract / RTO
+db_allocated_storage_gb     = 50
+db_max_allocated_storage_gb = 200
+db_backup_retention_days    = 14
+db_engine_version           = "16" # matches the compose postgres:16 contract
+
+# Bump by 1 to rotate the DB master password (deploy.md Day-2). Also bump after
+# any RDS instance REPLACEMENT so the secret and instance re-converge.
+db_password_rotation_counter = 1
+
+# ~80% of the db.t4g.medium connection ceiling; adjust with db_instance_class.
+db_connections_alarm_threshold = 360
+
+# --- AI assist (two-phase enable — deploy.md step 6) --------------------------
+# The secret SHELL always exists after the first apply; this flag gates only
+# the container wiring. Start false. Flip true ONLY after
+# `aws secretsmanager put-secret-value` has written the key, or ECS will fail
+# task launches on the value-less secret.
+enable_ai_assist = false
+llm_model        = "" # empty = env var omitted, application default applies
+
+# --- Orchestrator sibling (whole-or-in-part) ----------------------------------
+# Substrate-only engagements leave both as-is. When the orchestrator sibling is
+# sold and deployed separately, wire it here.
+orchestrator_enabled  = false
+orchestrator_base_url = ""
+
+# --- Network ------------------------------------------------------------------
+vpc_cidr             = "10.40.0.0/16" # must not overlap the customer network
+az_count             = 2
+enable_nat_gateway   = true  # required only for the Anthropic API egress path
+nat_gateway_per_az   = false # true = AZ-redundant NAT (cost/availability trade)
+enable_vpc_endpoints = true
+
+# --- Compute ------------------------------------------------------------------
+task_cpu         = 1024
+task_memory      = 2048
+desired_count    = 1
+cpu_architecture = "X86_64" # must match the CI image architecture
+
+enable_persistent_storage = true  # EFS for data/uploads/staging durability
+enable_execute_command    = false # ECS Exec for operator debugging — least-priv off
+create_ecr_repo           = true  # false when the customer supplies a registry
+
+# --- Observability ------------------------------------------------------------
+log_retention_days     = 90
+alarm_email            = "ops+acme-hold@meridian.example" # empty = topic without subscription
+enable_alb_access_logs = true
+
+# --- Extra tags merged into every resource ------------------------------------
+tags = {
+  "meridian:contract" = "acme-hold-2026"
+}

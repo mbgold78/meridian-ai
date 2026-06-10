@@ -1,0 +1,50 @@
+# Gradle
+.gradle/
+build/
+out/
+*.class
+
+# Node
+node_modules/
+dist/
+.next/
+.vite/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.project
+.classpath
+.settings/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Env / secrets
+.env
+.env.local
+.env.*.local
+*.local
+secrets/
+
+# Coverage / test
+coverage/
+.nyc_output/
+test-results/
+playwright-report/
+.playwright-mcp/
+
+# Demo screenshot bundles (C9 capture harness output) — never commit
+demo-screenshots/
+
+# Local data
+data/
+*.h2.db
+*.mv.db
+postgres-data/

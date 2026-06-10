@@ -1,0 +1,118 @@
+plugins {
+    id 'org.springframework.boot'
+    id 'io.spring.dependency-management'
+    // C11 — frontend build wiring (version pinned in root build.gradle / gradle.properties)
+    id 'com.github.node-gradle.node'
+}
+
+dependencies {
+    implementation project(':common')
+    implementation project(':engine')
+
+    // Spring Boot starters
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+    implementation 'org.springframework.boot:spring-boot-starter-webflux'
+    implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+    implementation 'org.springframework.boot:spring-boot-starter-validation'
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
+
+    // Database — Postgres in production, H2 (PostgreSQL compatibility mode) for dev profile
+    runtimeOnly 'org.postgresql:postgresql'
+    runtimeOnly 'com.h2database:h2'
+
+    // Flyway
+    implementation 'org.flywaydb:flyway-core'
+    implementation 'org.flywaydb:flyway-database-postgresql'
+
+    // OpenAPI
+    implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.6.0'
+
+    // MinIO blob store (C2 — MinioBlobStore; homepoc pin)
+    implementation 'io.minio:minio:8.5.12'
+
+    // Anthropic SDK
+    implementation "com.anthropic:anthropic-java:${anthropicSdkVersion}"
+
+    // Jackson
+    implementation 'com.fasterxml.jackson.core:jackson-databind'
+    implementation 'com.fasterxml.jackson.datatype:jackson-datatype-jsr310'
+    implementation 'com.fasterxml.jackson.datatype:jackson-datatype-hibernate6'
+
+    // Logging
+    implementation 'net.logstash.logback:logstash-logback-encoder:7.4'
+
+    // Lombok
+    compileOnly 'org.projectlombok:lombok'
+    annotationProcessor 'org.projectlombok:lombok'
+
+    // Test
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    testImplementation 'org.mockito:mockito-core'
+    testRuntimeOnly 'com.h2database:h2'
+
+    // C11 — Testcontainers-Postgres integration lane (versions from the Boot BOM).
+    // Suite self-disables without Docker (@Testcontainers(disabledWithoutDocker = true));
+    // CI on ubuntu-latest is the real gate (port-map §4.4 / Appendix #4).
+    testImplementation 'org.springframework.boot:spring-boot-testcontainers'
+    testImplementation 'org.testcontainers:junit-jupiter'
+    testImplementation 'org.testcontainers:postgresql'
+}
+
+bootRun {
+    if (project.hasProperty('profile')) {
+        systemProperty 'spring.profiles.active', project.property('profile')
+    }
+}
+
+// ---------------------------------------------------------------------------
+// C11 — frontend → processResources wiring (port-map Appendix trap #11).
+//
+// Vite writes its bundle to app/src/main/resources/static (emptyOutDir=true,
+// see frontend/vite.config.ts). Without this wiring a running Boot app serves
+// build/resources/main/static — homepoc's documented bundle-staleness trap.
+// Making processResources depend on the frontend build guarantees that
+// `gradlew :app:bootJar` (and plain `gradlew build`) ALWAYS embeds a bundle
+// freshly built from frontend/src.
+//
+// Node itself is downloaded by the node-gradle plugin (pinned in
+// gradle.properties), so this works identically on this Windows dev machine,
+// GitHub Actions ubuntu runners, and inside the Dockerfile build stage —
+// no system Node required anywhere.
+// ---------------------------------------------------------------------------
+def frontendDir = file("${rootProject.projectDir}/frontend")
+
+node {
+    download = true
+    version = nodeVersion
+    // npm ci (not install) — reproducible installs from package-lock.json
+    npmInstallCommand = 'ci'
+    nodeProjectDir = frontendDir
+    // Keep downloaded toolchains out of the frontend tree (vite/tsc must not see them)
+    workDir = file("${rootProject.projectDir}/.gradle/nodejs")
+    npmWorkDir = file("${rootProject.projectDir}/.gradle/npm")
+}
+
+tasks.register('frontendBuild', com.github.gradle.node.npm.task.NpmTask) {
+    description = 'Builds the frontend bundle (tsc && vite build) into app/src/main/resources/static'
+    group = 'build'
+    dependsOn tasks.named('npmInstall')
+    args = ['run', 'build']
+    // Up-to-date checking: rebuild only when frontend sources/config change
+    inputs.dir(file("${frontendDir}/src"))
+    inputs.files(
+            "${frontendDir}/index.html",
+            "${frontendDir}/package.json",
+            "${frontendDir}/package-lock.json",
+            "${frontendDir}/vite.config.ts",
+            "${frontendDir}/tsconfig.json",
+            "${frontendDir}/tsconfig.node.json",
+            "${frontendDir}/tailwind.config.ts",
+            "${frontendDir}/postcss.config.js",
+            "${frontendDir}/components.json"
+    )
+    outputs.dir(file("${projectDir}/src/main/resources/static"))
+}
+
+tasks.named('processResources') {
+    dependsOn tasks.named('frontendBuild')
+}

@@ -1,0 +1,55 @@
+# Substrate local stack — testing shape (production plan §3).
+# Requires Docker. Dev without Docker: `gradlew :app:bootRun` uses the dev profile (H2 PG-compat).
+name: substrate
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${SUBSTRATE_DB_NAME:-substrate}
+      POSTGRES_USER: ${SUBSTRATE_DB_USER:-substrate}
+      POSTGRES_PASSWORD: ${SUBSTRATE_DB_PASSWORD:?set SUBSTRATE_DB_PASSWORD in .env}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${SUBSTRATE_DB_USER:-substrate} -d ${SUBSTRATE_DB_NAME:-substrate}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?set KEYCLOAK_ADMIN_PASSWORD in .env}
+    ports:
+      - "8081:8080"
+    volumes:
+      - ./infra/keycloak:/opt/keycloak/data/import:ro
+
+  substrate-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      SPRING_PROFILES_ACTIVE: postgres
+      SUBSTRATE_DB_HOST: postgres
+      SUBSTRATE_DB_PORT: "5432"
+      SUBSTRATE_DB_NAME: ${SUBSTRATE_DB_NAME:-substrate}
+      SUBSTRATE_DB_USER: ${SUBSTRATE_DB_USER:-substrate}
+      SUBSTRATE_DB_PASSWORD: ${SUBSTRATE_DB_PASSWORD:?set SUBSTRATE_DB_PASSWORD in .env}
+      SUBSTRATE_AUTH_MODE: ${SUBSTRATE_AUTH_MODE:-oidc}
+      SUBSTRATE_OIDC_ISSUER_URI: ${SUBSTRATE_OIDC_ISSUER_URI:-http://keycloak:8080/realms/substrate}
+      SUBSTRATE_ENGAGEMENT_ID: ${SUBSTRATE_ENGAGEMENT_ID:-local-testing}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    ports:
+      - "8080:8080"
+
+volumes:
+  pgdata:

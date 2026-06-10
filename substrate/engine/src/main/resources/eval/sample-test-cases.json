@@ -1,0 +1,46 @@
+[
+  {
+    "id": "eval-complete-001-analyst-identity",
+    "input": "In one sentence, which product's analyst are you and what do you analyze?",
+    "systemPrompt": "You are MERIDIAN's Risk Ecosystem Analyst.",
+    "expectedPattern": "meridian"
+  },
+  {
+    "id": "eval-complete-002-systems-question",
+    "input": "What systems are in the domain?",
+    "systemPrompt": "You are MERIDIAN's Risk Ecosystem Analyst.",
+    "expectedPattern": "system|meridian"
+  },
+  {
+    "id": "eval-complete-003-grounding-discipline",
+    "input": "You have been given no domain data in this conversation. State explicitly that you would need to consult the ecosystem data before answering, rather than inventing systems.",
+    "systemPrompt": "You are MERIDIAN's Risk Ecosystem Analyst. Never invent facts; if you lack data, say so.",
+    "expectedPattern": "data|tool|consult|mock"
+  },
+  {
+    "id": "eval-tools-001-toolcall-roundtrip",
+    "mode": "tools",
+    "input": "Use the find_systems tool if you need system data, then summarize what you found.",
+    "systemPrompt": "You are MERIDIAN's Risk Ecosystem Analyst with tool access.",
+    "expectedPattern": "tool|system",
+    "tools": [
+      {
+        "name": "find_systems",
+        "description": "Search for technology systems by name, domain, or status.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "query": { "type": "string", "description": "Search string to match against system name" }
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "eval-tools-002-no-tools-defined",
+    "mode": "tools",
+    "input": "Answer directly: what does MERIDIAN's decision log hash chain guarantee?",
+    "systemPrompt": "You are MERIDIAN's Risk Ecosystem Analyst.",
+    "expectedPattern": "meridian|chain|tamper|append"
+  }
+]

@@ -1,0 +1,92 @@
+spring:
+  application:
+    name: meridian-substrate
+  profiles:
+    default: dev
+  servlet:
+    multipart:
+      # port-map §2.2 multipart 5MB limits — cross-cutting web config needed by C2 branding uploads
+      max-file-size: 5MB
+      max-request-size: 5MB
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+  flyway:
+    enabled: true
+    # common = ANSI-portable migrations; {vendor} = dialect-specific (postgresql / h2 for dev)
+    locations: classpath:db/migration/common,classpath:db/migration/{vendor}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+server:
+  port: 8080
+  shutdown: graceful
+
+substrate:
+  # Filesystem roots (bind AppProperties; kebab-case — homepoc's dotted 'meridian.data.dir'
+  # style never bound via relaxed binding, see AppProperties javadoc)
+  data-dir: ./data
+  uploads-dir: ./uploads
+  staging-dir: ./staging
+  demo:
+    # C10 flips this true in the dev/demo profile
+    seed: false
+  cors:
+    # Binds CorsProperties; YAML list or comma-separated string both accepted
+    allowed-origins: http://localhost:5173,http://localhost:8080
+  engagement:
+    id: ${SUBSTRATE_ENGAGEMENT_ID:dev-engagement}
+    # Surfaced as AssistantService projectName (fixture seam S10). Env-overridable;
+    # fallback matches the @Value code default pinned by C1EndpointInventoryTest.
+    display-name: ${SUBSTRATE_ENGAGEMENT_DISPLAY_NAME:Substrate Engagement}
+  transformation:
+    # S4 fixture seam — serves the 31.6KB fictional transformation-plan mockup when true.
+    # MUST stay false in any customer engagement build (port-map Appendix trap 9 analog).
+    # Demo runs may override: --substrate.transformation.fixture-enabled=true
+    fixture-enabled: false
+  blob-store:
+    # provider is profile-set: 'local' in dev (application-dev.yml); 'minio' when a
+    # MinIO service exists (see application-postgres.yml). Unset => UnconfiguredBlobStore
+    # (boot fine; branding asset upload 500s with a clear message).
+    default-bucket: substrate-dev
+    local:
+      base-dir: build/blob-store
+  decision-log:
+    # Boot-time hash-chain re-verification (C4). Code default is true; key is documentation.
+    verify-on-boot: true
+  # substrate.eval.enabled / substrate.eval.run (C3) default false in code — no entry needed.
+  # Eval harness run: gradlew :app:bootRun --args="--substrate.eval.enabled=true --substrate.eval.run=true --substrate.llm.provider=mock"
+  # substrate.engine.tools.dispatch-pool-size (C3) defaults to 8 in code; persona-access
+  # allow/deny lists default to homepoc's persona→tool allowlist — override only per engagement.
+  orchestrator:
+    # MCP seam to the sibling orchestrator product. Absent => degraded mode (no AI assist).
+    enabled: ${SUBSTRATE_ORCHESTRATOR_ENABLED:false}
+    base-url: ${SUBSTRATE_ORCHESTRATOR_URL:}
+  llm:
+    provider: anthropic
+    anthropic:
+      # Blank/absent => degraded mode (no SDK client bean); the app boots fine.
+      api-key: ${ANTHROPIC_API_KEY:}
+      # REQUIRED here: code deliberately has no hardcoded model (port-map §2.2).
+      # Absent model fails loudly at call time (IllegalStateException), never at boot.
+      model: ${SUBSTRATE_LLM_MODEL:claude-opus-4-8}
+      max-tokens: 4096
+      timeout-ms: 120000
+    tools:
+      max-calls-per-request: 5
+      dispatch-timeout-ms: 10000
+    cost:
+      # USD per million tokens — carried from homepoc; verify against current
+      # pricing for the configured model before any real cost reporting.
+      input-rate-per-million: 15.00
+      output-rate-per-million: 75.00
+    # safety.refusal-fallback-message intentionally omitted — safe Java default exists.

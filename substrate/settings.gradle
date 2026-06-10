@@ -1,0 +1,6 @@
+rootProject.name = 'meridian-substrate'
+
+include 'app'
+include 'common'
+include 'ingestion'
+include 'engine'

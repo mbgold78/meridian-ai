@@ -1,0 +1,164 @@
+[
+  {
+    "sourceSystemName": "Archer GRC",
+    "targetSystemName": "LossDB",
+    "name": "Archer-to-LossDB Control Failure Feed",
+    "integrationType": "BATCH",
+    "integrationStatus": "ACTIVE",
+    "frequency": "Monthly",
+    "description": "Monthly batch export of control failure events from Archer to LossDB for correlation with operational loss data."
+  },
+  {
+    "sourceSystemName": "Archer GRC",
+    "targetSystemName": "IssuesPortal",
+    "name": "Archer-IssuesPortal Issue Sync",
+    "integrationType": "API",
+    "integrationStatus": "ACTIVE",
+    "frequency": "Weekly",
+    "description": "API-based weekly sync of issue status between Archer's issues module and IssuesPortal. Approximately 15% of updates are missed due to field mapping gaps."
+  },
+  {
+    "sourceSystemName": "Archer GRC",
+    "targetSystemName": "Risk Reporting Hub",
+    "name": "Archer-to-Reporting Hub RCSA Feed",
+    "integrationType": "BATCH",
+    "integrationStatus": "ACTIVE",
+    "frequency": "Daily",
+    "description": "Daily batch feed of RCSA assessment data, control ratings, and risk scores from Archer to the Risk Reporting Hub."
+  },
+  {
+    "sourceSystemName": "Piedmont Risk Register",
+    "targetSystemName": "Archer GRC",
+    "name": "Piedmont-to-Archer Reconciliation Export",
+    "integrationType": "MANUAL",
+    "integrationStatus": "ACTIVE",
+    "frequency": "Quarterly",
+    "description": "Manual quarterly reconciliation export from Piedmont to Archer. Sandra Williams performs the data comparison and flags discrepancies."
+  },
+  {
+    "sourceSystemName": "LossDB",
+    "targetSystemName": "Risk Reporting Hub",
+    "name": "LossDB-to-Reporting Hub Loss Feed",
+    "integrationType": "BATCH",
+    "integrationStatus": "ACTIVE",
+    "frequency": "Daily",
+    "description": "Daily batch feed of operational loss data from LossDB to Risk Reporting Hub. Carries a 3-5 business day reconciliation lag requiring manual bridging."
+  },
+  {
+    "sourceSystemName": "IssuesPortal",
+    "targetSystemName": "AuditTrack",
+    "name": "IssuesPortal-AuditTrack Bi-directional Sync",
+    "integrationType": "API",
+    "integrationStatus": "ACTIVE",
+    "frequency": "On-demand",
+    "description": "Bi-directional API integration ensuring audit findings flow from AuditTrack into IssuesPortal and remediation status flows back."
+  },
+  {
+    "sourceSystemName": "KRI Hub",
+    "targetSystemName": "Archer GRC",
+    "name": "KRI Hub-to-Archer Threshold Feed (Broken)",
+    "integrationType": "BATCH",
+    "integrationStatus": "BROKEN",
+    "frequency": "Monthly",
+    "description": "Monthly batch feed of KRI threshold data from KRI Hub back to Archer. Three of eight feeds broken since Q3 platform upgrade. Christine Lee manually gap-fills."
+  },
+  {
+    "sourceSystemName": "Archer GRC",
+    "targetSystemName": "KRI Hub",
+    "name": "Archer-to-KRI Hub KRI Data Feed",
+    "integrationType": "BATCH",
+    "integrationStatus": "ACTIVE",
+    "frequency": "Monthly",
+    "description": "Monthly batch export of KRI definitions and threshold values from Archer to the KRI Hub SQL backend."
+  },
+  {
+    "sourceSystemName": "Change Log",
+    "targetSystemName": "Change Risk Tool",
+    "name": "Change Log to Change Risk Tool Manual Bridge",
+    "integrationType": "MANUAL",
+    "integrationStatus": "ACTIVE",
+    "frequency": "Daily",
+    "description": "Manual dual-entry of all change requests into both Change Log and Change Risk Tool. Consumes 2.0 FTE with 15-20% transcription error rate."
+  },
+  {
+    "sourceSystemName": "NPA System",
+    "targetSystemName": "Change Risk Tool",
+    "name": "NPA-to-Change Risk Tool Approval Flow",
+    "integrationType": "API",
+    "integrationStatus": "ACTIVE",
+    "frequency": "On-demand",
+    "description": "API integration triggering change risk assessment in Change Risk Tool when a new product is approved in the NPA System."
+  },
+  {
+    "sourceSystemName": "Vendor Risk Platform",
+    "targetSystemName": "NPA System",
+    "name": "Vendor Risk-to-NPA Assessment Feed",
+    "integrationType": "API",
+    "integrationStatus": "ACTIVE",
+    "frequency": "On-demand",
+    "description": "API-based feed of vendor risk assessment scores and due diligence results from Vendor Risk Platform to NPA System for new product evaluations."
+  },
+  {
+    "sourceSystemName": "Scenario Workbench",
+    "targetSystemName": "LossDB",
+    "name": "Scenario-to-LossDB Annual Output",
+    "integrationType": "BATCH",
+    "integrationStatus": "ACTIVE",
+    "frequency": "Annual",
+    "description": "Annual batch export of scenario analysis outputs from the Scenario Workbench to LossDB for capital model calibration."
+  },
+  {
+    "sourceSystemName": "AuditTrack",
+    "targetSystemName": "IssuesPortal",
+    "name": "AuditTrack-to-IssuesPortal Finding Push",
+    "integrationType": "API",
+    "integrationStatus": "ACTIVE",
+    "frequency": "On-demand",
+    "description": "API push of new audit findings from AuditTrack into IssuesPortal for enterprise-wide tracking and remediation."
+  },
+  {
+    "sourceSystemName": "LossDB",
+    "targetSystemName": "Archer GRC",
+    "name": "LossDB-to-Archer Loss Event Linkage",
+    "integrationType": "BATCH",
+    "integrationStatus": "ACTIVE",
+    "frequency": "Weekly",
+    "description": "Weekly batch linking loss events in LossDB to corresponding control records in Archer for root cause tracking."
+  },
+  {
+    "sourceSystemName": "Risk Reporting Hub",
+    "targetSystemName": "Archer GRC",
+    "name": "Reporting Hub Dashboard Metrics Feedback",
+    "integrationType": "BATCH",
+    "integrationStatus": "ACTIVE",
+    "frequency": "Monthly",
+    "description": "Monthly feedback of aggregated dashboard metrics from Risk Reporting Hub to Archer for executive risk appetite monitoring."
+  },
+  {
+    "sourceSystemName": "KRI Hub",
+    "targetSystemName": "Risk Reporting Hub",
+    "name": "KRI Hub-to-Reporting Hub Dashboard Feed",
+    "integrationType": "BATCH",
+    "integrationStatus": "ACTIVE",
+    "frequency": "Monthly",
+    "description": "Monthly batch feed of KRI breach summaries and trend data from KRI Hub to Risk Reporting Hub for the CRO dashboard."
+  },
+  {
+    "sourceSystemName": "Scenario Workbench",
+    "targetSystemName": "Risk Reporting Hub",
+    "name": "Scenario-to-Reporting Hub Stress Results",
+    "integrationType": "BATCH",
+    "integrationStatus": "ACTIVE",
+    "frequency": "Annual",
+    "description": "Annual export of stress test and scenario analysis results from Scenario Workbench to Risk Reporting Hub for board reporting."
+  },
+  {
+    "sourceSystemName": "Archer GRC",
+    "targetSystemName": "Piedmont Risk Register",
+    "name": "Archer-to-Piedmont Migration Sync",
+    "integrationType": "MANUAL",
+    "integrationStatus": "DEPRECATED",
+    "frequency": "Quarterly",
+    "description": "Deprecated manual sync used during the Archer migration to keep Piedmont updated. Still performed quarterly by Sandra Williams as a safety net."
+  }
+]

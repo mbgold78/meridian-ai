@@ -1,0 +1,42 @@
+[
+  {
+    "sourceEntityName": "Risk Assessment (RCSA)",
+    "targetEntityName": "Risk Assessment (Legacy)",
+    "overlapType": "DUPLICATE",
+    "confidence": 0.92,
+    "details": "Both Archer and Piedmont perform RCSA for overlapping business lines. Three business lines still use Piedmont, creating dual maintenance burden.",
+    "aiInferred": false
+  },
+  {
+    "sourceEntityName": "Issue Lifecycle Management",
+    "targetEntityName": "Issue Tracking (Archer Module)",
+    "overlapType": "DUPLICATE",
+    "confidence": 0.87,
+    "details": "IssuesPortal and Archer both track issues. The ERT parallel tracker further compounds the overlap. Weekly manual reconciliation bridges the gap.",
+    "aiInferred": false
+  },
+  {
+    "sourceEntityName": "Change Risk Assessment",
+    "targetEntityName": "Change Tracking (Legacy)",
+    "overlapType": "DUPLICATE",
+    "confidence": 0.95,
+    "details": "Change Risk Tool and Change Log serve identical functions. Dual-entry requirement consumes 2.0 FTE with a 15-20% error rate.",
+    "aiInferred": false
+  },
+  {
+    "sourceEntityName": "Enterprise Risk Reporting",
+    "targetEntityName": "KRI Monitoring",
+    "overlapType": "PARTIAL_OVERLAP",
+    "confidence": 0.72,
+    "details": "KRI Hub dashboard overlaps with Risk Reporting Hub's KRI view. Both consume the same underlying data but present it through different interfaces.",
+    "aiInferred": false
+  },
+  {
+    "sourceEntityName": "Loss Event Recording",
+    "targetEntityName": "Enterprise Risk Reporting",
+    "overlapType": "DATA_DEPENDENCY",
+    "confidence": 0.85,
+    "details": "Risk Reporting Hub depends on LossDB feed with 3-5 day lag. Manual triangulation bridges the gap daily.",
+    "aiInferred": false
+  }
+]

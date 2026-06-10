@@ -1,0 +1,46 @@
+[
+  {
+    "title": "D-001: Consolidate IssuesPortal and Archer Issues Tracking",
+    "description": "Consolidate all enterprise issue tracking into IssuesPortal and decommission Archer's built-in issue tracking module. IssuesPortal will be extended with ERT-specific fields to absorb the shadow tracker. The weekly Archer-to-IssuesPortal sync (MP-006) will be eliminated once the Archer module is disabled.",
+    "decisionType": "CONSOLIDATE",
+    "status": "APPROVED",
+    "rationale": "Three overlapping issue tracking surfaces (IssuesPortal, Archer issues module, ERT parallel tracker) create reconciliation burden and inconsistent audit trails. IssuesPortal has the strongest workflow engine and MetricStream vendor support for extensions.",
+    "affectedSystemNames": ["IssuesPortal", "Archer GRC"],
+    "affectedProcessNames": ["MP-006: Archer-to-IssuesPortal Weekly Sync", "MP-008: ERT Parallel Issue Tracker"]
+  },
+  {
+    "title": "D-002: Retire Piedmont Risk Register and Complete Archer Migration",
+    "description": "Migrate the remaining three business lines from Piedmont Risk Register to Archer GRC and retire Piedmont. Historical data will be archived and indexed for regulatory lookup. The monthly Archer-to-Piedmont reconciliation (MP-003) and on-demand historical lookups (MP-026) will be eliminated.",
+    "decisionType": "RETIRE",
+    "status": "APPROVED",
+    "rationale": "Piedmont's 20-year-old SharePoint platform is a maintenance liability with stale assessments. Completing the Archer migration eliminates a 0.4 FTE reconciliation process and establishes a single RCSA source of truth.",
+    "affectedSystemNames": ["Piedmont Risk Register", "Archer GRC"],
+    "affectedProcessNames": ["MP-003: Monthly Archer-to-Piedmont Reconciliation", "MP-026: Piedmont Historical Data Lookup"]
+  },
+  {
+    "title": "D-003: Automate Change Log / Change Risk Tool Dual Entry",
+    "description": "Retire BMC Remedy Change Log by migrating all historical change data to Change Risk Tool (ServiceNow) and implementing a one-time data migration. The dual-entry process (MP-007) consuming 2.0 FTE will be eliminated. A read-only archive of Change Log data will be maintained for 7 years per retention policy.",
+    "decisionType": "AUTOMATE_MANUAL_PROCESS",
+    "status": "PROPOSED",
+    "rationale": "The dual-entry process is the single largest FTE consumer among manual processes (2.0 FTE) and introduces a 15-20% error rate. Change Risk Tool on ServiceNow has full feature parity and is the strategic platform.",
+    "affectedSystemNames": ["Change Log", "Change Risk Tool"],
+    "affectedProcessNames": ["MP-007: Change Log to Change Risk Tool Dual Entry"]
+  },
+  {
+    "title": "D-004: Consolidation of NPA System and Change Risk Tool",
+    "description": "Proposed consolidation of the NPA System and Change Risk Tool into a unified ServiceNow workflow platform. Both run on ServiceNow and share similar approval routing patterns.",
+    "decisionType": "CONSOLIDATE",
+    "status": "REJECTED",
+    "rationale": "Rejected because NPA and change management serve fundamentally different regulatory purposes. The NPA System has unique vendor risk integration requirements that would be compromised by consolidation. The API integration between them is functioning well.",
+    "affectedSystemNames": ["NPA System", "Change Risk Tool"]
+  },
+  {
+    "title": "D-005: Formalize CRE Concentration Calculation Before Retirement",
+    "description": "Immediately begin knowledge transfer from David Krishnamurthy to formalize the CRE concentration calculation. The proprietary Excel model will be documented, validated by model risk management, and migrated to Risk Reporting Hub as an automated calculation. Target completion is 6 months before David's planned retirement.",
+    "decisionType": "FORMALIZE_MANUAL_PROCESS",
+    "status": "PROPOSED",
+    "rationale": "David Krishnamurthy's planned retirement in 18 months creates an urgent tribal knowledge risk for a critical credit risk calculation. The current Excel-based process has no documentation, no backup executor, and no audit trail.",
+    "affectedSystemNames": ["Risk Reporting Hub", "Archer GRC"],
+    "affectedProcessNames": ["MP-010: CRE Concentration Calculation"]
+  }
+]

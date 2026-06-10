@@ -1,0 +1,416 @@
+{
+  "executiveSummary": {
+    "currentState": "Meridian Bancorp's operational risk ecosystem currently spans 12 discrete systems with significant functional overlap, manual reconciliation burden, and fragmented ownership across 25 roles. Critical processes such as the quarterly CRO sign-off package, daily wire transfer override workflow, and CRE concentration calculation depend on undocumented tribal knowledge and labor-intensive manual steps. The Archer GRC platform — intended as the enterprise standard — coexists with the legacy Piedmont Risk Register and a constellation of point solutions (LossDB, IssuesPortal, KRI Hub, Scenario Workbench, NPA System, Vendor Risk Platform, Change Risk Tool, Change Log, AuditTrack, Risk Reporting Hub) that were adopted incrementally over the past decade without a unified integration architecture. Regulatory expectations under SR 11-7, BCBS 239, and Basel IV increasingly demand lineage-traceable, timely, and accurate risk data aggregation capabilities that the current patchwork cannot reliably deliver.",
+    "targetState": "The target state consolidates the landscape to 9 core systems, eliminates redundant data entry paths, and establishes Archer GRC as the authoritative system of record for issues, risks, and controls. Automated feeds replace the six highest-effort manual reconciliation processes, reducing operational risk FTE effort by an estimated 16%. A unified risk data layer enables near-real-time CRO reporting, automated KRI threshold monitoring, and audit-ready lineage from source through aggregation. Role structures are rationalized around centers of excellence rather than system-specific coordinators, with explicit succession planning for key-person dependencies including David Krishnamurthy's pending retirement. Policy artifacts are refreshed to reflect the consolidated operating model and satisfy examiner expectations ahead of the next OCC horizontal review.",
+    "transformationArc": "This 18-month plan is organized into three waves. Wave 1 (months 1–6) captures quick wins: completing the long-stalled Archer migration, retiring Piedmont and the redundant Change Log, consolidating issue tracking, stabilizing KRI Hub feeds, and formalizing David Krishnamurthy's CRE concentration calculation methodology before his planned retirement. Wave 2 (months 7–12) tackles core transformation: automating LossDB triangulation, standing up real-time reporting feeds, consolidating Vendor Risk Platform capabilities into Archer, and redesigning risk coordinator roles. Wave 3 (months 13–18) delivers optimization: a unified risk data lake, a fully automated CRO reporting package, final role restructuring, and a comprehensive policy refresh. Each wave is sequenced to manage change capacity, honor regulatory windows, and build on the data-quality foundations laid in preceding waves."
+  },
+
+  "currentVsTarget": {
+    "systemsBefore": 12,
+    "systemsAfter": 9,
+    "rolesBefore": 25,
+    "rolesAfter": 21,
+    "annualOperatingCostBefore": "$4.2M (licenses, hosting, manual FTE effort)",
+    "annualOperatingCostAfter": "$3.1M (projected, post-consolidation steady-state)",
+    "consolidations": [
+      "Piedmont Risk Register retired — all risk register functions migrated to Archer GRC",
+      "IssuesPortal merged into Archer Issues Tracking module (D-001)",
+      "Change Log retired — Change Risk Tool enhanced with automated audit trail (D-003)",
+      "Vendor Risk Platform assessment workflows absorbed into Archer Third-Party Risk module",
+      "Risk Reporting Hub replaced by automated data-lake-driven reporting layer"
+    ]
+  },
+
+  "initiatives": [
+    {
+      "id": "I-001",
+      "name": "Complete Archer Migration and Retire Piedmont Risk Register",
+      "category": "Technology",
+      "description": "Migrate all remaining risk register entries, custom fields, and historical assessment data from Piedmont Risk Register into Archer GRC. Validate data completeness via reconciliation scripts, obtain sign-off from Aisha Robinson, and decommission Piedmont infrastructure. This resolves the long-standing dual-maintenance burden identified in D-002.",
+      "linkedDecisions": ["D-002"],
+      "complexity": "Large",
+      "estimatedMonths": 5,
+      "wave": "Wave 1",
+      "owner": "Enterprise Risk Director",
+      "rpiSummary": "Responsible: Wei Chen (migration execution), Accountable: Aisha Robinson (Enterprise Risk Director), Consulted: Sarah Okonkwo (CRO), Informed: Marcus Chen (CoS), AuditTrack stakeholders"
+    },
+    {
+      "id": "I-002",
+      "name": "Consolidate IssuesPortal into Archer Issues Tracking",
+      "category": "Technology",
+      "description": "Merge all active issues, remediation plans, and workflow configurations from the standalone IssuesPortal into Archer's Issues Tracking module. Map IssuesPortal custom statuses to Archer taxonomy, retrain issue owners, and redirect API consumers. Eliminates the nightly sync job that currently fails silently 2–3 times per quarter.",
+      "linkedDecisions": ["D-001"],
+      "complexity": "Medium",
+      "estimatedMonths": 4,
+      "wave": "Wave 1",
+      "owner": "Issues Management Lead",
+      "rpiSummary": "Responsible: Priya Sundaram (Issues), Accountable: Aisha Robinson (Enterprise Risk Director), Consulted: Wei Chen (OpRisk Analytics), Informed: OCC exam liaison, internal audit"
+    },
+    {
+      "id": "I-003",
+      "name": "Retire Change Log and Automate Change Risk Tool Audit Trail",
+      "category": "Technology",
+      "description": "Implement automated change-event capture within Change Risk Tool to eliminate the manual dual-entry workflow between Change Log and Change Risk Tool. Deploy event-driven logging that satisfies SOX IT general controls evidence requirements. Decommission the standalone Change Log spreadsheet-based system after parallel-run validation.",
+      "linkedDecisions": ["D-003"],
+      "complexity": "Medium",
+      "estimatedMonths": 3,
+      "wave": "Wave 1",
+      "owner": "Change Management Lead",
+      "rpiSummary": "Responsible: Kevin Park (Change Management), Accountable: Marcus Chen (CoS), Consulted: Internal Audit, SOX compliance team, Informed: Aisha Robinson, IT Operations"
+    },
+    {
+      "id": "I-004",
+      "name": "Stabilize KRI Hub Automated Feeds",
+      "category": "Technology",
+      "description": "Replace the manual gap-fill process for KRI Hub by establishing reliable automated feeds from LossDB, Archer GRC, and the NPA System. Implement feed-health monitoring with alerting thresholds so that missing or stale data is surfaced within 4 hours rather than discovered during month-end reporting. Reduces Wei Chen's team monthly effort by approximately 30 hours.",
+      "linkedDecisions": [],
+      "complexity": "Medium",
+      "estimatedMonths": 4,
+      "wave": "Wave 1",
+      "owner": "OpRisk Analytics Lead",
+      "rpiSummary": "Responsible: Wei Chen (OpRisk Analytics), Accountable: Aisha Robinson (Enterprise Risk Director), Consulted: LossDB administrator, NPA System owner, Informed: Sarah Okonkwo (CRO), Risk Reporting Hub consumers"
+    },
+    {
+      "id": "I-005",
+      "name": "Formalize CRE Concentration Calculation Methodology",
+      "category": "Procedure",
+      "description": "Document David Krishnamurthy's CRE concentration calculation methodology — currently executed via a complex series of Excel models and manual data pulls — into a formal, version-controlled procedure with automated validation checks. Conduct knowledge-transfer sessions, cross-train two analysts, and integrate the calculation into the Scenario Workbench pipeline before David's planned retirement in Q3.",
+      "linkedDecisions": ["D-005"],
+      "complexity": "Medium",
+      "estimatedMonths": 5,
+      "wave": "Wave 1",
+      "owner": "Credit Risk Senior Analyst",
+      "rpiSummary": "Responsible: David Krishnamurthy (Credit Risk Senior Analyst), Accountable: James Patel (Treasury VP), Consulted: Wei Chen (OpRisk Analytics), Scenario Workbench owner, Informed: Sarah Okonkwo (CRO), OCC exam team"
+    },
+    {
+      "id": "I-006",
+      "name": "Standardize Daily Wire Transfer Override Workflow",
+      "category": "Procedure",
+      "description": "Redesign the daily wire transfer override process to replace ad-hoc email-and-phone approvals with a structured workflow in Archer GRC. Implement maker-checker controls, automated escalation paths, and a tamper-evident audit trail. Addresses findings from the most recent internal audit and aligns with BSA/AML examiner expectations.",
+      "linkedDecisions": [],
+      "complexity": "Small",
+      "estimatedMonths": 3,
+      "wave": "Wave 1",
+      "owner": "Treasury VP",
+      "rpiSummary": "Responsible: James Patel (Treasury VP), Accountable: Sarah Okonkwo (CRO), Consulted: BSA Officer, Internal Audit, Informed: Marcus Chen (CoS), wire operations staff"
+    },
+    {
+      "id": "I-007",
+      "name": "Automate LossDB Triangulation Process",
+      "category": "Technology",
+      "description": "Replace the manual quarterly LossDB triangulation — which currently requires 3 analysts and 5 business days — with an automated reconciliation engine that cross-references GL feeds, incident records, and insurance recovery data. Implement exception-based review so analysts focus on material discrepancies rather than line-by-line matching. Critical for BCBS 239 compliance and Basel IV loss-data requirements.",
+      "linkedDecisions": [],
+      "complexity": "Large",
+      "estimatedMonths": 5,
+      "wave": "Wave 2",
+      "owner": "OpRisk Analytics Lead",
+      "rpiSummary": "Responsible: Wei Chen (OpRisk Analytics), Accountable: Aisha Robinson (Enterprise Risk Director), Consulted: Finance/GL team, Insurance coordinator, Informed: Sarah Okonkwo (CRO), external auditors"
+    },
+    {
+      "id": "I-008",
+      "name": "Implement Real-Time Risk Reporting Feeds",
+      "category": "Technology",
+      "description": "Stand up event-driven data pipelines from Archer GRC, KRI Hub, and LossDB into the Risk Reporting Hub, replacing the current batch-overnight ETL with near-real-time streaming. Enable intraday risk position visibility for the CRO dashboard. This is a prerequisite for the Wave 3 automated CRO reporting package and satisfies BCBS 239 timeliness principles.",
+      "linkedDecisions": [],
+      "complexity": "Large",
+      "estimatedMonths": 6,
+      "wave": "Wave 2",
+      "owner": "Enterprise Risk Director",
+      "rpiSummary": "Responsible: Wei Chen (OpRisk Analytics), Accountable: Aisha Robinson (Enterprise Risk Director), Consulted: IT Architecture, Data Governance, Informed: Sarah Okonkwo (CRO), Marcus Chen (CoS)"
+    },
+    {
+      "id": "I-009",
+      "name": "Consolidate Vendor Risk Platform into Archer Third-Party Risk Module",
+      "category": "Technology",
+      "description": "Migrate vendor assessment workflows, due-diligence templates, and ongoing monitoring configurations from the standalone Vendor Risk Platform into Archer's Third-Party Risk module. Preserve historical assessment records and SLA tracking data. Reduces license cost by approximately $180K annually and provides a single pane of glass for third-party risk oversight.",
+      "linkedDecisions": [],
+      "complexity": "Large",
+      "estimatedMonths": 6,
+      "wave": "Wave 2",
+      "owner": "Enterprise Risk Director",
+      "rpiSummary": "Responsible: Vendor Risk Platform administrator, Accountable: Aisha Robinson (Enterprise Risk Director), Consulted: Procurement, Legal, Informed: Sarah Okonkwo (CRO), vendor relationship managers"
+    },
+    {
+      "id": "I-010",
+      "name": "Redesign Risk Coordinator Role Structure",
+      "category": "Organization",
+      "description": "Transition from system-specific risk coordinator roles (Piedmont coordinator, IssuesPortal coordinator, etc.) to domain-aligned risk analyst roles organized around credit, market, and operational risk pillars. Affected coordinators receive upskilling plans, and two positions are redeployed to the new data-quality assurance function. Reduces role count by 4 while increasing analytical depth.",
+      "linkedDecisions": ["D-001", "D-002"],
+      "complexity": "Medium",
+      "estimatedMonths": 4,
+      "wave": "Wave 2",
+      "owner": "Chief of Staff",
+      "rpiSummary": "Responsible: Marcus Chen (CoS), Accountable: Sarah Okonkwo (CRO), Consulted: HR Business Partner, affected coordinators, Informed: Aisha Robinson, department heads"
+    },
+    {
+      "id": "I-011",
+      "name": "Establish Unified Risk Data Lake",
+      "category": "Technology",
+      "description": "Deploy a governed risk data lake that serves as the single source of truth for all risk analytics, regulatory reporting, and management dashboards. Ingest normalized data from Archer GRC, LossDB, KRI Hub, Scenario Workbench, NPA System, and AuditTrack. Implement data-lineage tracking, quality scorecards, and role-based access controls. Foundational for advanced analytics and future AI/ML risk-modeling capabilities.",
+      "linkedDecisions": [],
+      "complexity": "Large",
+      "estimatedMonths": 6,
+      "wave": "Wave 3",
+      "owner": "Enterprise Risk Director",
+      "rpiSummary": "Responsible: Wei Chen (OpRisk Analytics), Accountable: Aisha Robinson (Enterprise Risk Director), Consulted: Chief Data Officer, IT Architecture, Informed: Sarah Okonkwo (CRO), all risk system owners"
+    },
+    {
+      "id": "I-012",
+      "name": "Automate CRO Quarterly Reporting Package",
+      "category": "Technology",
+      "description": "Replace the manual CRO quarterly sign-off package assembly — currently requiring 12+ person-days of effort across 4 teams — with an automated report-generation pipeline sourced from the risk data lake. Include automated variance commentary, trend visualization, and regulatory-metric dashboards. Sarah Okonkwo reviews and approves a pre-assembled package rather than waiting for manual compilation.",
+      "linkedDecisions": [],
+      "complexity": "Medium",
+      "estimatedMonths": 4,
+      "wave": "Wave 3",
+      "owner": "OpRisk Analytics Lead",
+      "rpiSummary": "Responsible: Wei Chen (OpRisk Analytics), Accountable: Sarah Okonkwo (CRO), Consulted: Aisha Robinson, Finance, Informed: Marcus Chen (CoS), Board Risk Committee secretary"
+    },
+    {
+      "id": "I-013",
+      "name": "Final Role Restructuring and Talent Realignment",
+      "category": "Organization",
+      "description": "Execute the final phase of organizational realignment: formalize the domain-aligned risk analyst career ladder, complete David Krishnamurthy's succession transition, and establish the data-quality assurance team. Ensure all job descriptions, reporting lines, and compensation bands reflect the new operating model. Conduct organizational-health pulse survey to measure change adoption.",
+      "linkedDecisions": ["D-005"],
+      "complexity": "Medium",
+      "estimatedMonths": 4,
+      "wave": "Wave 3",
+      "owner": "Chief of Staff",
+      "rpiSummary": "Responsible: Marcus Chen (CoS), Accountable: Sarah Okonkwo (CRO), Consulted: HR Business Partner, Aisha Robinson, Informed: all risk department staff"
+    },
+    {
+      "id": "I-014",
+      "name": "Comprehensive Policy and Standards Refresh",
+      "category": "Policy",
+      "description": "Conduct a full review and update of all operational risk policies, standards, and procedures to reflect the consolidated system landscape, revised role structures, and automated workflows. Ensure alignment with SR 11-7 model-risk expectations for any new automated calculations, BCBS 239 data-aggregation principles, and updated Basel IV operational-risk capital requirements. Obtain Board Risk Committee approval for material policy changes.",
+      "linkedDecisions": ["D-001", "D-002", "D-003", "D-005"],
+      "complexity": "Medium",
+      "estimatedMonths": 5,
+      "wave": "Wave 3",
+      "owner": "Enterprise Risk Director",
+      "rpiSummary": "Responsible: Aisha Robinson (Enterprise Risk Director), Accountable: Sarah Okonkwo (CRO), Consulted: Legal, Compliance, Internal Audit, Informed: Board Risk Committee, OCC exam liaison"
+    },
+    {
+      "id": "I-015",
+      "name": "Decommission Risk Reporting Hub and Cutover to Data Lake Reporting",
+      "category": "Technology",
+      "description": "After the risk data lake and automated CRO reporting package are operational, execute a controlled cutover from the legacy Risk Reporting Hub to the new reporting layer. Run a 60-day parallel period with reconciliation checkpoints, then decommission the Risk Reporting Hub infrastructure. Completes the system-count reduction from 12 to 9.",
+      "linkedDecisions": [],
+      "complexity": "Medium",
+      "estimatedMonths": 3,
+      "wave": "Wave 3",
+      "owner": "OpRisk Analytics Lead",
+      "rpiSummary": "Responsible: Wei Chen (OpRisk Analytics), Accountable: Aisha Robinson (Enterprise Risk Director), Consulted: Risk Reporting Hub consumers, IT Operations, Informed: Sarah Okonkwo (CRO), Marcus Chen (CoS)"
+    }
+  ],
+
+  "waveRoadmap": {
+    "waves": [
+      {
+        "name": "Wave 1",
+        "title": "Quick Wins & Foundation",
+        "startMonth": 1,
+        "endMonth": 6,
+        "initiatives": ["I-001", "I-002", "I-003", "I-004", "I-005", "I-006"],
+        "keyMilestones": [
+          "Month 2: Piedmont data migration complete, validation begins",
+          "Month 3: Change Log retired, Change Risk Tool audit trail live",
+          "Month 4: IssuesPortal decommissioned, all issues managed in Archer",
+          "Month 5: CRE concentration methodology documented and cross-trained",
+          "Month 6: KRI Hub feeds stabilized, Piedmont fully decommissioned"
+        ],
+        "riskFactors": [
+          "David Krishnamurthy's retirement timeline may accelerate, compressing I-005",
+          "Archer license expansion requires procurement lead time (8 weeks)",
+          "IssuesPortal has undocumented API consumers that may surface during migration"
+        ]
+      },
+      {
+        "name": "Wave 2",
+        "title": "Core Transformation",
+        "startMonth": 7,
+        "endMonth": 12,
+        "initiatives": ["I-007", "I-008", "I-009", "I-010"],
+        "keyMilestones": [
+          "Month 8: LossDB automated triangulation in parallel-run with manual process",
+          "Month 9: First real-time risk data feeds operational",
+          "Month 10: Vendor Risk Platform migration to Archer complete",
+          "Month 12: Risk coordinator role redesign effective, new org chart live"
+        ],
+        "riskFactors": [
+          "Real-time feeds require infrastructure investment not yet budgeted",
+          "Vendor Risk Platform migration depends on Archer module licensing negotiation",
+          "Role redesign may face resistance; change management capacity is a constraint"
+        ]
+      },
+      {
+        "name": "Wave 3",
+        "title": "Optimization & Sustainability",
+        "startMonth": 13,
+        "endMonth": 18,
+        "initiatives": ["I-011", "I-012", "I-013", "I-014", "I-015"],
+        "keyMilestones": [
+          "Month 14: Risk data lake MVP with core feeds operational",
+          "Month 15: Automated CRO reporting package pilot for Q3 cycle",
+          "Month 16: Policy refresh drafts circulated for stakeholder review",
+          "Month 17: Risk Reporting Hub parallel-run begins",
+          "Month 18: Full cutover, all policies approved, org restructuring complete"
+        ],
+        "riskFactors": [
+          "Data lake scope creep — strict MVP discipline required",
+          "Board Risk Committee calendar may delay policy approvals",
+          "OCC examination timing could conflict with cutover window"
+        ]
+      }
+    ]
+  },
+
+  "regulatoryTouchpoints": [
+    {
+      "regulation": "SR 11-7 (Model Risk Management)",
+      "relevance": "The CRE concentration calculation formalization (I-005) and LossDB triangulation automation (I-007) introduce model-like automated calculations that fall within SR 11-7 scope. Validation plans must be established before production deployment. The automated CRO reporting package (I-012) aggregates model outputs and requires disclosure in the model inventory.",
+      "impactedInitiatives": ["I-005", "I-007", "I-012"],
+      "requiredActions": [
+        "Register CRE concentration calculation in model inventory",
+        "Develop validation plan for automated LossDB triangulation logic",
+        "Update model risk policy to cover automated reporting pipelines",
+        "Schedule independent validation review before Wave 2 go-live"
+      ]
+    },
+    {
+      "regulation": "BCBS 239 (Risk Data Aggregation and Reporting)",
+      "relevance": "The transformation directly addresses BCBS 239 principles of accuracy, completeness, timeliness, and adaptability. Real-time reporting feeds (I-008), the risk data lake (I-011), and automated CRO reporting (I-012) are designed to close gaps identified in the most recent self-assessment. Data lineage capabilities in the risk data lake satisfy Principle 6 (adaptability).",
+      "impactedInitiatives": ["I-004", "I-008", "I-011", "I-012", "I-015"],
+      "requiredActions": [
+        "Update BCBS 239 self-assessment after Wave 1 completion",
+        "Demonstrate data-lineage capability to OCC during next exam",
+        "Establish ongoing data-quality metrics aligned to BCBS 239 principles",
+        "Document aggregation architecture for examiner review"
+      ]
+    },
+    {
+      "regulation": "Basel IV (Operational Risk Capital)",
+      "relevance": "Basel IV's Standardised Measurement Approach requires high-quality, granular loss data. LossDB triangulation automation (I-007) and data lake integration (I-011) improve the reliability of loss-data inputs to the capital calculation. The historical data migration from Piedmont (I-001) must preserve loss-event linkages required for the 10-year lookback window.",
+      "impactedInitiatives": ["I-001", "I-007", "I-011"],
+      "requiredActions": [
+        "Validate loss-event data integrity post-Piedmont migration",
+        "Ensure automated triangulation logic aligns with Basel IV loss-event categorization",
+        "Confirm 10-year historical loss data accessibility in risk data lake",
+        "Coordinate with Finance on capital-calculation impact assessment"
+      ]
+    },
+    {
+      "regulation": "SOX (IT General Controls)",
+      "relevance": "The Change Log retirement (I-003) directly impacts SOX ITGC evidence. The replacement audit trail in Change Risk Tool must satisfy external auditor requirements for change-management evidence. System decommissioning activities (I-001, I-002, I-009, I-015) require SOX impact assessments to confirm no in-scope controls are disrupted.",
+      "impactedInitiatives": ["I-001", "I-002", "I-003", "I-009", "I-015"],
+      "requiredActions": [
+        "Obtain external auditor pre-approval for Change Log replacement controls",
+        "Conduct SOX impact assessment for each system decommissioning",
+        "Update ITGC control matrices to reflect consolidated system landscape",
+        "Schedule walkthrough with external auditors before Wave 1 completion"
+      ]
+    }
+  ],
+
+  "organizationalImpact": [
+    {
+      "impactArea": "Risk Coordinator Role Consolidation",
+      "description": "Four system-specific risk coordinator positions (Piedmont coordinator, IssuesPortal coordinator, Change Log coordinator, Vendor Risk coordinator) are eliminated as their respective systems are retired or consolidated. Affected staff are offered redeployment into domain-aligned risk analyst roles or the new data-quality assurance function.",
+      "affectedRoles": ["Piedmont Risk Coordinator", "IssuesPortal Coordinator", "Change Log Coordinator", "Vendor Risk Coordinator"],
+      "timeline": "Wave 1 (2 roles) and Wave 2 (2 roles)",
+      "linkedInitiatives": ["I-001", "I-002", "I-003", "I-009", "I-010"]
+    },
+    {
+      "impactArea": "David Krishnamurthy Succession and Knowledge Transfer",
+      "description": "David Krishnamurthy, the sole holder of institutional knowledge for the CRE concentration calculation methodology, is approaching retirement. Initiative I-005 formalizes his methodology into documented, repeatable procedures and cross-trains two analysts. Post-retirement, the calculation transitions to the OpRisk Analytics team under Wei Chen's oversight, with James Patel retaining accountability.",
+      "affectedRoles": ["Credit Risk Senior Analyst (David Krishnamurthy)", "OpRisk Analytics team", "Treasury VP (James Patel)"],
+      "timeline": "Wave 1 (must complete before David's Q3 departure)",
+      "linkedInitiatives": ["I-005", "I-013"]
+    },
+    {
+      "impactArea": "New Data Quality Assurance Function",
+      "description": "A new 2-person data-quality assurance team is established, staffed by redeployed risk coordinators. This team owns ongoing data-quality monitoring across the consolidated system landscape, manages feed-health dashboards, and serves as first responders for data-integrity exceptions surfaced by automated monitoring.",
+      "affectedRoles": ["Redeployed Risk Coordinators (2)", "Wei Chen (OpRisk Analytics, dotted-line oversight)"],
+      "timeline": "Wave 2 (formation) through Wave 3 (full operational capability)",
+      "linkedInitiatives": ["I-004", "I-008", "I-010", "I-011"]
+    },
+    {
+      "impactArea": "CRO Reporting Workflow Transformation",
+      "description": "Sarah Okonkwo's quarterly sign-off process shifts from reviewing a manually assembled package (12+ person-days of preparation) to approving an automated, pre-validated reporting package with exception-based commentary. This frees approximately 3 FTE-weeks per quarter across the risk organization and reduces the sign-off cycle from 15 business days to 5.",
+      "affectedRoles": ["Sarah Okonkwo (CRO)", "Risk Reporting Analysts (3)", "Wei Chen (OpRisk Analytics)"],
+      "timeline": "Wave 3",
+      "linkedInitiatives": ["I-008", "I-012", "I-015"]
+    },
+    {
+      "impactArea": "Change Management Capacity",
+      "description": "Kevin Park's change management function absorbs significant additional load during the transformation. Temporary augmentation with a contract change-management specialist is recommended for Waves 1–2. Post-transformation, Kevin's role expands to include ongoing system-change governance for the consolidated Archer platform.",
+      "affectedRoles": ["Kevin Park (Change Management Lead)"],
+      "timeline": "All waves",
+      "linkedInitiatives": ["I-003", "I-010", "I-013"]
+    }
+  ],
+
+  "policyUpdates": [
+    {
+      "policyName": "Enterprise Operational Risk Management Policy",
+      "currentVersion": "v3.2 (2024-09)",
+      "updateReason": "System landscape consolidation fundamentally changes the control environment. Policy must reflect Archer GRC as sole system of record for risks, issues, and controls. References to Piedmont Risk Register, IssuesPortal, and Change Log must be removed. Role descriptions must align to the new domain-based structure.",
+      "targetCompletionWave": "Wave 3",
+      "linkedInitiatives": ["I-001", "I-002", "I-003", "I-010", "I-014"],
+      "approvalAuthority": "Board Risk Committee"
+    },
+    {
+      "policyName": "Operational Risk Data Governance Standard",
+      "currentVersion": "v2.1 (2024-03)",
+      "updateReason": "Introduction of the risk data lake, real-time feeds, and automated aggregation requires updated data-quality standards, lineage requirements, and access-control provisions. Must address BCBS 239 principles explicitly and define data-stewardship responsibilities for the new data-quality assurance function.",
+      "targetCompletionWave": "Wave 3",
+      "linkedInitiatives": ["I-004", "I-008", "I-011", "I-014"],
+      "approvalAuthority": "CRO (Sarah Okonkwo)"
+    },
+    {
+      "policyName": "Issue and Remediation Management Procedure",
+      "currentVersion": "v4.0 (2023-11)",
+      "updateReason": "Consolidation of IssuesPortal into Archer (D-001) changes issue lifecycle workflows, escalation paths, and reporting. Procedure must document the new Archer-based workflow, updated SLA definitions, and revised roles for issue owners and validators.",
+      "targetCompletionWave": "Wave 1",
+      "linkedInitiatives": ["I-002", "I-014"],
+      "approvalAuthority": "Enterprise Risk Director (Aisha Robinson)"
+    },
+    {
+      "policyName": "IT Change Management and SOX ITGC Procedure",
+      "currentVersion": "v5.1 (2024-06)",
+      "updateReason": "Retirement of Change Log and implementation of automated audit trail in Change Risk Tool (D-003) requires updated control descriptions, evidence-collection procedures, and external-auditor-facing documentation. Must be updated and approved before Change Log decommissioning.",
+      "targetCompletionWave": "Wave 1",
+      "linkedInitiatives": ["I-003", "I-014"],
+      "approvalAuthority": "CRO (Sarah Okonkwo) and CFO (SOX co-owner)"
+    },
+    {
+      "policyName": "Model Risk Management Policy (SR 11-7 Compliance)",
+      "currentVersion": "v2.4 (2024-01)",
+      "updateReason": "Automated CRE concentration calculation, LossDB triangulation engine, and automated reporting pipeline introduce new model-like components requiring inventory registration, validation schedules, and ongoing monitoring. Policy scope section must be expanded to cover automated risk-calculation pipelines.",
+      "targetCompletionWave": "Wave 2",
+      "linkedInitiatives": ["I-005", "I-007", "I-012", "I-014"],
+      "approvalAuthority": "Board Risk Committee"
+    },
+    {
+      "policyName": "Third-Party Risk Management Policy",
+      "currentVersion": "v3.0 (2024-04)",
+      "updateReason": "Migration of Vendor Risk Platform into Archer Third-Party Risk module changes the assessment workflow, risk-rating methodology hosting, and ongoing monitoring mechanisms. Policy must reflect the consolidated tooling and updated roles.",
+      "targetCompletionWave": "Wave 2",
+      "linkedInitiatives": ["I-009", "I-014"],
+      "approvalAuthority": "Enterprise Risk Director (Aisha Robinson)"
+    },
+    {
+      "policyName": "CRE Concentration Risk Assessment Procedure",
+      "currentVersion": "v1.3 (2022-08)",
+      "updateReason": "Formalization of David Krishnamurthy's methodology (D-005) requires a complete rewrite to transform undocumented tribal knowledge into an auditable, repeatable procedure. Must include calculation logic, data-source specifications, assumption documentation, and validation requirements per SR 11-7.",
+      "targetCompletionWave": "Wave 1",
+      "linkedInitiatives": ["I-005", "I-014"],
+      "approvalAuthority": "CRO (Sarah Okonkwo)"
+    }
+  ],
+
+  "decisionProvenance": {
+    "decisionCount": 5,
+    "message": "This transformation plan was synthesized from 5 design decisions in the Meridian Bancorp decision log. Decisions D-001 (Consolidate IssuesPortal — APPROVED), D-002 (Retire Piedmont Risk Register — APPROVED), and D-003 (Automate Change Log dual entry — PROPOSED) directly generate initiatives in Waves 1–2. Decision D-004 (Consolidate NPA System and Change Risk Tool — REJECTED) was evaluated and excluded; the NPA System remains independent in the target architecture. Decision D-005 (Formalize CRE Concentration Calculation — PROPOSED) drives the time-sensitive knowledge-transfer initiative in Wave 1. All initiatives not directly linked to a design decision were inferred from the operational risk ecosystem analysis, manual-process inventory, and organizational dependency mapping."
+  }
+}

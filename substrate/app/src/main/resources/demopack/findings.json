@@ -1,0 +1,212 @@
+[
+  {
+    "title": "Duplicate RCSA Platforms: Archer and Piedmont",
+    "description": "Archer GRC and Piedmont Risk Register both maintain active RCSAs for overlapping business lines. Three business lines have not completed migration to Archer, resulting in dual maintenance, inconsistent control ratings, and a monthly reconciliation process consuming 0.4 FTE.",
+    "findingType": "DUPLICATION",
+    "severity": "HIGH",
+    "status": "OPEN",
+    "affectedSystemNames": ["Archer GRC", "Piedmont Risk Register"],
+    "affectedProcessNames": ["MP-003: Monthly Archer-to-Piedmont Reconciliation"],
+    "recommendation": "Complete Piedmont-to-Archer migration for remaining business lines and retire Piedmont."
+  },
+  {
+    "title": "Duplicate Change Management: Change Log and Change Risk Tool",
+    "description": "Every change request is entered into both Change Log (BMC Remedy) and Change Risk Tool (ServiceNow). This dual-entry consumes an estimated 2.0 FTE and introduces a 15-20% transcription error rate. The Change Log was scheduled for retirement but remains active.",
+    "findingType": "DUPLICATION",
+    "severity": "HIGH",
+    "status": "OPEN",
+    "affectedSystemNames": ["Change Log", "Change Risk Tool"],
+    "affectedProcessNames": ["MP-007: Change Log to Change Risk Tool Dual Entry"],
+    "recommendation": "Accelerate Change Log retirement by migrating historical data and redirecting all workflows to Change Risk Tool."
+  },
+  {
+    "title": "Duplicate Issue Tracking: IssuesPortal and Archer Issues Module",
+    "description": "IssuesPortal and Archer's built-in issue tracking module both manage enterprise issues. The weekly manual sync between them misses approximately 15% of updates, and the ERT parallel tracker further fragments the issue landscape.",
+    "findingType": "DUPLICATION",
+    "severity": "MEDIUM",
+    "status": "OPEN",
+    "affectedSystemNames": ["IssuesPortal", "Archer GRC"],
+    "affectedProcessNames": ["MP-006: Archer-to-IssuesPortal Weekly Sync", "MP-008: ERT Parallel Issue Tracker"],
+    "recommendation": "Consolidate issue tracking into IssuesPortal and disable Archer's issue module."
+  },
+  {
+    "title": "Coverage Gap: No Automated Wire Transfer Override Monitoring",
+    "description": "LossDB's automated threshold alerting does not cover treasury wire transfer exceptions above $5M. This gap forces a daily manual compensating control (MP-002) that relies on James Patel's personal review. No backup process exists if James is unavailable.",
+    "findingType": "COVERAGE_GAP",
+    "severity": "CRITICAL",
+    "status": "OPEN",
+    "affectedSystemNames": ["LossDB"],
+    "affectedProcessNames": ["MP-002: Daily Wire Transfer Override Sign-Off"],
+    "recommendation": "Extend LossDB threshold alerting to cover wire transfer exceptions and implement automated escalation."
+  },
+  {
+    "title": "Coverage Gap: Missing Integration Between Branch Systems and Archer",
+    "description": "Retail banking branch systems lack direct integration with Archer. KRI data must be collected via email and manually entered by Rachel Torres, creating a weekly lag in retail risk visibility.",
+    "findingType": "COVERAGE_GAP",
+    "severity": "MEDIUM",
+    "status": "OPEN",
+    "affectedSystemNames": ["Archer GRC"],
+    "affectedProcessNames": ["MP-013: Weekly Retail Risk Indicator Update"],
+    "recommendation": "Implement automated KRI feed from branch systems to Archer."
+  },
+  {
+    "title": "Stale RCSA Data in Piedmont Risk Register",
+    "description": "Piedmont Risk Register contains risk assessments last updated over 18 months ago for two of three remaining business lines. The quarterly reconciliation with Archer consistently surfaces 12-15% discrepancies, indicating Piedmont data is not being actively maintained.",
+    "findingType": "STALE_ASSESSMENT",
+    "severity": "HIGH",
+    "status": "OPEN",
+    "affectedSystemNames": ["Piedmont Risk Register"],
+    "affectedProcessNames": ["MP-003: Monthly Archer-to-Piedmont Reconciliation"],
+    "recommendation": "Mandate RCSA refresh in Piedmont or accelerate migration to Archer."
+  },
+  {
+    "title": "Stale KRI Thresholds Due to Broken Feeds",
+    "description": "Three of eight Archer-to-KRI Hub feeds have been broken since the Q3 platform upgrade. The manual gap-fill process introduces a monthly lag in threshold updates, meaning KRI breach alerts may fire on outdated thresholds.",
+    "findingType": "STALE_ASSESSMENT",
+    "severity": "MEDIUM",
+    "status": "OPEN",
+    "affectedSystemNames": ["KRI Hub", "Archer GRC"],
+    "affectedProcessNames": ["MP-005: Monthly KRI Hub Gap-Fill"],
+    "recommendation": "Repair the broken Archer-to-KRI Hub feeds and validate all threshold values."
+  },
+  {
+    "title": "Role Overlap: Issue Tracking Responsibility Fragmentation",
+    "description": "Sandra Williams (ERT parallel tracker) and Priya Sundaram (IssuesPortal) independently track overlapping issues. Coverage overlaps for ~40% of active issues, creating reconciliation overhead and risk of conflicting status information.",
+    "findingType": "ROLE_OVERLAP",
+    "severity": "MEDIUM",
+    "status": "OPEN",
+    "affectedSystemNames": ["IssuesPortal"],
+    "affectedProcessNames": ["MP-008: ERT Parallel Issue Tracker", "MP-006: Archer-to-IssuesPortal Weekly Sync"],
+    "recommendation": "Consolidate issue ownership under IssuesPortal and eliminate the ERT parallel tracker."
+  },
+  {
+    "title": "Role Overlap: Duplicative Loss Data Validation",
+    "description": "Deepa Ramaswamy and Brian Foster spend a combined 1.2 FTE on daily LossDB triangulation. Their tasks overlap significantly — both pull data from the same three systems and perform similar reconciliation checks.",
+    "findingType": "ROLE_OVERLAP",
+    "severity": "MEDIUM",
+    "status": "OPEN",
+    "affectedSystemNames": ["LossDB", "Archer GRC", "Risk Reporting Hub"],
+    "affectedProcessNames": ["MP-004: Daily LossDB Triangulation"],
+    "recommendation": "Automate cross-system loss event matching to eliminate manual triangulation."
+  },
+  {
+    "title": "Broken Integration: KRI Hub Upstream Feeds from Archer",
+    "description": "Three of eight automated feeds from Archer to KRI Hub broke during the Q3 platform upgrade and have not been repaired. Christine Lee manually compensates with monthly data exports, but real-time KRI visibility is degraded.",
+    "findingType": "INTEGRATION_BROKEN",
+    "severity": "HIGH",
+    "status": "OPEN",
+    "affectedSystemNames": ["KRI Hub", "Archer GRC"],
+    "affectedProcessNames": ["MP-005: Monthly KRI Hub Gap-Fill"],
+    "recommendation": "Restore the three broken Archer-to-KRI Hub feeds as a priority fix."
+  },
+  {
+    "title": "Broken Integration: Archer-IssuesPortal Field Mapping Gaps",
+    "description": "The API integration between Archer and IssuesPortal misses approximately 15% of issue updates due to field mapping mismatches. This necessitates a weekly manual sync process and introduces stale data risk.",
+    "findingType": "INTEGRATION_BROKEN",
+    "severity": "MEDIUM",
+    "status": "OPEN",
+    "affectedSystemNames": ["Archer GRC", "IssuesPortal"],
+    "affectedProcessNames": ["MP-006: Archer-to-IssuesPortal Weekly Sync"],
+    "recommendation": "Resolve field mapping gaps in the Archer-IssuesPortal API integration."
+  },
+  {
+    "title": "Data Quality: LossDB-to-Reporting Hub 3-5 Day Lag",
+    "description": "The daily batch feed from LossDB to Risk Reporting Hub carries a 3-5 business day reconciliation lag. This means the CRO dashboard and board reports may reflect stale loss data, requiring daily manual bridging by the ERT team.",
+    "findingType": "DATA_QUALITY",
+    "severity": "HIGH",
+    "status": "OPEN",
+    "affectedSystemNames": ["LossDB", "Risk Reporting Hub"],
+    "affectedProcessNames": ["MP-004: Daily LossDB Triangulation"],
+    "recommendation": "Reduce the LossDB-to-Reporting Hub feed lag to same-day through pipeline optimization."
+  },
+  {
+    "title": "Data Quality: Change Request Transcription Errors",
+    "description": "The dual-entry process between Change Log and Change Risk Tool introduces a 15-20% transcription error rate. Discrepant change records create audit trail gaps and complicate change-related risk assessments.",
+    "findingType": "DATA_QUALITY",
+    "severity": "HIGH",
+    "status": "OPEN",
+    "affectedSystemNames": ["Change Log", "Change Risk Tool"],
+    "affectedProcessNames": ["MP-007: Change Log to Change Risk Tool Dual Entry"],
+    "recommendation": "Eliminate dual entry by retiring Change Log and consolidating to Change Risk Tool."
+  },
+  {
+    "title": "Tribal Knowledge Risk: CRE Concentration Calculation (David Krishnamurthy)",
+    "description": "David Krishnamurthy is the sole person who can perform the monthly CRE concentration risk calculation using a proprietary Excel model he built over eight years. With David's planned retirement in 18 months, loss of this knowledge would leave a critical gap in credit risk monitoring.",
+    "findingType": "TRIBAL_KNOWLEDGE_RISK",
+    "severity": "CRITICAL",
+    "status": "OPEN",
+    "affectedSystemNames": ["Risk Reporting Hub", "Archer GRC"],
+    "affectedProcessNames": ["MP-010: CRE Concentration Calculation"],
+    "recommendation": "Immediately begin knowledge transfer and formalize the CRE calculation into a documented, auditable process."
+  },
+  {
+    "title": "Tribal Knowledge Risk: Model Validation Queue Triage (Fatima Al-Rashid)",
+    "description": "Fatima Al-Rashid's model validation queue prioritization relies entirely on her institutional knowledge of model materiality, regulatory deadlines, and resource constraints. No written criteria or scoring rubric exists. If Fatima were unavailable, the validation queue would stall.",
+    "findingType": "TRIBAL_KNOWLEDGE_RISK",
+    "severity": "HIGH",
+    "status": "OPEN",
+    "affectedSystemNames": ["Archer GRC"],
+    "affectedProcessNames": ["MP-011: Model Validation Queue Triage"],
+    "recommendation": "Formalize Fatima's prioritization logic into documented scoring criteria and implement in the workflow system."
+  },
+  {
+    "title": "Undocumented Workflow: ERT Parallel Issue Tracker",
+    "description": "The Enterprise Risk Technology team maintains an undocumented shadow Excel spreadsheet tracking ~40% of active IssuesPortal items with ERT-specific fields. This tracker has no formal owner, no change control, and no backup.",
+    "findingType": "UNDOCUMENTED_WORKFLOW",
+    "severity": "MEDIUM",
+    "status": "OPEN",
+    "affectedSystemNames": ["IssuesPortal"],
+    "affectedProcessNames": ["MP-008: ERT Parallel Issue Tracker"],
+    "recommendation": "Either extend IssuesPortal to capture ERT-specific fields or formally document and govern the tracker."
+  },
+  {
+    "title": "Undocumented Workflow: IT Risk Exception Log",
+    "description": "Daniel Brown's supplementary IT risk exception spreadsheet captures cloud configuration and API security risks that fall outside Archer's standard taxonomy. The log is undocumented and not integrated into the enterprise risk view.",
+    "findingType": "UNDOCUMENTED_WORKFLOW",
+    "severity": "MEDIUM",
+    "status": "OPEN",
+    "affectedSystemNames": ["Archer GRC"],
+    "affectedProcessNames": ["MP-017: IT Risk Exception Log"],
+    "recommendation": "Extend Archer's taxonomy to accommodate IT-specific risk categories and retire the shadow log."
+  },
+  {
+    "title": "Compensating Control Risk: Wire Transfer Override Dependency",
+    "description": "The daily wire transfer override sign-off (MP-002) is a compensating control for LossDB's missing threshold coverage. The control depends entirely on James Patel's availability and tribal knowledge of override criteria. No automated fallback exists.",
+    "findingType": "COMPENSATING_CONTROL_RISK",
+    "severity": "CRITICAL",
+    "status": "OPEN",
+    "affectedSystemNames": ["LossDB"],
+    "affectedProcessNames": ["MP-002: Daily Wire Transfer Override Sign-Off"],
+    "recommendation": "Implement automated wire transfer exception monitoring in LossDB as primary control."
+  },
+  {
+    "title": "Compensating Control Risk: KRI Hub Manual Gap-Fill",
+    "description": "Christine Lee's monthly manual gap-fill for broken KRI Hub feeds is a compensating control that introduces a monthly lag in KRI threshold accuracy. The control is person-dependent and only partially documented.",
+    "findingType": "COMPENSATING_CONTROL_RISK",
+    "severity": "MEDIUM",
+    "status": "OPEN",
+    "affectedSystemNames": ["KRI Hub", "Archer GRC"],
+    "affectedProcessNames": ["MP-005: Monthly KRI Hub Gap-Fill"],
+    "recommendation": "Repair the broken feeds to eliminate the need for manual compensation."
+  },
+  {
+    "title": "Shadow Workflow Detected: ERT Parallel Issue Tracker",
+    "description": "The ERT team's parallel issue tracker operates as a shadow workflow alongside IssuesPortal. It captures data not available in the official system, creates a fragmented view of issue status, and operates without governance or audit trail.",
+    "findingType": "SHADOW_WORKFLOW_DETECTED",
+    "severity": "MEDIUM",
+    "status": "OPEN",
+    "affectedSystemNames": ["IssuesPortal"],
+    "affectedProcessNames": ["MP-008: ERT Parallel Issue Tracker"],
+    "recommendation": "Consolidate into IssuesPortal by extending its data model to capture ERT-specific attributes."
+  },
+  {
+    "title": "Manual Reconciliation Volume: Daily LossDB Triangulation at 1.2 FTE",
+    "description": "The daily cross-referencing of loss events across LossDB, Archer, and Risk Reporting Hub consumes 1.2 FTE. This volume of manual reconciliation is driven by the 3-5 day data lag and lack of automated cross-system matching.",
+    "findingType": "MANUAL_RECONCILIATION_VOLUME",
+    "severity": "HIGH",
+    "status": "OPEN",
+    "affectedSystemNames": ["LossDB", "Archer GRC", "Risk Reporting Hub"],
+    "affectedProcessNames": ["MP-004: Daily LossDB Triangulation"],
+    "recommendation": "Implement real-time cross-system event matching and reduce the LossDB feed lag."
+  }
+]

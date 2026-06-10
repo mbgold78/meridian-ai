@@ -1,0 +1,37 @@
+[
+  {
+    "sourceMemberName": "Sandra Williams",
+    "targetMemberName": "Priya Sundaram",
+    "overlapType": "RESPONSIBILITY_OVERLAP",
+    "details": "Both Sandra and Priya independently track issues — Sandra via the ERT parallel tracker and Priya via IssuesPortal. Their coverage overlaps for roughly 40% of active issues.",
+    "aiInferred": false
+  },
+  {
+    "sourceMemberName": "Deepa Ramaswamy",
+    "targetMemberName": "Brian Foster",
+    "overlapType": "TASK_DUPLICATION",
+    "details": "Both perform aspects of the LossDB triangulation process. Combined they spend 1.2 FTE on cross-system validation that proper integration would eliminate.",
+    "aiInferred": false
+  },
+  {
+    "sourceMemberName": "Marcus Chen",
+    "targetMemberName": "Robert Kim",
+    "overlapType": "REPORTING_OVERLAP",
+    "details": "Marcus assembles the board risk report while Robert validates reporting hub data. Their processes overlap during monthly reporting cycles with duplicative data pulls.",
+    "aiInferred": false
+  },
+  {
+    "sourceMemberName": "Liam O'Connor",
+    "targetMemberName": "Jennifer Wright",
+    "overlapType": "TASK_DUPLICATION",
+    "details": "Both maintain parallel tracking of audit findings — Liam via the audit committee prep spreadsheet and Jennifer via the follow-up tracker. Reconciliation between the two is informal.",
+    "aiInferred": false
+  },
+  {
+    "sourceMemberName": "Kevin Park",
+    "targetMemberName": "Sandra Williams",
+    "overlapType": "SYSTEM_OVERLAP",
+    "details": "Kevin manages change dual-entry while Sandra manages the GRC platform. Both touch Archer and the change management ecosystem, creating coordination overhead.",
+    "aiInferred": false
+  }
+]

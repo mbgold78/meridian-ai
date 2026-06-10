@@ -1,0 +1,177 @@
+[
+  {
+    "processName": "MP-001: Quarterly CRO Sign-Off",
+    "memberName": "Sarah Okonkwo",
+    "participation": "APPROVER",
+    "timeCommitment": "2 hours/quarter",
+    "automationCandidate": false
+  },
+  {
+    "processName": "MP-001: Quarterly CRO Sign-Off",
+    "memberName": "Marcus Chen",
+    "participation": "EXECUTOR",
+    "timeCommitment": "3-4 days/quarter",
+    "automationCandidate": true,
+    "automationRationale": "Report assembly could be automated if a single source of truth existed"
+  },
+  {
+    "processName": "MP-001: Quarterly CRO Sign-Off",
+    "memberName": "Deepa Ramaswamy",
+    "participation": "CONSULTED",
+    "timeCommitment": "1 day/quarter"
+  },
+  {
+    "processName": "MP-002: Daily Wire Transfer Override Sign-Off",
+    "memberName": "James Patel",
+    "participation": "OWNER",
+    "timeCommitment": "1-2 hours/day",
+    "automationCandidate": false,
+    "automationRationale": "Regulatory requirement for human sign-off on wire overrides"
+  },
+  {
+    "processName": "MP-002: Daily Wire Transfer Override Sign-Off",
+    "memberName": "Wei Chen",
+    "participation": "REVIEWER",
+    "timeCommitment": "30 min/day"
+  },
+  {
+    "processName": "MP-003: Monthly Archer-to-Piedmont Reconciliation",
+    "memberName": "Sandra Williams",
+    "participation": "EXECUTOR",
+    "timeCommitment": "3 days/month",
+    "automationCandidate": true,
+    "automationRationale": "Reconciliation is rule-based and could be fully automated"
+  },
+  {
+    "processName": "MP-003: Monthly Archer-to-Piedmont Reconciliation",
+    "memberName": "Aisha Robinson",
+    "participation": "REVIEWER",
+    "timeCommitment": "1 hour/month"
+  },
+  {
+    "processName": "MP-004: Daily LossDB Triangulation",
+    "memberName": "Deepa Ramaswamy",
+    "participation": "OWNER",
+    "timeCommitment": "4 hours/day",
+    "automationCandidate": true,
+    "automationRationale": "Cross-system matching could be automated with proper integration"
+  },
+  {
+    "processName": "MP-004: Daily LossDB Triangulation",
+    "memberName": "Brian Foster",
+    "participation": "EXECUTOR",
+    "timeCommitment": "3 hours/day"
+  },
+  {
+    "processName": "MP-005: Monthly KRI Hub Gap-Fill",
+    "memberName": "Christine Lee",
+    "participation": "EXECUTOR",
+    "timeCommitment": "2 days/month",
+    "automationCandidate": true,
+    "automationRationale": "Would be eliminated by fixing the broken Archer-to-KRI feeds"
+  },
+  {
+    "processName": "MP-006: Archer-to-IssuesPortal Weekly Sync",
+    "memberName": "Priya Sundaram",
+    "participation": "OWNER",
+    "timeCommitment": "4 hours/week",
+    "automationCandidate": true,
+    "automationRationale": "API integration exists but field mapping gaps need resolution"
+  },
+  {
+    "processName": "MP-006: Archer-to-IssuesPortal Weekly Sync",
+    "memberName": "Kevin Park",
+    "participation": "EXECUTOR",
+    "timeCommitment": "2 hours/week"
+  },
+  {
+    "processName": "MP-007: Change Log to Change Risk Tool Dual Entry",
+    "memberName": "Kevin Park",
+    "participation": "OWNER",
+    "timeCommitment": "Full time",
+    "automationCandidate": true,
+    "automationRationale": "Retire Change Log entirely and migrate all history to Change Risk Tool"
+  },
+  {
+    "processName": "MP-008: ERT Parallel Issue Tracker",
+    "memberName": "Sandra Williams",
+    "participation": "EXECUTOR",
+    "timeCommitment": "1 hour/day"
+  },
+  {
+    "processName": "MP-008: ERT Parallel Issue Tracker",
+    "memberName": "Daniel Brown",
+    "participation": "CONSULTED",
+    "timeCommitment": "2 hours/week"
+  },
+  {
+    "processName": "MP-009: Audit Committee Prep Spreadsheet",
+    "memberName": "Liam O'Connor",
+    "participation": "OWNER",
+    "timeCommitment": "2 days/quarter"
+  },
+  {
+    "processName": "MP-009: Audit Committee Prep Spreadsheet",
+    "memberName": "Jennifer Wright",
+    "participation": "EXECUTOR",
+    "timeCommitment": "3 days/quarter"
+  },
+  {
+    "processName": "MP-010: CRE Concentration Calculation",
+    "memberName": "David Krishnamurthy",
+    "participation": "OWNER",
+    "timeCommitment": "3 days/month",
+    "automationCandidate": true,
+    "automationRationale": "Sole person with CRE calc knowledge; must formalize before retirement"
+  },
+  {
+    "processName": "MP-011: Model Validation Queue Triage",
+    "memberName": "Fatima Al-Rashid",
+    "participation": "OWNER",
+    "timeCommitment": "4 hours/week",
+    "automationCandidate": true,
+    "automationRationale": "Prioritization logic should be formalized into scoring criteria"
+  },
+  {
+    "processName": "MP-012: Monthly Vendor Risk Score Compilation",
+    "memberName": "Maria Garcia",
+    "participation": "EXECUTOR",
+    "timeCommitment": "1 day/month"
+  },
+  {
+    "processName": "MP-013: Weekly Retail Risk Indicator Update",
+    "memberName": "Rachel Torres",
+    "participation": "EXECUTOR",
+    "timeCommitment": "3 hours/week"
+  },
+  {
+    "processName": "MP-018: Regulatory Report Data Validation",
+    "memberName": "Michael Zhang",
+    "participation": "OWNER",
+    "timeCommitment": "3 days/quarter"
+  },
+  {
+    "processName": "MP-022: Daily Risk Event Triage",
+    "memberName": "Wei Chen",
+    "participation": "OWNER",
+    "timeCommitment": "2 hours/day"
+  },
+  {
+    "processName": "MP-022: Daily Risk Event Triage",
+    "memberName": "Brian Foster",
+    "participation": "EXECUTOR",
+    "timeCommitment": "2 hours/day"
+  },
+  {
+    "processName": "MP-025: Monthly Board Risk Report Assembly",
+    "memberName": "Marcus Chen",
+    "participation": "OWNER",
+    "timeCommitment": "2 days/month"
+  },
+  {
+    "processName": "MP-025: Monthly Board Risk Report Assembly",
+    "memberName": "Robert Kim",
+    "participation": "EXECUTOR",
+    "timeCommitment": "1 day/month"
+  }
+]

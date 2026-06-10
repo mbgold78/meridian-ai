@@ -1,0 +1,31 @@
+# Per-engagement backend configuration for the MAIN stack.
+#
+# Copy to engagements/<id>/backend.hcl and fill in the bootstrap outputs.
+# Real engagement directories ARE committed — they contain no credentials,
+# and they do NOT contain the ExternalId either. The ExternalId is the
+# confused-deputy guard on the deploy role; committed next to the
+# deploy_role_arn it degrades to a single factor readable by anyone with repo
+# access. It always rides the operator environment (TF_VAR_external_id) and
+# is supplied at init time with a second -backend-config flag:
+#
+#   terraform init -backend-config=engagements/<id>/backend.hcl \
+#     -backend-config="assume_role={role_arn=\"arn:aws:iam::<acct>:role/meridian-<id>-deploy\",external_id=\"$TF_VAR_external_id\"}"
+#
+# (The init-time flag replaces the assume_role object below wholesale, which
+# is why it repeats the role_arn.) Add external_id to the committed
+# assume_role block ONLY if your engagement's security posture explicitly
+# allows committing it. Variable values (engagement.tfvars) never carry the
+# ExternalId — that always rides TF_VAR_external_id in the operator
+# environment.
+
+bucket       = "meridian-<engagement>-tfstate-<customer-account-id>" # bootstrap output: tfstate_bucket
+key          = "substrate/terraform.tfstate"
+region       = "<aws-region>"
+use_lockfile = true # S3-native lock (Terraform >= 1.10) — no DynamoDB table
+encrypt      = true
+kms_key_id   = "<tfstate-kms-key-arn>" # bootstrap output: tfstate_kms_key_arn
+
+# Deliberately NO external_id here — supplied at init time (see header).
+assume_role = {
+  role_arn = "arn:aws:iam::<customer-account-id>:role/meridian-<engagement>-deploy"
+}

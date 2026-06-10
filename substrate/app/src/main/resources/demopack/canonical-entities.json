@@ -1,0 +1,107 @@
+[
+  {
+    "name": "Risk Assessment (RCSA)",
+    "entityType": "BUSINESS_PROCESS",
+    "description": "Risk and control self-assessment process spanning Archer and Piedmont.",
+    "systemName": "Archer GRC",
+    "executionMode": "HYBRID"
+  },
+  {
+    "name": "Risk Assessment (Legacy)",
+    "entityType": "BUSINESS_PROCESS",
+    "description": "Legacy RCSA process still active in Piedmont for three business lines.",
+    "systemName": "Piedmont Risk Register",
+    "executionMode": "SYSTEM"
+  },
+  {
+    "name": "Loss Event Recording",
+    "entityType": "BUSINESS_PROCESS",
+    "description": "Operational loss event capture and categorization in LossDB.",
+    "systemName": "LossDB",
+    "executionMode": "SYSTEM"
+  },
+  {
+    "name": "Issue Lifecycle Management",
+    "entityType": "BUSINESS_PROCESS",
+    "description": "End-to-end management of audit findings, regulatory issues, and control gaps.",
+    "systemName": "IssuesPortal",
+    "executionMode": "HYBRID"
+  },
+  {
+    "name": "KRI Monitoring",
+    "entityType": "BUSINESS_PROCESS",
+    "description": "Key risk indicator threshold monitoring and breach alerting.",
+    "systemName": "KRI Hub",
+    "executionMode": "HYBRID"
+  },
+  {
+    "name": "Scenario Analysis",
+    "entityType": "BUSINESS_PROCESS",
+    "description": "Annual operational risk scenario analysis and stress testing.",
+    "systemName": "Scenario Workbench",
+    "executionMode": "SYSTEM"
+  },
+  {
+    "name": "New Product Approval",
+    "entityType": "BUSINESS_PROCESS",
+    "description": "End-to-end new product approval workflow with risk assessment.",
+    "systemName": "NPA System",
+    "executionMode": "SYSTEM"
+  },
+  {
+    "name": "Vendor Due Diligence",
+    "entityType": "BUSINESS_PROCESS",
+    "description": "Third-party vendor onboarding, assessment, and ongoing monitoring.",
+    "systemName": "Vendor Risk Platform",
+    "executionMode": "SYSTEM"
+  },
+  {
+    "name": "Change Risk Assessment",
+    "entityType": "BUSINESS_PROCESS",
+    "description": "Risk assessment for organizational and technology changes.",
+    "systemName": "Change Risk Tool",
+    "executionMode": "HYBRID"
+  },
+  {
+    "name": "Change Tracking (Legacy)",
+    "entityType": "BUSINESS_PROCESS",
+    "description": "Legacy change request tracking still used in parallel with Change Risk Tool.",
+    "systemName": "Change Log",
+    "executionMode": "SYSTEM"
+  },
+  {
+    "name": "Audit Planning and Execution",
+    "entityType": "BUSINESS_PROCESS",
+    "description": "Internal audit planning, fieldwork management, and finding issuance.",
+    "systemName": "AuditTrack",
+    "executionMode": "SYSTEM"
+  },
+  {
+    "name": "Enterprise Risk Reporting",
+    "entityType": "BUSINESS_PROCESS",
+    "description": "Consolidated risk reporting including CRO dashboard, board reports, and regulatory submissions.",
+    "systemName": "Risk Reporting Hub",
+    "executionMode": "HYBRID"
+  },
+  {
+    "name": "Issue Tracking (Archer Module)",
+    "entityType": "BUSINESS_PROCESS",
+    "description": "Archer's built-in issue tracking overlapping with IssuesPortal.",
+    "systemName": "Archer GRC",
+    "executionMode": "SYSTEM"
+  },
+  {
+    "name": "CRE Concentration Calculation",
+    "entityType": "BUSINESS_PROCESS",
+    "description": "Monthly commercial real estate concentration risk calculation performed solely by David Krishnamurthy.",
+    "processName": "MP-010: CRE Concentration Calculation",
+    "executionMode": "MANUAL"
+  },
+  {
+    "name": "Wire Transfer Override Review",
+    "entityType": "BUSINESS_PROCESS",
+    "description": "Daily wire transfer override sign-off compensating for LossDB threshold gaps.",
+    "processName": "MP-002: Daily Wire Transfer Override Sign-Off",
+    "executionMode": "MANUAL"
+  }
+]

@@ -1,0 +1,177 @@
+[
+  {
+    "name": "Sarah Okonkwo",
+    "title": "Chief Risk Officer",
+    "department": "Executive Risk",
+    "businessLine": "Enterprise Risk",
+    "reportsTo": "CEO"
+  },
+  {
+    "name": "Marcus Chen",
+    "title": "CRO Chief of Staff",
+    "department": "Executive Risk",
+    "businessLine": "Enterprise Risk",
+    "reportsTo": "Sarah Okonkwo"
+  },
+  {
+    "name": "Aisha Robinson",
+    "title": "Enterprise Risk Director",
+    "department": "Enterprise Risk Management",
+    "businessLine": "Enterprise Risk",
+    "reportsTo": "Sarah Okonkwo"
+  },
+  {
+    "name": "Priya Sundaram",
+    "title": "Issue Management Office Lead",
+    "department": "Enterprise Risk Management",
+    "businessLine": "Enterprise Risk",
+    "reportsTo": "Aisha Robinson"
+  },
+  {
+    "name": "Wei Chen",
+    "title": "Operational Risk Analytics Lead",
+    "department": "OpRisk Analytics",
+    "businessLine": "Enterprise Risk",
+    "reportsTo": "Aisha Robinson"
+  },
+  {
+    "name": "Deepa Ramaswamy",
+    "title": "Enterprise Risk Data Analyst",
+    "department": "Enterprise Risk Management",
+    "businessLine": "Enterprise Risk",
+    "reportsTo": "Aisha Robinson"
+  },
+  {
+    "name": "James Patel",
+    "title": "Treasury Vice President",
+    "department": "Treasury",
+    "businessLine": "Treasury Operations",
+    "reportsTo": "CFO"
+  },
+  {
+    "name": "Fatima Al-Rashid",
+    "title": "Model Risk Management Senior Analyst",
+    "department": "Model Risk Management",
+    "businessLine": "Enterprise Risk",
+    "reportsTo": "Aisha Robinson"
+  },
+  {
+    "name": "David Krishnamurthy",
+    "title": "Credit Risk Senior Analyst",
+    "department": "Credit Risk",
+    "businessLine": "Enterprise Risk",
+    "reportsTo": "Aisha Robinson"
+  },
+  {
+    "name": "Liam O'Connor",
+    "title": "Chief Audit Executive's Chief of Staff",
+    "department": "Internal Audit",
+    "businessLine": "Internal Audit",
+    "reportsTo": "Chief Audit Executive"
+  },
+  {
+    "name": "Rachel Torres",
+    "title": "Risk Coordinator — Retail Banking",
+    "department": "Retail Banking Risk",
+    "businessLine": "Retail Banking",
+    "reportsTo": "Aisha Robinson"
+  },
+  {
+    "name": "Tom Nguyen",
+    "title": "Risk Coordinator — Commercial Lending",
+    "department": "Commercial Lending Risk",
+    "businessLine": "Commercial Banking",
+    "reportsTo": "Aisha Robinson"
+  },
+  {
+    "name": "Sandra Williams",
+    "title": "GRC Platform Administrator",
+    "department": "Enterprise Risk Technology",
+    "businessLine": "Enterprise Risk",
+    "reportsTo": "Aisha Robinson"
+  },
+  {
+    "name": "Kevin Park",
+    "title": "Change Management Analyst",
+    "department": "Enterprise Risk Management",
+    "businessLine": "Enterprise Risk",
+    "reportsTo": "Priya Sundaram"
+  },
+  {
+    "name": "Maria Garcia",
+    "title": "Vendor Risk Analyst",
+    "department": "Third Party Risk",
+    "businessLine": "Enterprise Risk",
+    "reportsTo": "Aisha Robinson"
+  },
+  {
+    "name": "Brian Foster",
+    "title": "Operational Loss Analyst",
+    "department": "OpRisk Analytics",
+    "businessLine": "Enterprise Risk",
+    "reportsTo": "Wei Chen"
+  },
+  {
+    "name": "Christine Lee",
+    "title": "KRI Reporting Analyst",
+    "department": "OpRisk Analytics",
+    "businessLine": "Enterprise Risk",
+    "reportsTo": "Wei Chen"
+  },
+  {
+    "name": "Ahmed Hassan",
+    "title": "Scenario Analysis Analyst",
+    "department": "OpRisk Analytics",
+    "businessLine": "Enterprise Risk",
+    "reportsTo": "Wei Chen"
+  },
+  {
+    "name": "Jennifer Wright",
+    "title": "Audit Manager",
+    "department": "Internal Audit",
+    "businessLine": "Internal Audit",
+    "reportsTo": "Liam O'Connor"
+  },
+  {
+    "name": "Robert Kim",
+    "title": "Risk Reporting Analyst",
+    "department": "Enterprise Risk Reporting",
+    "businessLine": "Enterprise Risk",
+    "reportsTo": "Aisha Robinson"
+  },
+  {
+    "name": "Patricia Moore",
+    "title": "Compliance Risk Analyst",
+    "department": "Compliance",
+    "businessLine": "Compliance",
+    "reportsTo": "Chief Compliance Officer"
+  },
+  {
+    "name": "Daniel Brown",
+    "title": "IT Risk Coordinator",
+    "department": "IT Risk",
+    "businessLine": "Technology",
+    "reportsTo": "Aisha Robinson"
+  },
+  {
+    "name": "Lisa Campbell",
+    "title": "Risk Coordinator — Wealth Management",
+    "department": "Wealth Management Risk",
+    "businessLine": "Wealth Management",
+    "reportsTo": "Aisha Robinson"
+  },
+  {
+    "name": "Michael Zhang",
+    "title": "Regulatory Reporting Analyst",
+    "department": "Regulatory Affairs",
+    "businessLine": "Enterprise Risk",
+    "reportsTo": "Marcus Chen"
+  },
+  {
+    "name": "Nancy Stewart",
+    "title": "Business Continuity Analyst",
+    "department": "Business Continuity",
+    "businessLine": "Enterprise Risk",
+    "reportsTo": "Aisha Robinson"
+  }
+]

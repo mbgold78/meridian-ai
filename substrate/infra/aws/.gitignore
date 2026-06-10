@@ -1,0 +1,16 @@
+# Terraform working files — state must only ever live in the per-engagement
+# customer-account S3 backend (bootstrap/ local state is the documented
+# exception until migrated).
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+crash.*.log
+
+# Never commit variable overrides that could carry the ExternalId.
+*.auto.tfvars
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json

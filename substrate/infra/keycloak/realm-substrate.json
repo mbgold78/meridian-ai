@@ -1,0 +1,59 @@
+{
+  "realm": "substrate",
+  "enabled": true,
+  "displayName": "Meridian Substrate (dev)",
+  "registrationAllowed": false,
+  "roles": {
+    "realm": [
+      { "name": "substrate-operator", "description": "Meridian engagement team — ingest, curate, author cascades" },
+      { "name": "substrate-exec", "description": "Holding-co executive — issue cascades, view portfolio" },
+      { "name": "substrate-coo", "description": "Subsidiary COO — respond to cascades, own contracts" }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "substrate-app",
+      "name": "Substrate Application",
+      "enabled": true,
+      "publicClient": true,
+      "protocol": "openid-connect",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": true,
+      "redirectUris": ["http://localhost:8080/*", "http://localhost:5173/*"],
+      "webOrigins": ["http://localhost:8080", "http://localhost:5173"],
+      "defaultClientScopes": ["openid", "profile", "email", "roles"]
+    }
+  ],
+  "users": [
+    {
+      "username": "dev-operator",
+      "enabled": true,
+      "email": "operator@dev.local",
+      "emailVerified": true,
+      "firstName": "Dev",
+      "lastName": "Operator",
+      "credentials": [{ "type": "password", "value": "dev-operator", "temporary": false }],
+      "realmRoles": ["substrate-operator"]
+    },
+    {
+      "username": "dev-exec",
+      "enabled": true,
+      "email": "exec@dev.local",
+      "emailVerified": true,
+      "firstName": "Dev",
+      "lastName": "Exec",
+      "credentials": [{ "type": "password", "value": "dev-exec", "temporary": false }],
+      "realmRoles": ["substrate-exec"]
+    },
+    {
+      "username": "dev-coo",
+      "enabled": true,
+      "email": "coo@dev.local",
+      "emailVerified": true,
+      "firstName": "Dev",
+      "lastName": "Coo",
+      "credentials": [{ "type": "password", "value": "dev-coo", "temporary": false }],
+      "realmRoles": ["substrate-coo"]
+    }
+  ]
+}

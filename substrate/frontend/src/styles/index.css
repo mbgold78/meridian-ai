@@ -1,0 +1,11 @@
+/* Token system — Phase 2B-1 Stage B. Tokens are defaults only; ThemeProvider
+   overwrites them at runtime from the active BrandingConfig. The @import must
+   precede @tailwind directives — CSS spec requires @import at the top of the
+   stylesheet, and PostCSS/Vite drops the rule when it appears later, taking
+   the entire foundation token cascade (radius, fonts, color/phase/industry
+   fallbacks) out of the bundle. */
+@import './tokens.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;

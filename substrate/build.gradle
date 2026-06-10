@@ -1,0 +1,38 @@
+plugins {
+    id 'java'
+    id 'org.springframework.boot' version "${springBootVersion}" apply false
+    id 'io.spring.dependency-management' version "${springDependencyManagementVersion}" apply false
+    // C11 — frontend build wiring (kills the bundle-staleness trap, port-map Appendix #11).
+    // Applied only by :app; downloads its own pinned Node so CI / Docker / local builds
+    // never depend on a system Node install.
+    id 'com.github.node-gradle.node' version "${nodeGradlePluginVersion}" apply false
+}
+
+allprojects {
+    group = 'com.meridian.substrate'
+    version = '0.1.0'
+
+    repositories {
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+
+subprojects {
+    apply plugin: 'java'
+
+    java {
+        toolchain {
+            languageVersion = JavaLanguageVersion.of(Integer.parseInt(javaVersion))
+        }
+    }
+
+    tasks.withType(JavaCompile).configureEach {
+        options.encoding = 'UTF-8'
+        options.compilerArgs.addAll(['-parameters'])
+    }
+
+    tasks.withType(Test).configureEach {
+        useJUnitPlatform()
+    }
+}

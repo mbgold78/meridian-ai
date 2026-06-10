@@ -1,0 +1,247 @@
+[
+  {
+    "processName": "MP-001: Quarterly CRO Sign-Off",
+    "systemName": "Archer GRC",
+    "linkType": "READS_FROM",
+    "frequency": "Quarterly",
+    "status": "ACTIVE"
+  },
+  {
+    "processName": "MP-001: Quarterly CRO Sign-Off",
+    "systemName": "Piedmont Risk Register",
+    "linkType": "READS_FROM",
+    "frequency": "Quarterly",
+    "status": "ACTIVE"
+  },
+  {
+    "processName": "MP-001: Quarterly CRO Sign-Off",
+    "systemName": "Risk Reporting Hub",
+    "linkType": "FEEDS_INTO",
+    "frequency": "Quarterly",
+    "status": "ACTIVE"
+  },
+  {
+    "processName": "MP-002: Daily Wire Transfer Override Sign-Off",
+    "systemName": "LossDB",
+    "linkType": "COMPENSATES_FOR",
+    "frequency": "Daily",
+    "status": "ACTIVE"
+  },
+  {
+    "processName": "MP-003: Monthly Archer-to-Piedmont Reconciliation",
+    "systemName": "Archer GRC",
+    "linkType": "BRIDGES_FROM",
+    "frequency": "Monthly",
+    "status": "ACTIVE"
+  },
+  {
+    "processName": "MP-003: Monthly Archer-to-Piedmont Reconciliation",
+    "systemName": "Piedmont Risk Register",
+    "linkType": "BRIDGES_TO",
+    "frequency": "Monthly",
+    "status": "ACTIVE"
+  },
+  {
+    "processName": "MP-004: Daily LossDB Triangulation",
+    "systemName": "LossDB",
+    "linkType": "BRIDGES_FROM",
+    "frequency": "Daily",
+    "status": "ACTIVE"
+  },
+  {
+    "processName": "MP-004: Daily LossDB Triangulation",
+    "systemName": "Archer GRC",
+    "linkType": "BRIDGES_TO",
+    "frequency": "Daily",
+    "status": "ACTIVE"
+  },
+  {
+    "processName": "MP-004: Daily LossDB Triangulation",
+    "systemName": "Risk Reporting Hub",
+    "linkType": "BRIDGES_TO",
+    "frequency": "Daily",
+    "status": "ACTIVE"
+  },
+  {
+    "processName": "MP-005: Monthly KRI Hub Gap-Fill",
+    "systemName": "Archer GRC",
+    "linkType": "READS_FROM",
+    "frequency": "Monthly",
+    "status": "ACTIVE"
+  },
+  {
+    "processName": "MP-005: Monthly KRI Hub Gap-Fill",
+    "systemName": "KRI Hub",
+    "linkType": "COMPENSATES_FOR",
+    "frequency": "Monthly",
+    "status": "ACTIVE"
+  },
+  {
+    "processName": "MP-006: Archer-to-IssuesPortal Weekly Sync",
+    "systemName": "Archer GRC",
+    "linkType": "BRIDGES_FROM",
+    "frequency": "Weekly",
+    "status": "ACTIVE"
+  },
+  {
+    "processName": "MP-006: Archer-to-IssuesPortal Weekly Sync",
+    "systemName": "IssuesPortal",
+    "linkType": "BRIDGES_TO",
+    "frequency": "Weekly",
+    "status": "ACTIVE"
+  },
+  {
+    "processName": "MP-007: Change Log to Change Risk Tool Dual Entry",
+    "systemName": "Change Log",
+    "linkType": "BRIDGES_FROM",
+    "frequency": "Daily",
+    "status": "ACTIVE"
+  },
+  {
+    "processName": "MP-007: Change Log to Change Risk Tool Dual Entry",
+    "systemName": "Change Risk Tool",
+    "linkType": "BRIDGES_TO",
+    "frequency": "Daily",
+    "status": "ACTIVE"
+  },
+  {
+    "processName": "MP-008: ERT Parallel Issue Tracker",
+    "systemName": "IssuesPortal",
+    "linkType": "PARALLEL_TO",
+    "frequency": "Daily",
+    "status": "ACTIVE"
+  },
+  {
+    "processName": "MP-009: Audit Committee Prep Spreadsheet",
+    "systemName": "AuditTrack",
+    "linkType": "READS_FROM",
+    "frequency": "Quarterly",
+    "status": "ACTIVE"
+  },
+  {
+    "processName": "MP-009: Audit Committee Prep Spreadsheet",
+    "systemName": "IssuesPortal",
+    "linkType": "READS_FROM",
+    "frequency": "Quarterly",
+    "status": "ACTIVE"
+  },
+  {
+    "processName": "MP-009: Audit Committee Prep Spreadsheet",
+    "systemName": "Archer GRC",
+    "linkType": "READS_FROM",
+    "frequency": "Quarterly",
+    "status": "ACTIVE"
+  },
+  {
+    "processName": "MP-010: CRE Concentration Calculation",
+    "systemName": "Risk Reporting Hub",
+    "linkType": "FEEDS_INTO",
+    "frequency": "Monthly",
+    "status": "ACTIVE"
+  },
+  {
+    "processName": "MP-010: CRE Concentration Calculation",
+    "systemName": "Archer GRC",
+    "linkType": "READS_FROM",
+    "frequency": "Monthly",
+    "status": "ACTIVE"
+  },
+  {
+    "processName": "MP-011: Model Validation Queue Triage",
+    "systemName": "Archer GRC",
+    "linkType": "READS_FROM",
+    "frequency": "Weekly",
+    "status": "ACTIVE"
+  },
+  {
+    "processName": "MP-013: Weekly Retail Risk Indicator Update",
+    "systemName": "Archer GRC",
+    "linkType": "FEEDS_INTO",
+    "frequency": "Weekly",
+    "status": "ACTIVE"
+  },
+  {
+    "processName": "MP-014: Commercial Lending Risk Aggregation",
+    "systemName": "Risk Reporting Hub",
+    "linkType": "FEEDS_INTO",
+    "frequency": "Monthly",
+    "status": "ACTIVE"
+  },
+  {
+    "processName": "MP-015: Quarterly Scenario Workshop Coordination",
+    "systemName": "Scenario Workbench",
+    "linkType": "FEEDS_INTO",
+    "frequency": "Quarterly",
+    "status": "ACTIVE"
+  },
+  {
+    "processName": "MP-016: Audit Finding Follow-Up Tracking",
+    "systemName": "AuditTrack",
+    "linkType": "READS_FROM",
+    "frequency": "Weekly",
+    "status": "ACTIVE"
+  },
+  {
+    "processName": "MP-016: Audit Finding Follow-Up Tracking",
+    "systemName": "IssuesPortal",
+    "linkType": "READS_FROM",
+    "frequency": "Weekly",
+    "status": "ACTIVE"
+  },
+  {
+    "processName": "MP-017: IT Risk Exception Log",
+    "systemName": "Archer GRC",
+    "linkType": "PARALLEL_TO",
+    "frequency": "Weekly",
+    "status": "ACTIVE"
+  },
+  {
+    "processName": "MP-018: Regulatory Report Data Validation",
+    "systemName": "Risk Reporting Hub",
+    "linkType": "READS_FROM",
+    "frequency": "Quarterly",
+    "status": "ACTIVE"
+  },
+  {
+    "processName": "MP-022: Daily Risk Event Triage",
+    "systemName": "LossDB",
+    "linkType": "FEEDS_INTO",
+    "frequency": "Daily",
+    "status": "ACTIVE"
+  },
+  {
+    "processName": "MP-022: Daily Risk Event Triage",
+    "systemName": "IssuesPortal",
+    "linkType": "FEEDS_INTO",
+    "frequency": "Daily",
+    "status": "ACTIVE"
+  },
+  {
+    "processName": "MP-022: Daily Risk Event Triage",
+    "systemName": "Archer GRC",
+    "linkType": "FEEDS_INTO",
+    "frequency": "Daily",
+    "status": "ACTIVE"
+  },
+  {
+    "processName": "MP-024: Risk Reporting Hub Data Refresh Validation",
+    "systemName": "Risk Reporting Hub",
+    "linkType": "READS_FROM",
+    "frequency": "Daily",
+    "status": "ACTIVE"
+  },
+  {
+    "processName": "MP-025: Monthly Board Risk Report Assembly",
+    "systemName": "Risk Reporting Hub",
+    "linkType": "READS_FROM",
+    "frequency": "Monthly",
+    "status": "ACTIVE"
+  },
+  {
+    "processName": "MP-026: Piedmont Historical Data Lookup",
+    "systemName": "Piedmont Risk Register",
+    "linkType": "READS_FROM",
+    "frequency": "On-demand",
+    "status": "ACTIVE"
+  }
+]

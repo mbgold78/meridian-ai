@@ -1,0 +1,214 @@
+/**
+ * CSS custom property token system — Phase 2B-1 Stage B + Visual Foundation migration.
+ *
+ * These are the *defaults* the app boots with. ThemeProvider fetches the
+ * active BrandingConfig and overwrites the same properties at runtime
+ * (document.documentElement.style.setProperty). Everything here is
+ * overridable by a customer brand; no component hardcodes any of these
+ * values.
+ *
+ * Convention: colors are HSL triplets WITHOUT the hsl(...) wrapper, e.g.
+ *     --primary: 28 85% 55%;
+ * Tailwind references them as `hsl(var(--primary))` (see tailwind.config.ts),
+ * which gives us opacity utilities (`bg-primary/50`) via
+ * `hsl(var(--primary) / 50%)`.
+ *
+ * Token naming follows two layers:
+ *   1. The Meridian visual foundation set (--background, --surface,
+ *      --surface-raised, --foreground, --foreground-muted, --foreground-subtle,
+ *      --border, --border-strong, --primary, --primary-hover, --success,
+ *      --warning, --destructive, --info, plus *-surface variants for the
+ *      semantic colors). Source of truth: docs/design/visual-foundation.md.
+ *   2. The shadcn/ui canonical aliases (--card, --card-foreground, --popover,
+ *      --popover-foreground, --secondary, --muted, --accent, --input, --ring).
+ *      These are kept so shadcn components drop in without a mapping layer,
+ *      but they alias to the new system values rather than living in a
+ *      parallel scheme. The aliasing is:
+ *        --card                = --surface
+ *        --card-foreground     = --foreground
+ *        --popover             = --surface-raised
+ *        --popover-foreground  = --foreground
+ *        --secondary           = --surface
+ *        --secondary-foreground= --foreground
+ *        --muted               = --surface
+ *        --muted-foreground    = --foreground-muted
+ *        --accent              = --surface
+ *        --accent-foreground   = --foreground
+ *        --input               = --border
+ *        --ring                = --primary
+ *      Light-mode and dark-mode palettes are designed independently — no
+ *      algorithmic darkening of light values. See visual-foundation.md.
+ */
+
+@layer base {
+  :root {
+    /* Backgrounds & surfaces — visual foundation */
+    --background:        38 24% 97%;
+    --surface:           38 18% 94%;
+    --surface-raised:    0 0% 100%;
+    --border:            32 12% 86%;
+    --border-strong:     32 12% 75%;
+
+    /* Text — visual foundation */
+    --foreground:        24 12% 12%;
+    --foreground-muted:  28 8% 32%;
+    --foreground-subtle: 28 6% 55%;
+
+    /* Accent — brand */
+    --primary:           28 85% 55%;
+    --primary-hover:     28 85% 48%;
+    --primary-foreground: 30 12% 98%;
+
+    /* Semantic */
+    --success:           142 55% 42%;
+    --success-surface:   142 35% 92%;
+    --success-foreground: 30 12% 98%;
+    --warning:           38 85% 50%;
+    --warning-surface:   38 70% 92%;
+    --warning-foreground: 30 12% 98%;
+    --destructive:       0 65% 50%;
+    --destructive-surface: 0 50% 95%;
+    --destructive-foreground: 30 12% 98%;
+    --info:              210 65% 50%;
+    --info-surface:      210 50% 95%;
+
+    /* Industry palette — desaturated, used for chip and pill accents
+     * on Beacon demo surfaces (Corporate Operating Partner dashboard +
+     * Subsidiary COO view). Amber (~28°) is reserved for primary, so
+     * logistics is hue-shifted toward red. Light-mode and dark-mode
+     * values are designed independently, not algorithmically darkened. */
+    --industry-healthcare:       210 65% 50%;
+    --industry-government:       215 25% 45%;
+    --industry-insurance:        175 35% 42%;
+    --industry-instrumentation:  270 30% 50%;
+    --industry-financial:        145 30% 40%;
+    --industry-legal:            25 25% 35%;
+    --industry-logistics:        14 55% 50%;
+    --industry-education:        335 40% 55%;
+    --industry-creative:         240 30% 55%;
+
+    /* Lifecycle phase palette — categorical AND ordinal. 7 values, ordered
+     * Plug-In → Design → Map → Plan → Execute → Monitor → Automate. Hue
+     * walks cool slate → teal → moss → mustard → clay → terracotta to mirror
+     * the lifecycle progression. Saturation held 25–40%, deliberately below
+     * --industry-* (35–55%) and well below --primary (60%) so phase never
+     * competes with action color or industry chips. Use as a 2 px left
+     * accent on phase pills, lifecycle columns, and the progression strip;
+     * never as a fill. Source: docs/design/visual-foundation.md Phase Palette. */
+    --phase-plug-in:  220 22% 50%;
+    --phase-design:   195 32% 45%;
+    --phase-map:      170 30% 40%;
+    --phase-plan:     145 28% 40%;
+    --phase-execute:  45 38% 45%;
+    --phase-monitor:  20 35% 50%;
+    --phase-automate: 0 28% 42%;
+
+    /* shadcn canonical aliases — alias to the system above */
+    --card:                 38 18% 94%;       /* = --surface */
+    --card-foreground:      24 12% 12%;       /* = --foreground */
+    --popover:              0 0% 100%;        /* = --surface-raised */
+    --popover-foreground:   24 12% 12%;       /* = --foreground */
+    --secondary:            38 18% 94%;       /* = --surface */
+    --secondary-foreground: 24 12% 12%;       /* = --foreground */
+    --muted:                38 18% 94%;       /* = --surface */
+    --muted-foreground:     28 8% 32%;        /* = --foreground-muted */
+    --accent:               38 18% 94%;       /* = --surface */
+    --accent-foreground:    24 12% 12%;       /* = --foreground */
+    --input:                32 12% 86%;       /* = --border */
+    --ring:                 28 85% 55%;       /* = --primary */
+
+    /* Radius */
+    --radius: 0.5rem;
+
+    /* Typography — font family values are full family stacks, applied via
+       tailwind.config.ts fontFamily entries. ThemeProvider can overwrite
+       these from BrandingConfig.fontBody / fontHeading / fontMono. */
+    --font-body:
+      'Inter Variable', Inter, system-ui, -apple-system, 'Segoe UI', sans-serif;
+    --font-heading:
+      'Instrument Serif', Georgia, serif;
+    --font-mono:
+      'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  }
+
+  .dark {
+    /* Backgrounds & surfaces */
+    --background:        30 8% 9%;
+    --surface:           30 8% 12%;
+    --surface-raised:    30 8% 15%;
+    --border:            30 8% 20%;
+    --border-strong:     30 8% 28%;
+
+    /* Text */
+    --foreground:        38 14% 95%;
+    --foreground-muted:  32 10% 76%;
+    --foreground-subtle: 32 8% 55%;
+
+    /* Accent */
+    --primary:           28 85% 55%;
+    --primary-hover:     28 85% 48%;
+    --primary-foreground: 30 12% 98%;
+
+    /* Semantic */
+    --success:           142 55% 42%;
+    --success-surface:   142 35% 15%;
+    --success-foreground: 30 12% 98%;
+    --warning:           38 85% 50%;
+    --warning-surface:   38 70% 15%;
+    --warning-foreground: 30 12% 98%;
+    --destructive:       0 65% 50%;
+    --destructive-surface: 0 50% 18%;
+    --destructive-foreground: 30 12% 98%;
+    --info:              210 65% 50%;
+    --info-surface:      210 50% 18%;
+
+    /* Industry palette — dark-mode pairings of the light-mode set. */
+    --industry-healthcare:       210 65% 60%;
+    --industry-government:       215 30% 65%;
+    --industry-insurance:        175 40% 55%;
+    --industry-instrumentation:  270 35% 65%;
+    --industry-financial:        145 35% 55%;
+    --industry-legal:            25 30% 55%;
+    --industry-logistics:        14 55% 62%;
+    --industry-education:        335 45% 70%;
+    --industry-creative:         240 35% 70%;
+
+    /* Lifecycle phase palette — dark-mode pairings. Same hue order as
+     * light, lifted ~15% lightness for surface contrast. */
+    --phase-plug-in:  220 25% 65%;
+    --phase-design:   195 35% 60%;
+    --phase-map:      170 32% 55%;
+    --phase-plan:     145 30% 55%;
+    --phase-execute:  45 42% 60%;
+    --phase-monitor:  20 38% 62%;
+    --phase-automate: 0 32% 58%;
+
+    /* shadcn canonical aliases */
+    --card:                 30 8% 12%;        /* = --surface */
+    --card-foreground:      38 14% 95%;       /* = --foreground */
+    --popover:              30 8% 15%;        /* = --surface-raised */
+    --popover-foreground:   38 14% 95%;       /* = --foreground */
+    --secondary:            30 8% 12%;        /* = --surface */
+    --secondary-foreground: 38 14% 95%;       /* = --foreground */
+    --muted:                30 8% 12%;        /* = --surface */
+    --muted-foreground:     32 10% 76%;       /* = --foreground-muted */
+    --accent:               30 8% 12%;        /* = --surface */
+    --accent-foreground:    38 14% 95%;       /* = --foreground */
+    --input:                30 8% 20%;        /* = --border */
+    --ring:                 28 85% 55%;       /* = --primary */
+  }
+
+  html {
+    font-family: var(--font-body);
+    background: hsl(var(--background));
+    color: hsl(var(--foreground));
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family: var(--font-heading);
+  }
+
+  code, pre, kbd, samp {
+    font-family: var(--font-mono);
+  }
+}

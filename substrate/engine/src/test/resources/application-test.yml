@@ -1,0 +1,20 @@
+# Engine-module test profile: H2 in-memory (create-drop — the Flyway squash is
+# owned and validated by the app module), mock LLM provider (fixture seam S8).
+spring:
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    open-in-view: false
+
+substrate:
+  llm:
+    provider: mock
+    anthropic:
+      model: mock-model
+      max-tokens: 1024
+    tools:
+      max-calls-per-request: 5
+      dispatch-timeout-ms: 5000
+    cost:
+      input-rate-per-million: 3.0
+      output-rate-per-million: 15.0

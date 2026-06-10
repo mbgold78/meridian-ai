@@ -1,0 +1,110 @@
+[
+  {
+    "name": "Archer GRC",
+    "vendor": "RSA",
+    "description": "Primary GRC platform for risk and control self-assessments (RCSA). Deployed in 2017 as the strategic replacement for Piedmont, Archer houses the official risk register, control library, and issue tracking module. Coverage remains incomplete — roughly 60% of RCSAs have migrated.",
+    "systemType": "GRC_PLATFORM",
+    "deployedYear": 2017,
+    "status": "ACTIVE",
+    "businessLine": "Enterprise Risk"
+  },
+  {
+    "name": "Piedmont Risk Register",
+    "vendor": "Custom SharePoint",
+    "description": "Legacy RCSA platform built on SharePoint in 2003. Still used by three business lines that have not migrated to Archer. Contains historical risk assessments dating back two decades and serves as the institutional memory for pre-2017 risk data.",
+    "systemType": "GRC_PLATFORM",
+    "deployedYear": 2003,
+    "status": "ACTIVE",
+    "businessLine": "Enterprise Risk"
+  },
+  {
+    "name": "LossDB",
+    "vendor": "SAS OpRisk",
+    "description": "Operational loss database tracking all realized loss events above $10K. Fed by branch operations, treasury, and compliance. Upstream feed to Risk Reporting Hub carries a 3-5 business day reconciliation lag that the ERT team compensates for manually.",
+    "systemType": "LOSS_DATABASE",
+    "deployedYear": 2011,
+    "status": "ACTIVE",
+    "businessLine": "Enterprise Risk"
+  },
+  {
+    "name": "IssuesPortal",
+    "vendor": "MetricStream",
+    "description": "Enterprise issues management platform tracking audit findings, regulatory issues, and self-identified control gaps. Priya Sundaram's team manages the issue lifecycle. A parallel tracker exists in the ERT team that shadows roughly 40% of active issues.",
+    "systemType": "ISSUES_MANAGEMENT",
+    "deployedYear": 2019,
+    "status": "ACTIVE",
+    "businessLine": "Enterprise Risk"
+  },
+  {
+    "name": "KRI Hub",
+    "vendor": "Custom Tableau+SQL",
+    "description": "Key risk indicator dashboard built on Tableau with a SQL Server backend. Aggregates threshold-based KRI data from Archer, LossDB, and branch operations. Three of eight upstream feeds from Archer have been broken since a Q3 platform upgrade.",
+    "systemType": "KRI_DASHBOARD",
+    "deployedYear": 2020,
+    "status": "ACTIVE",
+    "businessLine": "Enterprise Risk"
+  },
+  {
+    "name": "Scenario Workbench",
+    "vendor": "Moody's RiskFoundation",
+    "description": "Scenario analysis and stress testing platform used by the OpRisk Analytics team for annual scenario exercises. Outputs feed the capital model via LossDB. Usage is concentrated in Q4 with minimal activity the rest of the year.",
+    "systemType": "SCENARIO_ANALYSIS",
+    "deployedYear": 2018,
+    "status": "ACTIVE",
+    "businessLine": "Enterprise Risk"
+  },
+  {
+    "name": "NPA System",
+    "vendor": "ServiceNow",
+    "description": "New product approval workflow system managing the end-to-end NPA process. Integrates vendor risk assessments from the Vendor Risk Platform and routes approvals through the risk committee hierarchy.",
+    "systemType": "WORKFLOW",
+    "deployedYear": 2021,
+    "status": "ACTIVE",
+    "businessLine": "Enterprise Risk"
+  },
+  {
+    "name": "Vendor Risk Platform",
+    "vendor": "Prevalent",
+    "description": "Third-party risk management platform handling vendor onboarding, due diligence questionnaires, and ongoing monitoring. Feeds vendor risk scores into the NPA System for new product risk assessments.",
+    "systemType": "TPRM",
+    "deployedYear": 2022,
+    "status": "ACTIVE",
+    "businessLine": "Enterprise Risk"
+  },
+  {
+    "name": "Change Risk Tool",
+    "vendor": "ServiceNow",
+    "description": "New change management risk assessment module deployed in early 2024. Intended to replace Change Log but both systems remain active, requiring dual data entry for every change request — consuming an estimated 2.0 FTE across the organization.",
+    "systemType": "CHANGE_MANAGEMENT",
+    "deployedYear": 2024,
+    "status": "ACTIVE",
+    "businessLine": "Enterprise Risk"
+  },
+  {
+    "name": "Change Log",
+    "vendor": "BMC Remedy",
+    "description": "Legacy change management system deployed in 2009. Scheduled for retirement once Change Risk Tool adoption reaches 100%, but all change records continue to be dual-entered into both systems. Contains 15 years of change history.",
+    "systemType": "CHANGE_MANAGEMENT",
+    "deployedYear": 2009,
+    "status": "ACTIVE",
+    "businessLine": "Enterprise Risk"
+  },
+  {
+    "name": "AuditTrack",
+    "vendor": "TeamMate+",
+    "description": "Internal audit management platform used by the Chief Audit Executive's office. Manages audit planning, fieldwork, and issue tracking. Bi-directional sync with IssuesPortal ensures audit findings flow into the enterprise issues pipeline.",
+    "systemType": "AUDIT_MANAGEMENT",
+    "deployedYear": 2016,
+    "status": "ACTIVE",
+    "businessLine": "Internal Audit"
+  },
+  {
+    "name": "Risk Reporting Hub",
+    "vendor": "SAS Viya+Tableau",
+    "description": "Enterprise risk reporting and analytics platform consolidating data from Archer, LossDB, KRI Hub, and Scenario Workbench. Produces the monthly CRO dashboard, board risk report, and regulatory submissions. Data freshness varies by source from real-time to 5-day lag.",
+    "systemType": "REPORTING",
+    "deployedYear": 2019,
+    "status": "ACTIVE",
+    "businessLine": "Enterprise Risk"
+  }
+]

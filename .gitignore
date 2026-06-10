@@ -1,0 +1,11 @@
+# Option-(c) multi-canonical-clone development fork (2026-05-16, session 11+)
+orchestrator-clone-mgmt/
+bare-repos/
+
+# Substrate — built frontend bundle (emitted by substrate/frontend, fixture seam S18); never commit
+substrate/app/src/main/resources/static/
+
+# Substrate — Gradle outputs
+substrate/.gradle/
+substrate/build/
+substrate/*/build/

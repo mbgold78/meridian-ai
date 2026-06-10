@@ -1,0 +1,539 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Meridian engagement deploy role. Deployed BY THE CUSTOMER in their own AWS
+  account (CloudFormation, so no Terraform tooling is assumed on their side).
+  Creates the meridian-<engagement>-deploy IAM role that Meridian operators
+  assume (with the agreed ExternalId) to provision the per-engagement substrate
+  stack. The role can PROVISION engagement-scoped infrastructure but is
+  EXPLICITLY DENIED customer-data-plane reads: secretsmanager:GetSecretValue
+  everywhere, rds-db:connect, and s3:GetObject* outside the engagement tfstate
+  and ALB-access-log buckets. Deploy:
+    aws cloudformation deploy --template-file meridian-deploy-role.yaml
+      --stack-name meridian-<engagement>-deploy-role
+      --capabilities CAPABILITY_NAMED_IAM
+      --parameter-overrides MeridianPrincipalArn=... ExternalId=... EngagementId=...
+
+Parameters:
+  MeridianPrincipalArn:
+    Type: String
+    Description: >
+      ARN of the Meridian operator principal allowed to assume this role
+      (e.g. arn:aws:iam::<meridian-account>:role/meridian-operators).
+    AllowedPattern: "^arn:aws:iam::[0-9]{12}:(role|user)/.+$"
+
+  ExternalId:
+    Type: String
+    NoEcho: true
+    Description: >
+      sts:ExternalId agreed out-of-band with Meridian (confused-deputy guard).
+      Meridian supplies it on every AssumeRole call.
+    MinLength: 8
+
+  EngagementId:
+    Type: String
+    Description: >
+      Short engagement identifier agreed with Meridian. Must match the
+      Terraform engagement_id exactly — it scopes every permission below to
+      meridian-<EngagementId>-* resources and meridian:engagement-tagged
+      resources. HARD RULE: an EngagementId must not be a prefix of any other
+      active engagement's id in this account (e.g. never run both "acme" and
+      "acme-prod" here) — ARN scoping is prefix-globbed and would otherwise
+      bleed across the pair.
+    AllowedPattern: "^[a-z0-9][a-z0-9-]{2,19}$"
+
+  PermissionsBoundaryArn:
+    Type: String
+    Default: ""
+    Description: >
+      OPTIONAL. ARN of a customer-managed permissions boundary to attach to
+      the deploy role (and required on roles it creates, if your SCPs enforce
+      that). Leave empty for none.
+
+Conditions:
+  HasPermissionsBoundary: !Not [!Equals [!Ref PermissionsBoundaryArn, ""]]
+
+Resources:
+  MeridianDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "meridian-${EngagementId}-deploy"
+      Description: !Sub "Meridian substrate deploy role for engagement ${EngagementId} — provisioning only, customer-data-plane reads explicitly denied"
+      MaxSessionDuration: 7200
+      PermissionsBoundary:
+        !If [HasPermissionsBoundary, !Ref PermissionsBoundaryArn, !Ref "AWS::NoValue"]
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: MeridianOperatorAssume
+            Effect: Allow
+            Principal:
+              AWS: !Ref MeridianPrincipalArn
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                sts:ExternalId: !Ref ExternalId
+      Policies:
+        # ----------------------------------------------------------------
+        # Policy 1/3 — network + compute provisioning
+        # ----------------------------------------------------------------
+        - PolicyName: meridian-network-compute
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # EC2 lifecycle is TAG-SCOPED, not account-wide (the Terraform
+              # provider default_tags stamp meridian:engagement on every
+              # taggable resource at creation):
+              #   * Ec2CreateEngagementTagged authorizes the new-resource leg
+              #     of each Create* call via tag-on-create (aws:RequestTag).
+              #   * Ec2TagOnCreate is the companion ec2:CreateTags grant EC2
+              #     requires for tag-on-create (Null ec2:CreateAction=false
+              #     restricts it to creation time).
+              #   * Ec2MutateEngagementTagged authorizes mutation/deletion of
+              #     EXISTING engagement-tagged resources, and the parent-
+              #     resource leg of Create* calls (e.g. CreateSubnet is also
+              #     evaluated against the engagement-tagged VPC).
+              # Only ec2:Describe* remains an unconditioned Resource:"*" allow.
+              - Sid: Ec2CreateEngagementTagged
+                Effect: Allow
+                Action:
+                  - ec2:CreateVpc
+                  - ec2:CreateSubnet
+                  - ec2:CreateRouteTable
+                  - ec2:CreateInternetGateway
+                  - ec2:AllocateAddress
+                  - ec2:CreateNatGateway
+                  - ec2:CreateSecurityGroup
+                  - ec2:CreateVpcEndpoint
+                  - ec2:CreateFlowLogs
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    aws:RequestedRegion: !Ref "AWS::Region"
+                    aws:RequestTag/meridian:engagement: !Ref EngagementId
+              - Sid: Ec2TagOnCreate
+                Effect: Allow
+                Action: ec2:CreateTags
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    aws:RequestedRegion: !Ref "AWS::Region"
+                    aws:RequestTag/meridian:engagement: !Ref EngagementId
+                  "Null":
+                    ec2:CreateAction: "false"
+              - Sid: Ec2MutateEngagementTagged
+                Effect: Allow
+                Action:
+                  - ec2:CreateSubnet
+                  - ec2:CreateRouteTable
+                  - ec2:CreateNatGateway
+                  - ec2:CreateSecurityGroup
+                  - ec2:CreateVpcEndpoint
+                  - ec2:CreateFlowLogs
+                  - ec2:DeleteVpc
+                  - ec2:ModifyVpcAttribute
+                  - ec2:DeleteSubnet
+                  - ec2:ModifySubnetAttribute
+                  - ec2:DeleteRouteTable
+                  - ec2:CreateRoute
+                  - ec2:DeleteRoute
+                  - ec2:ReplaceRoute
+                  - ec2:AssociateRouteTable
+                  - ec2:DisassociateRouteTable
+                  - ec2:DeleteInternetGateway
+                  - ec2:AttachInternetGateway
+                  - ec2:DetachInternetGateway
+                  - ec2:ReleaseAddress
+                  - ec2:DeleteNatGateway
+                  - ec2:DeleteSecurityGroup
+                  - ec2:AuthorizeSecurityGroupIngress
+                  - ec2:AuthorizeSecurityGroupEgress
+                  - ec2:RevokeSecurityGroupIngress
+                  - ec2:RevokeSecurityGroupEgress
+                  - ec2:ModifySecurityGroupRules
+                  - ec2:UpdateSecurityGroupRuleDescriptionsIngress
+                  - ec2:UpdateSecurityGroupRuleDescriptionsEgress
+                  - ec2:DeleteVpcEndpoints
+                  - ec2:ModifyVpcEndpoint
+                  - ec2:DeleteFlowLogs
+                  - ec2:CreateTags
+                  - ec2:DeleteTags
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    aws:RequestedRegion: !Ref "AWS::Region"
+                    aws:ResourceTag/meridian:engagement: !Ref EngagementId
+              - Sid: Ec2Describe
+                Effect: Allow
+                Action: ec2:Describe*
+                Resource: "*"
+              - Sid: ElbDescribe
+                Effect: Allow
+                Action: elasticloadbalancing:Describe*
+                Resource: "*"
+              - Sid: ElbScopedLifecycle
+                Effect: Allow
+                Action: elasticloadbalancing:*
+                Resource:
+                  - !Sub "arn:aws:elasticloadbalancing:${AWS::Region}:${AWS::AccountId}:loadbalancer/app/meridian-${EngagementId}-*/*"
+                  - !Sub "arn:aws:elasticloadbalancing:${AWS::Region}:${AWS::AccountId}:targetgroup/meridian-${EngagementId}-*/*"
+                  - !Sub "arn:aws:elasticloadbalancing:${AWS::Region}:${AWS::AccountId}:listener/app/meridian-${EngagementId}-*/*/*"
+                  - !Sub "arn:aws:elasticloadbalancing:${AWS::Region}:${AWS::AccountId}:listener-rule/app/meridian-${EngagementId}-*/*/*/*"
+              - Sid: EcsReadAndRegister
+                Effect: Allow
+                Action:
+                  - ecs:Describe*
+                  - ecs:List*
+                  - ecs:RegisterTaskDefinition
+                  - ecs:DeregisterTaskDefinition
+                  - ecs:TagResource
+                  - ecs:UntagResource
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    aws:RequestedRegion: !Ref "AWS::Region"
+              # ecs:CreateCluster supports no resource type (same class as
+              # RegisterTaskDefinition above) so it can never match the scoped
+              # ARNs below — grant it on "*" constrained by tag-on-create.
+              - Sid: EcsCreateClusterTagged
+                Effect: Allow
+                Action: ecs:CreateCluster
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    aws:RequestedRegion: !Ref "AWS::Region"
+                    aws:RequestTag/meridian:engagement: !Ref EngagementId
+              # Exact-name + hyphen-anchored ARN pairs: a bare prefix glob
+              # (meridian-${EngagementId}*) would bleed into engagements whose
+              # id extends this one (e.g. "acme" matching "acme2"). See also
+              # the EngagementId no-prefix hard rule above.
+              - Sid: EcsScopedLifecycle
+                Effect: Allow
+                Action: ecs:*
+                Resource:
+                  - !Sub "arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:cluster/meridian-${EngagementId}"
+                  - !Sub "arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:cluster/meridian-${EngagementId}-*"
+                  - !Sub "arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:service/meridian-${EngagementId}/*"
+                  - !Sub "arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:service/meridian-${EngagementId}-*/*"
+                  - !Sub "arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:task-definition/meridian-${EngagementId}-*:*"
+                  - !Sub "arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:task/meridian-${EngagementId}/*"
+                  - !Sub "arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:task/meridian-${EngagementId}-*/*"
+              - Sid: EcrAuthToken
+                Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: "*"
+              - Sid: EcrScopedLifecycle
+                Effect: Allow
+                Action: ecr:*
+                Resource: !Sub "arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/meridian-${EngagementId}-*"
+              - Sid: EfsDescribe
+                Effect: Allow
+                Action:
+                  - elasticfilesystem:Describe*
+                Resource: "*"
+              - Sid: EfsCreateTagged
+                Effect: Allow
+                Action: elasticfilesystem:CreateFileSystem
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    aws:RequestTag/meridian:engagement: !Ref EngagementId
+              # Tag-on-create companion: CreateFileSystem/CreateAccessPoint
+              # with tags additionally require TagResource, evaluated BEFORE
+              # the resource has tags — so it must be RequestTag-conditioned
+              # (the ResourceTag-conditioned grant below can never match at
+              # create time and only covers post-create retagging).
+              - Sid: EfsTagOnCreate
+                Effect: Allow
+                Action: elasticfilesystem:TagResource
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    aws:RequestTag/meridian:engagement: !Ref EngagementId
+              - Sid: EfsScopedLifecycle
+                Effect: Allow
+                Action:
+                  - elasticfilesystem:DeleteFileSystem
+                  - elasticfilesystem:UpdateFileSystem
+                  - elasticfilesystem:CreateMountTarget
+                  - elasticfilesystem:DeleteMountTarget
+                  - elasticfilesystem:ModifyMountTargetSecurityGroups
+                  - elasticfilesystem:CreateAccessPoint
+                  - elasticfilesystem:DeleteAccessPoint
+                  - elasticfilesystem:PutLifecycleConfiguration
+                  - elasticfilesystem:PutBackupPolicy
+                  - elasticfilesystem:PutFileSystemPolicy
+                  - elasticfilesystem:DeleteFileSystemPolicy
+                  - elasticfilesystem:TagResource
+                  - elasticfilesystem:UntagResource
+                  - elasticfilesystem:CreateTags
+                  - elasticfilesystem:DeleteTags
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    aws:ResourceTag/meridian:engagement: !Ref EngagementId
+
+        # ----------------------------------------------------------------
+        # Policy 2/3 — data platform (RDS, secrets shells, KMS, logs,
+        # observability, state bucket) — still provisioning-only
+        # ----------------------------------------------------------------
+        - PolicyName: meridian-data-platform
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: RdsDescribe
+                Effect: Allow
+                Action:
+                  - rds:Describe*
+                  - rds:ListTagsForResource
+                Resource: "*"
+              - Sid: RdsScopedLifecycle
+                Effect: Allow
+                Action: rds:*
+                Resource:
+                  - !Sub "arn:aws:rds:${AWS::Region}:${AWS::AccountId}:db:meridian-${EngagementId}-*"
+                  - !Sub "arn:aws:rds:${AWS::Region}:${AWS::AccountId}:subgrp:meridian-${EngagementId}-*"
+                  - !Sub "arn:aws:rds:${AWS::Region}:${AWS::AccountId}:pg:meridian-${EngagementId}-*"
+                  - !Sub "arn:aws:rds:${AWS::Region}:${AWS::AccountId}:snapshot:meridian-${EngagementId}-*"
+              - Sid: SecretsManagerList
+                Effect: Allow
+                Action: secretsmanager:ListSecrets
+                Resource: "*"
+              # Provision secret SHELLS and write values (PutSecretValue is the
+              # operator's out-of-band write path). GetSecretValue is DENIED in
+              # the guardrails policy — Meridian writes, never reads back.
+              - Sid: SecretsManagerScopedWrite
+                Effect: Allow
+                Action:
+                  - secretsmanager:CreateSecret
+                  - secretsmanager:DeleteSecret
+                  - secretsmanager:UpdateSecret
+                  - secretsmanager:PutSecretValue
+                  - secretsmanager:RestoreSecret
+                  - secretsmanager:DescribeSecret
+                  - secretsmanager:TagResource
+                  - secretsmanager:UntagResource
+                  - secretsmanager:GetResourcePolicy
+                  - secretsmanager:PutResourcePolicy
+                  - secretsmanager:DeleteResourcePolicy
+                Resource: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:meridian/${EngagementId}/*"
+              - Sid: KmsRead
+                Effect: Allow
+                Action:
+                  - kms:DescribeKey
+                  - kms:GetKeyPolicy
+                  - kms:GetKeyRotationStatus
+                  - kms:ListAliases
+                  - kms:ListKeys
+                  - kms:ListResourceTags
+                Resource: "*"
+              - Sid: KmsCreateEngagementTagged
+                Effect: Allow
+                Action: kms:CreateKey
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    aws:RequestTag/meridian:engagement: !Ref EngagementId
+              # Tag-on-create companion: CreateKey with a Tags parameter
+              # additionally requires kms:TagResource, and KMS ABAC evaluates
+              # it before the key has tags — aws:ResourceTag (as in the
+              # management statement below) can never match at create time,
+              # so this grant is RequestTag-conditioned.
+              - Sid: KmsTagOnCreate
+                Effect: Allow
+                Action: kms:TagResource
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    aws:RequestTag/meridian:engagement: !Ref EngagementId
+              - Sid: KmsManageEngagementTagged
+                Effect: Allow
+                Action:
+                  - kms:PutKeyPolicy
+                  - kms:EnableKeyRotation
+                  - kms:DisableKeyRotation
+                  - kms:ScheduleKeyDeletion
+                  - kms:CancelKeyDeletion
+                  - kms:UpdateKeyDescription
+                  - kms:TagResource
+                  - kms:UntagResource
+                  - kms:CreateAlias
+                  - kms:DeleteAlias
+                  - kms:UpdateAlias
+                  - kms:Encrypt
+                  - kms:Decrypt
+                  - kms:ReEncryptFrom
+                  - kms:ReEncryptTo
+                  - kms:GenerateDataKey
+                  - kms:GenerateDataKeyWithoutPlaintext
+                  - kms:CreateGrant
+                  - kms:ListGrants
+                  - kms:RevokeGrant
+                  - kms:RetireGrant
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    aws:ResourceTag/meridian:engagement: !Ref EngagementId
+              # Exact alias + slash-anchored children (alias/meridian/<id> for
+              # the engagement CMK, alias/meridian/<id>/tfstate for bootstrap)
+              # — a bare prefix glob would match alias/meridian/<id>2 etc.
+              - Sid: KmsAliasNamespace
+                Effect: Allow
+                Action:
+                  - kms:CreateAlias
+                  - kms:DeleteAlias
+                  - kms:UpdateAlias
+                Resource:
+                  - !Sub "arn:aws:kms:${AWS::Region}:${AWS::AccountId}:alias/meridian/${EngagementId}"
+                  - !Sub "arn:aws:kms:${AWS::Region}:${AWS::AccountId}:alias/meridian/${EngagementId}/*"
+              - Sid: LogsDescribe
+                Effect: Allow
+                Action:
+                  - logs:DescribeLogGroups
+                Resource: "*"
+              - Sid: LogsScopedLifecycle
+                Effect: Allow
+                Action: logs:*
+                Resource:
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/meridian/${EngagementId}/*"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/meridian/${EngagementId}/*:*"
+              - Sid: CloudWatchRead
+                Effect: Allow
+                Action:
+                  - cloudwatch:DescribeAlarms
+                  - cloudwatch:ListDashboards
+                  - cloudwatch:ListTagsForResource
+                  - cloudwatch:GetDashboard
+                Resource: "*"
+              - Sid: CloudWatchScopedAlarms
+                Effect: Allow
+                Action:
+                  - cloudwatch:PutMetricAlarm
+                  - cloudwatch:DeleteAlarms
+                  - cloudwatch:TagResource
+                  - cloudwatch:UntagResource
+                Resource: !Sub "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:meridian-${EngagementId}-*"
+              - Sid: CloudWatchScopedDashboards
+                Effect: Allow
+                Action:
+                  - cloudwatch:PutDashboard
+                  - cloudwatch:DeleteDashboards
+                Resource: !Sub "arn:aws:cloudwatch::${AWS::AccountId}:dashboard/meridian-${EngagementId}-*"
+              - Sid: SnsList
+                Effect: Allow
+                Action: sns:ListTopics
+                Resource: "*"
+              - Sid: SnsScopedLifecycle
+                Effect: Allow
+                Action: sns:*
+                Resource: !Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:meridian-${EngagementId}-*"
+              - Sid: S3List
+                Effect: Allow
+                Action: s3:ListAllMyBuckets
+                Resource: "*"
+              # Exact bucket names (account-id suffixed), NOT a prefix glob:
+              # meridian-acme-* would match meridian-acme-prod-tfstate-... and
+              # hand one engagement the other's state bucket. The stack only
+              # ever creates these two buckets.
+              - Sid: S3ScopedBuckets
+                Effect: Allow
+                Action: s3:*
+                Resource:
+                  - !Sub "arn:aws:s3:::meridian-${EngagementId}-tfstate-${AWS::AccountId}"
+                  - !Sub "arn:aws:s3:::meridian-${EngagementId}-tfstate-${AWS::AccountId}/*"
+                  - !Sub "arn:aws:s3:::meridian-${EngagementId}-alblogs-${AWS::AccountId}"
+                  - !Sub "arn:aws:s3:::meridian-${EngagementId}-alblogs-${AWS::AccountId}/*"
+
+        # ----------------------------------------------------------------
+        # Policy 3/3 — IAM (engagement-prefixed only) + explicit Denies.
+        # The Denies are the data-residency proof: this role can provision
+        # infrastructure but provably cannot read customer data.
+        # ----------------------------------------------------------------
+        - PolicyName: meridian-iam-and-guardrails
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: IamScopedRoleLifecycle
+                Effect: Allow
+                Action:
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:GetRole
+                  - iam:UpdateRole
+                  - iam:UpdateRoleDescription
+                  - iam:UpdateAssumeRolePolicy
+                  - iam:TagRole
+                  - iam:UntagRole
+                  - iam:PutRolePolicy
+                  - iam:DeleteRolePolicy
+                  - iam:GetRolePolicy
+                  - iam:ListRolePolicies
+                  - iam:ListAttachedRolePolicies
+                  - iam:ListInstanceProfilesForRole
+                  - iam:AttachRolePolicy
+                  - iam:DetachRolePolicy
+                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/meridian-${EngagementId}-*"
+              - Sid: IamPassEngagementRoles
+                Effect: Allow
+                Action: iam:PassRole
+                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/meridian-${EngagementId}-*"
+                Condition:
+                  StringEquals:
+                    iam:PassedToService:
+                      - ecs-tasks.amazonaws.com
+                      - vpc-flow-logs.amazonaws.com
+              - Sid: IamServiceLinkedRoles
+                Effect: Allow
+                Action: iam:CreateServiceLinkedRole
+                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/aws-service-role/*"
+                Condition:
+                  StringEquals:
+                    iam:AWSServiceName:
+                      - ecs.amazonaws.com
+                      - rds.amazonaws.com
+                      - elasticloadbalancing.amazonaws.com
+                      - elasticfilesystem.amazonaws.com
+              # ---------------- explicit Denies ----------------
+              - Sid: DenySecretValueReads
+                Effect: Deny
+                Action: secretsmanager:GetSecretValue
+                Resource: "*"
+              - Sid: DenyDatabaseConnect
+                Effect: Deny
+                Action: rds-db:connect
+                Resource: "*"
+              # s3:GetObject* (not the single action) so the residency Deny
+              # also covers GetObjectVersion/GetObjectAttributes/GetObjectTorrent
+              # and stays as strong as the stated guarantee even if an s3 Allow
+              # is ever widened. Exact bucket names — see S3ScopedBuckets.
+              - Sid: DenyObjectReadsOutsideOpsBuckets
+                Effect: Deny
+                Action: s3:GetObject*
+                NotResource:
+                  - !Sub "arn:aws:s3:::meridian-${EngagementId}-tfstate-${AWS::AccountId}/*"
+                  - !Sub "arn:aws:s3:::meridian-${EngagementId}-alblogs-${AWS::AccountId}/*"
+              - Sid: DenyDynamoDataPlane
+                Effect: Deny
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:BatchGetItem
+                  - dynamodb:Query
+                  - dynamodb:Scan
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:BatchWriteItem
+                Resource: "*"
+              - Sid: DenyInstanceConsoleArtifacts
+                Effect: Deny
+                Action:
+                  - ec2:GetConsoleOutput
+                  - ec2:GetConsoleScreenshot
+                Resource: "*"
+
+Outputs:
+  RoleArn:
+    Description: Return this ARN to Meridian — it is the deploy_role_arn Terraform input.
+    Value: !GetAtt MeridianDeployRole.Arn
+  RoleName:
+    Description: Name of the engagement deploy role.
+    Value: !Ref MeridianDeployRole

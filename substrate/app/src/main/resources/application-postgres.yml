@@ -1,0 +1,19 @@
+# Postgres profile — local Docker Compose, Meridian-hosted testing, or customer environment.
+spring:
+  datasource:
+    url: jdbc:postgresql://${SUBSTRATE_DB_HOST:localhost}:${SUBSTRATE_DB_PORT:5432}/${SUBSTRATE_DB_NAME:substrate}
+    driver-class-name: org.postgresql.Driver
+    username: ${SUBSTRATE_DB_USER:substrate}
+    password: ${SUBSTRATE_DB_PASSWORD:}
+
+substrate:
+  auth:
+    mode: ${SUBSTRATE_AUTH_MODE:oidc}
+  # Blob store (C2): enable when docker-compose gains a MinIO service. Until then the
+  # no-op UnconfiguredBlobStore applies (boot fine; branding asset upload 500s).
+  # blob-store:
+  #   provider: minio
+  #   minio:
+  #     endpoint: ${SUBSTRATE_MINIO_ENDPOINT:}
+  #     access-key: ${SUBSTRATE_MINIO_ACCESS_KEY:}
+  #     secret-key: ${SUBSTRATE_MINIO_SECRET_KEY:}
