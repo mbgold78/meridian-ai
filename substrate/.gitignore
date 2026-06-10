@@ -48,3 +48,8 @@ data/
 *.h2.db
 *.mv.db
 postgres-data/
+
+# Ingestion CLI runtime dirs (convert output + staged review files; the
+# checked-in inputs live in ingestion/samples/)
+output/
+staging/

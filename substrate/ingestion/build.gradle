@@ -15,6 +15,11 @@ dependencies {
     runtimeOnly 'org.postgresql:postgresql'
     runtimeOnly 'com.h2database:h2'
 
+    // Flyway — the ingestion CLI migrates the engagement DB itself (shared
+    // migration classpath, see processResources below)
+    implementation 'org.flywaydb:flyway-core'
+    runtimeOnly 'org.flywaydb:flyway-database-postgresql'
+
     // CSV parsing
     implementation 'com.opencsv:opencsv:5.9'
 
@@ -32,4 +37,14 @@ dependencies {
     // Test
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
     testRuntimeOnly 'com.h2database:h2'
+}
+
+// Chunk I1 decision (port-map §2.4 datasource note): the ingestion CLI SHARES the
+// app module's migration classpath instead of requiring an app boot to have
+// migrated first. Identical files → identical Flyway checksums, so app and
+// ingestion can both run Flyway against the same database safely.
+processResources {
+    from(project(':app').file('src/main/resources/db/migration')) {
+        into 'db/migration'
+    }
 }

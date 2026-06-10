@@ -1,0 +1,6 @@
+name,entity_type,description,system_name,execution_mode
+Member Master Record,DATA_OBJECT,"Canonical member identity and account relationship record.",MemberCore,SYSTEM
+Daily Settlement Report,REPORT,"End-of-day settlement totals by branch and product line.",LedgerLink,SYSTEM
+KRI Threshold Register,CONTROL,"Register of key risk indicator thresholds and breach escalation rules.",RiskRadar,HYBRID
+Incident Ticket,DATA_OBJECT,"Operational incident record with severity and resolution workflow state.",OpsBoard,SYSTEM
+Retention Schedule,DATA_OBJECT,"Document retention schedule applied to archived records.",ArchiveVault,MANUAL

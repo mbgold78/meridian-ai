@@ -1,0 +1,40 @@
+# Substrate ingestion CLI — standalone boot app against the engagement database
+# (port-map §2.4). No web server; the CommandLineRunner drives one pipeline run
+# per invocation and the JVM exits with the CLI's exit code.
+spring:
+  application:
+    name: substrate-ingestion
+  main:
+    web-application-type: none
+  profiles:
+    default: dev
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+  flyway:
+    enabled: true
+    # Migrations are OWNED by the app module and shared onto this classpath by
+    # ingestion/build.gradle processResources (chunk I1 decision, port-map §2.4
+    # datasource note): identical files → identical Flyway checksums, so both
+    # boot apps can migrate the same database safely.
+    locations: classpath:db/migration/common,classpath:db/migration/{vendor}
+
+substrate:
+  llm:
+    # anthropic (default) needs ANTHROPIC_API_KEY; 'mock' runs the deterministic
+    # row-echo extractor (no network, fixture seam S8) — pass on the CLI:
+    #   --substrate.llm.provider=mock
+    provider: anthropic
+    anthropic:
+      api-key: ${ANTHROPIC_API_KEY:}
+      model: ${SUBSTRATE_LLM_MODEL:claude-opus-4-8}
+      max-tokens: 4096
+      timeout-ms: 120000
+  ingestion:
+    samples-dir: ./samples
+    output-dir: ./output
+    staging-dir: ./staging
+    domain-name: Ingested
+    create-missing-members: true
+    max-input-chars: 60000

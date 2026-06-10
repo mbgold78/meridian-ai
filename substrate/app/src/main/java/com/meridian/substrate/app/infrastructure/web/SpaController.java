@@ -17,7 +17,9 @@ public class SpaController {
             "/designer", "/designer/**",
             "/transformation", "/transformation/**",
             "/roadmap", "/roadmap/**",
-            "/decisions", "/decisions/**"
+            "/decisions", "/decisions/**",
+            // Beacon dashboards — product namespace (frontend features/portfolio/routes.tsx)
+            "/portfolio", "/portfolio/**"
     })
     public String forward(HttpServletRequest request) {
         return "forward:/index.html";

@@ -1,0 +1,8 @@
+# Postgres profile — the SAME engagement database the app module runs against
+# (single shared datasource, port-map §2.4: no homepoc split-brain).
+spring:
+  datasource:
+    url: jdbc:postgresql://${SUBSTRATE_DB_HOST:localhost}:${SUBSTRATE_DB_PORT:5432}/${SUBSTRATE_DB_NAME:substrate}
+    driver-class-name: org.postgresql.Driver
+    username: ${SUBSTRATE_DB_USER:substrate}
+    password: ${SUBSTRATE_DB_PASSWORD:}

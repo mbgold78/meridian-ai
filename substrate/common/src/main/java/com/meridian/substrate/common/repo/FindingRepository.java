@@ -6,6 +6,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -19,4 +20,7 @@ public interface FindingRepository extends JpaRepository<Finding, UUID> {
     List<Finding> findByFindingType(FindingType type);
 
     List<Finding> findByDomainIdAndFindingType(UUID domainId, FindingType type);
+
+    /** Natural-key lookup for the ingestion idempotent upsert (port-map §2.4 C6). */
+    Optional<Finding> findFirstByDomainIdAndTitle(UUID domainId, String title);
 }

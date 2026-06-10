@@ -1,0 +1,17 @@
+# Ingestion test profile — in-memory H2 (PostgreSQL mode), real Flyway
+# migrations from the shared classpath, mock LLM provider, CLI runner inert.
+spring:
+  datasource:
+    url: jdbc:h2:mem:ingestion-test;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;DB_CLOSE_DELAY=-1
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: ""
+
+substrate:
+  llm:
+    provider: mock
+    anthropic:
+      model: mock-extraction-model
+  ingestion:
+    cli:
+      enabled: false

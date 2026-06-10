@@ -1,61 +1,66 @@
 import { Outlet, Link, useLocation } from 'react-router-dom';
+import { PersonaSwitcher } from '@/features/personas/PersonaSwitcher';
+import { useTerminology, useTheme } from '@/app/theme';
 
 /*
- * A3 PORT SEAMS (restore in C7/C8 — port-map §7):
- *   import { PersonaSwitcher } from '@/features/personas/PersonaSwitcher';  // C8
- *   import { useTerminology } from '@/app/theme';                           // C7
- * Those modules are owned by later chunks and do not exist yet. When they
- * land: re-add <PersonaSwitcher /> at both SEAM markers below and replace the
- * literal 'Capability' with t('capability', 'singular') from useTerminology.
- *
- * Styling note: the slate-950 / meridian-400 legacy styling here is kept
- * verbatim on purpose — C8 owns the token-system migration for canvas
- * surfaces (port-map §2.5 step 7).
+ * Chrome shell for the canvas-family surfaces (Living Canvas at '/', Future
+ * State Designer at '/designer'). A3 port seams restored in C8: the
+ * PersonaSwitcher mounts at both nav positions and the capability link label
+ * resolves through workspace terminology. Styling migrated from the legacy
+ * slate-950/meridian literals onto the token system (port-map §2.5 step 7);
+ * the brand wordmark reads BrandingConfig.appDisplayName, matching the
+ * WelcomeOverlay idiom.
  */
 
 export function CanvasLayout() {
   const location = useLocation();
+  const { t } = useTerminology();
+  const { config } = useTheme();
   const onCanvas = location.pathname === '/';
 
   return (
-    <div className="relative h-screen w-screen overflow-hidden bg-slate-950">
+    <div className="relative h-screen w-screen overflow-hidden bg-background">
       {/* Floating brand + persona — only on canvas */}
       {onCanvas && (
         <>
           <div className="pointer-events-auto absolute left-5 top-5 z-30">
             <Link
               to="/"
-              className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 shadow-xl backdrop-blur-xl"
+              className="inline-flex items-center gap-2 rounded-xl border border-border bg-surface/80 px-3 py-2 shadow-xl backdrop-blur-xl"
             >
-              <span className="h-2 w-2 rounded-full bg-meridian-400 shadow-[0_0_8px_#38bdf8]" />
-              <span className="text-sm font-black tracking-[0.2em] text-white">MERIDIAN</span>
+              <span className="h-2 w-2 rounded-full bg-primary shadow-[0_0_8px_hsl(var(--primary))]" />
+              <span className="text-sm font-black uppercase tracking-[0.2em] text-foreground">
+                {config.appDisplayName}
+              </span>
             </Link>
           </div>
           <div className="pointer-events-auto absolute right-5 top-5 z-30 flex items-center gap-2">
             <Link
               to="/designer/capabilities"
-              className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 text-xs font-medium text-white/80 shadow-xl backdrop-blur-xl hover:text-white"
+              className="inline-flex items-center gap-2 rounded-xl border border-border bg-surface/80 px-3 py-2 text-xs font-medium text-foreground-muted shadow-xl backdrop-blur-xl hover:text-foreground"
             >
-              Capability Designer
+              {t('capability', 'singular')} Designer
             </Link>
+            {/* homepoc linked /demo/beacon; the dashboards live at the product
+                namespace /portfolio in substrate (features/portfolio/paths.ts). */}
             <Link
-              to="/demo/beacon"
-              className="inline-flex items-center gap-2 rounded-xl border border-amber-300/30 bg-slate-950/60 px-3 py-2 text-xs font-medium text-amber-200/80 shadow-xl backdrop-blur-xl hover:text-amber-100"
-              title="Beacon Industries demo (mocked)"
+              to="/portfolio"
+              className="inline-flex items-center gap-2 rounded-xl border border-warning/40 bg-surface/80 px-3 py-2 text-xs font-medium text-warning shadow-xl backdrop-blur-xl hover:text-warning-foreground"
+              title="Beacon Industries portfolio (fixture data)"
             >
-              Demo Mode
+              Portfolio
             </Link>
-            {/* SEAM: <PersonaSwitcher /> (C8) */}
+            <PersonaSwitcher />
           </div>
         </>
       )}
 
       {/* Back-to-canvas nav on non-canvas routes */}
       {!onCanvas && (
-        <nav className="absolute left-0 right-0 top-0 z-30 flex items-center justify-between border-b border-white/10 bg-slate-950/80 px-6 py-3 backdrop-blur-xl">
+        <nav className="absolute left-0 right-0 top-0 z-30 flex items-center justify-between border-b border-border bg-surface/80 px-6 py-3 backdrop-blur-xl">
           <Link
             to="/"
-            className="inline-flex items-center gap-2 text-sm font-semibold text-white/80 hover:text-white"
+            className="inline-flex items-center gap-2 text-sm font-semibold text-foreground-muted hover:text-foreground"
           >
             <svg className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
               <path
@@ -67,12 +72,12 @@ export function CanvasLayout() {
             Back to canvas
           </Link>
           <div className="flex items-center gap-3">
-            {/* SEAM: <PersonaSwitcher /> (C8) */}
+            <PersonaSwitcher />
           </div>
         </nav>
       )}
 
-      <main className={onCanvas ? 'h-full w-full' : 'h-full w-full overflow-auto bg-slate-950 pt-14'}>
+      <main className={onCanvas ? 'h-full w-full' : 'h-full w-full overflow-auto bg-background pt-14'}>
         <Outlet />
       </main>
     </div>

@@ -1,0 +1,11 @@
+# Dev profile — zero external dependencies (no Docker on this machine,
+# port-map §4). FILE-based H2 (unlike the app's in-memory dev DB) so commits
+# persist across CLI invocations: that's what makes the idempotent re-commit
+# acceptance check user-runnable (run commit twice, compare counts).
+# Reset: delete ./data (relative to substrate/ingestion when using bootRun).
+spring:
+  datasource:
+    url: jdbc:h2:file:./data/ingestion-dev;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: ""

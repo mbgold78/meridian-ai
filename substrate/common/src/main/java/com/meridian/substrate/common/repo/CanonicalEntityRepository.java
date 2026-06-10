@@ -5,6 +5,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -16,4 +17,7 @@ public interface CanonicalEntityRepository extends JpaRepository<CanonicalEntity
     List<CanonicalEntity> findByDomainId(UUID domainId);
 
     List<CanonicalEntity> findBySystemId(UUID systemId);
+
+    /** Natural-key lookup for the ingestion idempotent upsert (port-map §2.4 C6). */
+    Optional<CanonicalEntity> findFirstByDomainIdAndName(UUID domainId, String name);
 }

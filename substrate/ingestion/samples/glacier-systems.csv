@@ -1,0 +1,7 @@
+name,vendor,description,system_type,deployed_year,status,business_line
+LedgerLink,Summit Peak Software,"General ledger and settlement engine used for end-of-day balancing across all branches.",REPORTING,2014,ACTIVE,Finance Operations
+MemberCore,Cascadia Banking Systems,"Core member account platform of record. Holds member master records and account balances.",WORKFLOW,2009,ACTIVE,Retail Banking
+RiskRadar,Glacier Peak IT,"In-house key risk indicator dashboard aggregating operational risk metrics from branch reports.",KRI_DASHBOARD,2019,ACTIVE,Risk Management
+OpsBoard,Tundra Works,"Incident and issues management tracker for operations and facilities tickets.",ISSUES_MANAGEMENT,2017,ACTIVE,Operations
+ArchiveVault,Summit Peak Software,"Legacy document archive holding scanned records prior to 2012. Read-only since migration.",REPORTING,2005,DEPRECATED,Compliance
+BranchFlow,Cascadia Banking Systems,"Branch teller workflow system capturing daily branch incident and exception entries.",WORKFLOW,2012,ACTIVE,Retail Banking
