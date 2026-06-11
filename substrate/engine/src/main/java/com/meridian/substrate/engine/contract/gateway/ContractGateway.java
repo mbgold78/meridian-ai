@@ -7,8 +7,11 @@ import com.meridian.substrate.common.domain.enums.GatewayDecision;
 import com.meridian.substrate.common.domain.enums.PrincipalType;
 import com.meridian.substrate.common.repo.ContractRepository;
 import com.meridian.substrate.engine.contract.ContractProperties;
+import com.meridian.substrate.engine.observability.EngineMetrics;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -118,6 +121,23 @@ public class ContractGateway {
     private final ContractProperties properties;
     private final ObjectMapper objectMapper;
     private final AgentRegistryGate agentRegistryGate;
+    private final EngineMetrics metrics;
+
+    /** Spring constructor (Stage 3 observability — metrics optional so partial slices wire). */
+    @Autowired
+    public ContractGateway(GuardCache guardCache,
+                           ContractRepository contractRepository,
+                           RequireAttestationGate attestationGate,
+                           ContractMetricLeafResolver metricLeafResolver,
+                           EnforcementDecisionWriter decisionWriter,
+                           ContractProperties properties,
+                           ObjectMapper objectMapper,
+                           AgentRegistryGate agentRegistryGate,
+                           ObjectProvider<EngineMetrics> metrics) {
+        this(guardCache, contractRepository, attestationGate, metricLeafResolver, decisionWriter,
+                properties, objectMapper, agentRegistryGate,
+                metrics.getIfAvailable(EngineMetrics::noop));
+    }
 
     public ContractGateway(GuardCache guardCache,
                            ContractRepository contractRepository,
@@ -126,7 +146,8 @@ public class ContractGateway {
                            EnforcementDecisionWriter decisionWriter,
                            ContractProperties properties,
                            ObjectMapper objectMapper,
-                           AgentRegistryGate agentRegistryGate) {
+                           AgentRegistryGate agentRegistryGate,
+                           EngineMetrics metrics) {
         this.guardCache = guardCache;
         this.contractRepository = contractRepository;
         this.attestationGate = attestationGate;
@@ -135,6 +156,20 @@ public class ContractGateway {
         this.properties = properties;
         this.objectMapper = objectMapper;
         this.agentRegistryGate = agentRegistryGate;
+        this.metrics = metrics;
+    }
+
+    /** Pre-Stage-3 signature, kept for hand-constructed gateways (tests): metrics → sink. */
+    public ContractGateway(GuardCache guardCache,
+                           ContractRepository contractRepository,
+                           RequireAttestationGate attestationGate,
+                           ContractMetricLeafResolver metricLeafResolver,
+                           EnforcementDecisionWriter decisionWriter,
+                           ContractProperties properties,
+                           ObjectMapper objectMapper,
+                           AgentRegistryGate agentRegistryGate) {
+        this(guardCache, contractRepository, attestationGate, metricLeafResolver, decisionWriter,
+                properties, objectMapper, agentRegistryGate, EngineMetrics.noop());
     }
 
     /**
@@ -148,6 +183,7 @@ public class ContractGateway {
         EnforcementMode mode = EnforcementMode.parse(properties.getEnforcement().getMode());
         if (mode == EnforcementMode.OFF) {
             decisionWriter.countAllowUnevaluated();
+            metrics.gatewayEvaluation(EngineMetrics.DECISION_ALLOW_UNEVALUATED, mode.wire(), started);
             return Decision.Allow.unflagged();
         }
         try {
@@ -214,6 +250,7 @@ public class ContractGateway {
                 String flagReason = String.join("; ", gateFlags);
                 decisionWriter.row(action, GatewayDecision.ALLOW_WITH_FLAG, List.of(),
                         List.of(), flagReason, mode, latencyMs(started));
+                metrics.gatewayEvaluation(GatewayDecision.ALLOW_WITH_FLAG.name(), mode.wire(), started);
                 return new Decision.Allow(true, List.of(), flagReason);
             }
             decisionWriter.countAllowNoGuard();
@@ -221,6 +258,7 @@ public class ContractGateway {
                 decisionWriter.row(action, GatewayDecision.ALLOW, List.of(), List.of(),
                         null, mode, latencyMs(started));
             }
+            metrics.gatewayEvaluation(GatewayDecision.ALLOW.name(), mode.wire(), started);
             return Decision.Allow.unflagged();
         }
 
@@ -290,6 +328,7 @@ public class ContractGateway {
                     citedClauseIds(matched, indeterminate),
                     citedContractIds(matched, indeterminate),
                     flagReason, mode, latencyMs(started));
+            metrics.gatewayEvaluation(GatewayDecision.ALLOW_WITH_FLAG.name(), mode.wire(), started);
             return new Decision.Allow(true, matchedClauseIds, flagReason);
         }
         if (!matched.isEmpty()) {
@@ -298,6 +337,7 @@ public class ContractGateway {
             decisionWriter.row(action, GatewayDecision.ALLOW, matchedClauseIds,
                     matched.stream().map(GuardView::contractId).distinct().toList(),
                     null, mode, latencyMs(started));
+            metrics.gatewayEvaluation(GatewayDecision.ALLOW.name(), mode.wire(), started);
             return new Decision.Allow(false, matchedClauseIds, null);
         }
         // Guards exist but none matched: plain ALLOW — row only at level=all.
@@ -307,6 +347,7 @@ public class ContractGateway {
         } else {
             decisionWriter.countAllowUnrowed();
         }
+        metrics.gatewayEvaluation(GatewayDecision.ALLOW.name(), mode.wire(), started);
         return Decision.Allow.unflagged();
     }
 
@@ -321,6 +362,10 @@ public class ContractGateway {
                 ? GatewayDecision.DENY : GatewayDecision.WOULD_DENY;
         UUID decisionId = decisionWriter.row(action, rowed, clauseIds, contractIds,
                 reason, mode, latencyMs(started));
+        metrics.gatewayEvaluation(rowed.name(), mode.wire(), started);
+        if (action.principal().type() == PrincipalType.AGENT) {
+            metrics.agentGatewayDenial(reason, mode.wire());
+        }
         if (mode == EnforcementMode.SHADOW) {
             log.info("WOULD_DENY (shadow, proceeding) [action={}, principal={}/{}, reason={},"
                             + " decisionId={}]", action.actionType(),
@@ -346,6 +391,8 @@ public class ContractGateway {
                 ? GatewayDecision.DENY : GatewayDecision.WOULD_DENY;
         UUID decisionId = decisionWriter.row(action, rowed, List.of(), List.of(),
                 reason, mode, latencyMs(started));
+        metrics.gatewayEvaluation(rowed.name(), mode.wire(), started);
+        metrics.agentGatewayDenial(reason, mode.wire());   // §8.5 lane is AGENT by construction
         if (mode == EnforcementMode.SHADOW) {
             log.info("WOULD_DENY (agent gate, shadow, proceeding) [action={}, principal={},"
                             + " reason={}, decisionId={}]", action.actionType(),
@@ -377,6 +424,7 @@ public class ContractGateway {
             } catch (RuntimeException rowFailure) {
                 log.error("Could not row the HUMAN fail-open ALLOW_WITH_FLAG decision", rowFailure);
             }
+            metrics.gatewayEvaluation(GatewayDecision.ALLOW_WITH_FLAG.name(), mode.wire(), started);
             return new Decision.Allow(true, List.of(), REASON_GATEWAY_ERROR);
         }
         GatewayDecision rowed = mode == EnforcementMode.ENFORCE
@@ -388,6 +436,10 @@ public class ContractGateway {
         } catch (RuntimeException rowFailure) {
             log.error("Could not row the fail-closed {} decision — denying without a row id",
                     rowed, rowFailure);
+        }
+        metrics.gatewayEvaluation(rowed.name(), mode.wire(), started);
+        if (action.principal().type() == PrincipalType.AGENT) {
+            metrics.agentGatewayDenial(REASON_GATEWAY_ERROR, mode.wire());
         }
         if (mode == EnforcementMode.SHADOW) {
             return new Decision.Allow(true, List.of(), REASON_GATEWAY_ERROR);

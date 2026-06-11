@@ -15,6 +15,20 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
     implementation 'org.springframework.boot:spring-boot-starter-validation'
     implementation 'org.springframework.boot:spring-boot-starter-actuator'
+    // Phase 5 Stage 3 — observability (plan §8). All three are INERT by
+    // default: management.otlp.metrics.export.enabled / management.tracing.enabled
+    // map to substrate.observability.* keys (default false) in application.yml,
+    // so no exporter/tracer beans exist until an engagement opts in (pinned by
+    // ObservabilityExportToggleTest). Versions ride the Boot BOM
+    // (micrometer/micrometer-tracing/opentelemetry BOM imports).
+    implementation 'io.micrometer:micrometer-registry-otlp'
+    implementation 'io.micrometer:micrometer-tracing-bridge-otel'
+    implementation 'io.opentelemetry:opentelemetry-exporter-otlp'
+    // Phase 5 — generic OIDC resource server (production plan §4; port-map S9).
+    // ACTIVE ONLY under substrate.auth.mode=oidc: in anonymous mode (dev default)
+    // AuthModeEnvironmentPostProcessor excludes ALL security auto-configuration,
+    // so the classpath addition is behavior-neutral for the existing suite.
+    implementation 'org.springframework.boot:spring-boot-starter-oauth2-resource-server'
 
     // Database — Postgres in production, H2 (PostgreSQL compatibility mode) for dev profile
     runtimeOnly 'org.postgresql:postgresql'
@@ -59,6 +73,10 @@ dependencies {
     // Test
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
     testImplementation 'org.mockito:mockito-core'
+    // Phase 5 — JWT-mock suites (jwt() post-processor / SecurityMockMvc*): the
+    // Docker-less local verification lane for oidc mode (plan §4 — Keycloak
+    // itself only runs in CI via the Testcontainers IT).
+    testImplementation 'org.springframework.security:spring-security-test'
     testRuntimeOnly 'com.h2database:h2'
 
     // C11 — Testcontainers-Postgres integration lane (versions from the Boot BOM).
@@ -147,6 +165,13 @@ tasks.register('frontendBuild', com.github.gradle.node.npm.task.NpmTask) {
     outputs.dir(file("${projectDir}/src/main/resources/static"))
 }
 
-tasks.named('processResources') {
-    dependsOn tasks.named('frontendBuild')
+// -PskipFrontendBuild is for the Dockerfile ONLY: its dedicated frontend stage
+// (node:22.14.0-alpine, same nodeVersion pin) already built the bundle and
+// overlaid it into app/src/main/resources/static, so the gradle-side wiring
+// must not re-download Node inside the image build. Every other invocation
+// (dev, CI backend job) omits the property and keeps the C11 guarantee.
+if (!project.hasProperty('skipFrontendBuild')) {
+    tasks.named('processResources') {
+        dependsOn tasks.named('frontendBuild')
+    }
 }

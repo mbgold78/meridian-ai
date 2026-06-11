@@ -30,8 +30,11 @@ import com.meridian.substrate.engine.agent.read.AgentDetail;
 import com.meridian.substrate.engine.contract.gateway.Governed;
 import com.meridian.substrate.engine.contract.gateway.GovernedActions;
 import com.meridian.substrate.engine.contract.gateway.Ungoverned;
+import com.meridian.substrate.engine.observability.EngineMetrics;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -96,6 +99,28 @@ public class AgentLifecycleService {
     private final AgentRegistryLookup registryLookup;
     private final java.time.Clock clock;
     private final ObjectMapper objectMapper;
+    private final EngineMetrics metrics;
+
+    /** Spring constructor (Stage 3 observability — metrics optional so partial slices wire). */
+    @Autowired
+    public AgentLifecycleService(AgentRegistrationRepository registrationRepository,
+                                 AgentOversightLinkRepository oversightLinkRepository,
+                                 AgentStatusEventRepository eventRepository,
+                                 AgentCriteriaGateRepository criteriaGateRepository,
+                                 AgentThrottleBudgetRepository throttleBudgetRepository,
+                                 AgentNotificationService notificationService,
+                                 AgentQueryService queryService,
+                                 AgentLivenessService livenessService,
+                                 AgentGovernanceChainMirror chainMirror,
+                                 AgentRegistryLookup registryLookup,
+                                 java.time.Clock clock,
+                                 ObjectMapper objectMapper,
+                                 ObjectProvider<EngineMetrics> metrics) {
+        this(registrationRepository, oversightLinkRepository, eventRepository,
+                criteriaGateRepository, throttleBudgetRepository, notificationService,
+                queryService, livenessService, chainMirror, registryLookup, clock, objectMapper,
+                metrics.getIfAvailable(EngineMetrics::noop));
+    }
 
     public AgentLifecycleService(AgentRegistrationRepository registrationRepository,
                                  AgentOversightLinkRepository oversightLinkRepository,
@@ -108,7 +133,8 @@ public class AgentLifecycleService {
                                  AgentGovernanceChainMirror chainMirror,
                                  AgentRegistryLookup registryLookup,
                                  java.time.Clock clock,
-                                 ObjectMapper objectMapper) {
+                                 ObjectMapper objectMapper,
+                                 EngineMetrics metrics) {
         this.registrationRepository = registrationRepository;
         this.oversightLinkRepository = oversightLinkRepository;
         this.eventRepository = eventRepository;
@@ -121,6 +147,7 @@ public class AgentLifecycleService {
         this.registryLookup = registryLookup;
         this.clock = clock;
         this.objectMapper = objectMapper;
+        this.metrics = metrics;
     }
 
     // ------------------------------------------------------------------ commands
@@ -287,6 +314,7 @@ public class AgentLifecycleService {
         event.setIdempotencyKey(cmd.idempotencyKey());
         event.setOccurredAt(now);
         event = eventRepository.save(event);
+        metrics.agentVerb(AgentEventType.DEPLOYED.wireValue());
 
         chainMirror.onDeployed(reg, event);                  // §11 — anchors after commit
 
@@ -352,6 +380,7 @@ public class AgentLifecycleService {
 
         AgentStatusEvent event = AgentVerbMechanics.appendEvent(eventRepository, reg,
                 AgentEventType.PAUSED, actor, reason, null, null, idempotencyKey, now);
+        metrics.agentVerb(AgentEventType.PAUSED.wireValue());
         registrationRepository.save(reg);   // managed instance — same object, kept effectively final for the fence lambdas
         notifyControlRequested(reg, event, "pause", reason);
         registryLookup.invalidate(reg.getId());   // §8.3: gate cache flips with the verb (30s TTL net)
@@ -400,6 +429,7 @@ public class AgentLifecycleService {
 
         AgentVerbMechanics.appendEvent(eventRepository, reg, AgentEventType.RESUMED, actor,
                 null, null, null, idempotencyKey, now);
+        metrics.agentVerb(AgentEventType.RESUMED.wireValue());
         registrationRepository.save(reg);   // managed instance — same object, kept effectively final for the fence lambdas
         registryLookup.invalidate(reg.getId());   // §8.3: gate cache flips with the verb (30s TTL net)
 
@@ -470,6 +500,7 @@ public class AgentLifecycleService {
         }
         AgentStatusEvent event = AgentVerbMechanics.appendEvent(eventRepository, reg,
                 AgentEventType.THROTTLE_SET, actor, null, payload, null, idempotencyKey, now);
+        metrics.agentVerb(AgentEventType.THROTTLE_SET.wireValue());
         registrationRepository.save(reg);   // managed instance — same object, kept effectively final for the fence lambdas
         notifyControlRequested(reg, event, "throttle", kind);
         registryLookup.invalidate(reg.getId());   // budget rows are gate state (§8.3 #4)
@@ -512,6 +543,7 @@ public class AgentLifecycleService {
         payload.put("clearedBudgetId", active.getId().toString());
         AgentVerbMechanics.appendEvent(eventRepository, reg, AgentEventType.THROTTLE_CLEARED,
                 actor, null, payload, null, idempotencyKey, now);
+        metrics.agentVerb(AgentEventType.THROTTLE_CLEARED.wireValue());
         registrationRepository.save(reg);   // managed instance — same object, kept effectively final for the fence lambdas
         registryLookup.invalidate(reg.getId());   // budget rows are gate state (§8.3 #4)
 
@@ -581,6 +613,7 @@ public class AgentLifecycleService {
         payload.put("retiredReason", retiredReason.name());
         AgentStatusEvent event = AgentVerbMechanics.appendEvent(eventRepository, reg, eventType,
                 actor, reason, payload, null, idempotencyKey, now);
+        metrics.agentVerb(eventType.wireValue());
         registrationRepository.save(reg);   // managed instance — same object, kept effectively final for the fence lambdas
         notifyControlRequested(reg, event, verb, reason);
         registryLookup.invalidate(reg.getId());   // §8.3: gate cache flips with the verb (30s TTL net)
@@ -653,6 +686,7 @@ public class AgentLifecycleService {
 
         AgentVerbMechanics.appendEvent(eventRepository, reg, AgentEventType.OVERSIGHT_CHANGED,
                 actor, null, payload, null, idempotencyKey, now);
+        metrics.agentVerb(AgentEventType.OVERSIGHT_CHANGED.wireValue());
         registrationRepository.save(reg);   // managed instance — same object, kept effectively final for the fence lambdas
 
         log.info("Oversight chain replaced [key={}, links {}→{}]",
@@ -694,6 +728,7 @@ public class AgentLifecycleService {
         }
         AgentVerbMechanics.appendEvent(eventRepository, reg, AgentEventType.LIVENESS_ATTESTED,
                 actor, null, payload, evidenceRefs, idempotencyKey, now);
+        metrics.agentVerb(AgentEventType.LIVENESS_ATTESTED.wireValue());
         registrationRepository.save(reg);
         // The sighting + last_attested projections ride the telemetry lane —
         // hourly-bucket deduped; same lock, same transaction (I7/I9).
@@ -749,6 +784,7 @@ public class AgentLifecycleService {
         payload.put("previous", previous);
         AgentVerbMechanics.appendEvent(eventRepository, reg, AgentEventType.PRINCIPAL_BOUND,
                 actor, null, payload, null, idempotencyKey, now);
+        metrics.agentVerb(AgentEventType.PRINCIPAL_BOUND.wireValue());
         registrationRepository.save(reg);   // managed instance — same object, kept effectively final for the fence lambdas
         registryLookup.invalidate(reg.getId());           // resolution key changed (M18)
         registryLookup.invalidatePrincipal(reg.getMcpPrincipalId());
@@ -786,6 +822,7 @@ public class AgentLifecycleService {
         reg.setMcpPrincipalId(null);
         AgentVerbMechanics.appendEvent(eventRepository, reg, AgentEventType.PRINCIPAL_REVOKED,
                 actor, null, payload, null, idempotencyKey, now);
+        metrics.agentVerb(AgentEventType.PRINCIPAL_REVOKED.wireValue());
         registrationRepository.save(reg);   // managed instance — same object, kept effectively final for the fence lambdas
         registryLookup.invalidate(reg.getId());           // resolution key changed (M18)
         registryLookup.invalidatePrincipal(revoked);

@@ -20,6 +20,14 @@ image_uri = "111122223333.dkr.ecr.eu-west-1.amazonaws.com/meridian-acme-hold-sub
 oidc_issuer_uri = "https://login.example-customer.com/oauth2/default"
 auth_mode       = "oidc"
 
+# Per-engagement role mapping (plan §4) — plain-config env vars only, NEVER
+# secrets (cleartext in the task definition). Keys/values per docs/auth.md;
+# structured keys (persona role-map) go via SPRING_APPLICATION_JSON.
+app_extra_environment = {
+  # SUBSTRATE_AUTH_OIDC_CLAIMS_ROLES = "groups"
+  # SPRING_APPLICATION_JSON = "{\"substrate\":{\"auth\":{\"oidc\":{\"persona\":{\"role-map\":{\"SubstrateAdmins\":\"ADMIN\",\"FinanceExecs\":\"EXECUTIVE\"}}}}}}"
+}
+
 # --- TLS / reachability -------------------------------------------------------
 # Internal ALB (default): imported / private-CA certificate; customer VPN or
 # peering provides reachability. Public ALB: ACM public certificate.

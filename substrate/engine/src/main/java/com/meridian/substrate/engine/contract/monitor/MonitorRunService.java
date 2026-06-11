@@ -20,8 +20,11 @@ import com.meridian.substrate.engine.contract.events.AfterCommit;
 import com.meridian.substrate.engine.contract.events.MonitorErrorEvent;
 import com.meridian.substrate.engine.contract.registry.ContractActor;
 import com.meridian.substrate.engine.contract.registry.ContractEventService;
+import com.meridian.substrate.engine.observability.EngineMetrics;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 
@@ -81,7 +84,29 @@ public class MonitorRunService {
     private final SweepJitter jitter;
     private final Clock clock;
     private final ObjectMapper objectMapper;
+    private final EngineMetrics metrics;
 
+    /** Spring constructor (Stage 3 observability — metrics optional so partial slices wire). */
+    @Autowired
+    public MonitorRunService(List<MonitorEvaluator> evaluators,
+                             ContractMonitorRepository monitorRepository,
+                             ContractMonitorRunRepository runRepository,
+                             ContractCommitmentRepository commitmentRepository,
+                             ContractBreachRepository breachRepository,
+                             BreachService breachService,
+                             ContractEventService eventService,
+                             ContractProperties properties,
+                             ApplicationEventPublisher eventPublisher,
+                             SweepJitter jitter,
+                             Clock clock,
+                             ObjectMapper objectMapper,
+                             ObjectProvider<EngineMetrics> metrics) {
+        this(evaluators, monitorRepository, runRepository, commitmentRepository, breachRepository,
+                breachService, eventService, properties, eventPublisher, jitter, clock,
+                objectMapper, metrics.getIfAvailable(EngineMetrics::noop));
+    }
+
+    /** Pre-Stage-3 signature, kept for hand-constructed services (tests): metrics → sink. */
     public MonitorRunService(List<MonitorEvaluator> evaluators,
                              ContractMonitorRepository monitorRepository,
                              ContractMonitorRunRepository runRepository,
@@ -94,6 +119,24 @@ public class MonitorRunService {
                              SweepJitter jitter,
                              Clock clock,
                              ObjectMapper objectMapper) {
+        this(evaluators, monitorRepository, runRepository, commitmentRepository, breachRepository,
+                breachService, eventService, properties, eventPublisher, jitter, clock,
+                objectMapper, EngineMetrics.noop());
+    }
+
+    public MonitorRunService(List<MonitorEvaluator> evaluators,
+                             ContractMonitorRepository monitorRepository,
+                             ContractMonitorRunRepository runRepository,
+                             ContractCommitmentRepository commitmentRepository,
+                             ContractBreachRepository breachRepository,
+                             BreachService breachService,
+                             ContractEventService eventService,
+                             ContractProperties properties,
+                             ApplicationEventPublisher eventPublisher,
+                             SweepJitter jitter,
+                             Clock clock,
+                             ObjectMapper objectMapper,
+                             EngineMetrics metrics) {
         this.evaluators = evaluators.stream().collect(Collectors.toMap(
                 MonitorEvaluator::ruleType, e -> e,
                 (a, b) -> {
@@ -111,6 +154,7 @@ public class MonitorRunService {
         this.jitter = jitter;
         this.clock = clock;
         this.objectMapper = objectMapper;
+        this.metrics = metrics;
     }
 
     /** Runs one CLAIMED monitor inside the caller's transaction; returns the appended run row. */
@@ -130,6 +174,7 @@ public class MonitorRunService {
         run.setDetails(BoundedTrace.bound(objectMapper, evaluation.trace(),
                 properties.getTrace().getMaxBytes()));
         run = runRepository.save(run);
+        metrics.monitorRun(evaluation.outcome().name());
 
         // ---- monitor projection + restart-safe schedule (§10.3)
         long jitterMillis = Math.min(60_000L, Math.max(0L, jitter.nextJitterMillis()));

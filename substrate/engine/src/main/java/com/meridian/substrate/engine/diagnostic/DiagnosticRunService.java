@@ -15,9 +15,12 @@ import com.meridian.substrate.engine.diagnostic.exception.DiagnosticConflictExce
 import com.meridian.substrate.engine.diagnostic.read.DiagnosticRunDetail;
 import com.meridian.substrate.engine.diagnostic.read.DiagnosticRunPlan;
 import com.meridian.substrate.engine.diagnostic.read.DiagnosticRunSummary;
+import com.meridian.substrate.engine.observability.EngineMetrics;
 import jakarta.persistence.EntityNotFoundException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.stereotype.Service;
@@ -127,10 +130,13 @@ public class DiagnosticRunService {
     private final TransactionTemplate transactionTemplate;
     private final ObjectMapper mapper;
     private final Clock clock;
+    private final EngineMetrics metrics;
 
     /** Domain-scoped start lock (ADR-004 D11 graft); PG partial-unique is the DB backstop. */
     private final ConcurrentHashMap<UUID, ReentrantLock> domainLocks = new ConcurrentHashMap<>();
 
+    /** Spring constructor (Stage 3 observability — metrics optional so partial slices wire). */
+    @Autowired
     public DiagnosticRunService(SynthesisRunRepository runRepository,
                                 DiagnosticRunBatchRepository batchRepository,
                                 DomainRepository domainRepository,
@@ -144,7 +150,29 @@ public class DiagnosticRunService {
                                 @Qualifier("diagnosticRunExecutor") ThreadPoolTaskExecutor runExecutor,
                                 PlatformTransactionManager transactionManager,
                                 ObjectMapper mapper,
-                                Clock clock) {
+                                Clock clock,
+                                ObjectProvider<EngineMetrics> metrics) {
+        this(runRepository, batchRepository, domainRepository, planner, batchExecutor,
+                attestationHook, curationService, properties, llmProperties, executors,
+                runExecutor, transactionManager, mapper, clock,
+                metrics.getIfAvailable(EngineMetrics::noop));
+    }
+
+    public DiagnosticRunService(SynthesisRunRepository runRepository,
+                                DiagnosticRunBatchRepository batchRepository,
+                                DomainRepository domainRepository,
+                                DiagnosticRunPlanner planner,
+                                DiagnosticBatchExecutor batchExecutor,
+                                DiagnosticAttestationHook attestationHook,
+                                CurationService curationService,
+                                DiagnosticProperties properties,
+                                LlmProperties llmProperties,
+                                List<DiagnosticExecutor> executors,
+                                ThreadPoolTaskExecutor runExecutor,
+                                PlatformTransactionManager transactionManager,
+                                ObjectMapper mapper,
+                                Clock clock,
+                                EngineMetrics metrics) {
         this.runRepository = runRepository;
         this.batchRepository = batchRepository;
         this.domainRepository = domainRepository;
@@ -159,6 +187,7 @@ public class DiagnosticRunService {
         this.transactionTemplate = new TransactionTemplate(transactionManager);
         this.mapper = mapper;
         this.clock = clock;
+        this.metrics = metrics;
     }
 
     // ------------------------------------------------------------------- start
@@ -430,9 +459,17 @@ public class DiagnosticRunService {
         for (String line : report.eventLines()) {
             log.info(line);
         }
+        // Stage 3 observability (plan §8): recorded AFTER the finalization tx
+        // commits — like the DIAG_EVENT lines, metrics report durable state
+        // only, and finalizeInTx's already-finalized null short-circuit makes
+        // this exactly-once per run.
+        metrics.diagnosticRun(report.status());
+        metrics.diagnosticFindingsCommitted(report.committed());
+        metrics.diagnosticCandidatesFiltered(report.filtered());
     }
 
-    private record FinalizationReport(List<String> eventLines) {}
+    private record FinalizationReport(List<String> eventLines, String status,
+                                      int committed, int filtered) {}
 
     private FinalizationReport finalizeInTx(UUID runId) {
         SynthesisRun run = loadRun(runId);
@@ -565,7 +602,7 @@ public class DiagnosticRunService {
                 + " tokensIn=" + tokensIn + " tokensOut=" + tokensOut
                 + " costEstimate=" + costEstimate);
         lines.addAll(events);
-        return new FinalizationReport(lines);
+        return new FinalizationReport(lines, status, committed, filtered);
     }
 
     private double cost(ObjectNode metadata, int tokensIn, int tokensOut) {

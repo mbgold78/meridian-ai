@@ -25,9 +25,12 @@ import com.meridian.substrate.engine.contract.gateway.GovernedActions;
 import com.meridian.substrate.engine.contract.gateway.Ungoverned;
 import com.meridian.substrate.engine.contract.registry.ContractActor;
 import com.meridian.substrate.engine.contract.registry.ContractEventService;
+import com.meridian.substrate.engine.observability.EngineMetrics;
 import jakarta.persistence.EntityNotFoundException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -82,6 +85,24 @@ public class BreachService {
     private final ApplicationEventPublisher eventPublisher;
     private final Clock clock;
     private final ObjectMapper objectMapper;
+    private final EngineMetrics metrics;
+
+    /** Spring constructor (Stage 3 observability — metrics optional so partial slices wire). */
+    @Autowired
+    public BreachService(ContractBreachRepository breachRepository,
+                         ContractCommitmentRepository commitmentRepository,
+                         ContractRepository contractRepository,
+                         ContractEventService eventService,
+                         ContractAccountabilityMirror mirror,
+                         EvidenceRefValidator evidenceRefValidator,
+                         ApplicationEventPublisher eventPublisher,
+                         Clock clock,
+                         ObjectMapper objectMapper,
+                         ObjectProvider<EngineMetrics> metrics) {
+        this(breachRepository, commitmentRepository, contractRepository, eventService, mirror,
+                evidenceRefValidator, eventPublisher, clock, objectMapper,
+                metrics.getIfAvailable(EngineMetrics::noop));
+    }
 
     public BreachService(ContractBreachRepository breachRepository,
                          ContractCommitmentRepository commitmentRepository,
@@ -91,7 +112,8 @@ public class BreachService {
                          EvidenceRefValidator evidenceRefValidator,
                          ApplicationEventPublisher eventPublisher,
                          Clock clock,
-                         ObjectMapper objectMapper) {
+                         ObjectMapper objectMapper,
+                         EngineMetrics metrics) {
         this.breachRepository = breachRepository;
         this.commitmentRepository = commitmentRepository;
         this.contractRepository = contractRepository;
@@ -101,6 +123,21 @@ public class BreachService {
         this.eventPublisher = eventPublisher;
         this.clock = clock;
         this.objectMapper = objectMapper;
+        this.metrics = metrics;
+    }
+
+    /** Pre-Stage-3 signature, kept for hand-constructed services (tests): metrics → sink. */
+    public BreachService(ContractBreachRepository breachRepository,
+                         ContractCommitmentRepository commitmentRepository,
+                         ContractRepository contractRepository,
+                         ContractEventService eventService,
+                         ContractAccountabilityMirror mirror,
+                         EvidenceRefValidator evidenceRefValidator,
+                         ApplicationEventPublisher eventPublisher,
+                         Clock clock,
+                         ObjectMapper objectMapper) {
+        this(breachRepository, commitmentRepository, contractRepository, eventService, mirror,
+                evidenceRefValidator, eventPublisher, clock, objectMapper, EngineMetrics.noop());
     }
 
     // ------------------------------------------------------------ open/refresh
@@ -147,6 +184,7 @@ public class BreachService {
         breach.setDetectedBy(cmd.detectedBy());
         breach.setLastConfirmedAt(now);
         breach = breachRepository.save(breach);
+        metrics.breachOpened(cmd.detectedBy() == null ? null : cmd.detectedBy().name());
 
         if (cmd.commitmentId() != null) {
             enterBreached(cmd.commitmentId(), now);

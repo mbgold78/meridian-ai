@@ -37,6 +37,7 @@ import com.meridian.substrate.engine.agent.AgentQueryService;
 import com.meridian.substrate.engine.agent.AgentRegistryLookup;
 import com.meridian.substrate.engine.contract.gateway.AgentRegistryGate;
 import com.meridian.substrate.engine.decision.log.DecisionLogService;
+import com.meridian.substrate.engine.observability.EngineMetrics;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.io.ClassPathResource;
@@ -187,16 +188,19 @@ public class AgentDemoSeeder implements Seeder {
         // seed transaction commits (DecisionLogService REQUIRES_NEW posture).
         AgentGovernanceChainMirror chainMirror = new AgentGovernanceChainMirror(
                 decisionLogService, eventRepository, objectMapper, transactionManager);
+        // EngineMetrics.noop(): demo fixture seeding deliberately stays OUT of
+        // the substrate_agent_* ops metrics (Stage 3 observability).
         this.lifecycle = new AgentLifecycleService(registrationRepository,
                 oversightLinkRepository, eventRepository, criteriaGateRepository,
                 throttleBudgetRepository, notificationService, queryService, liveness,
-                chainMirror, registryLookup, clock, objectMapper);
+                chainMirror, registryLookup, clock, objectMapper, EngineMetrics.noop());
         this.promotion = new AgentPromotionService(registrationRepository, eventRepository,
                 reviewRepository, sightingRepository, queryService, chainMirror,
-                registryLookup, clock, objectMapper);
+                registryLookup, clock, objectMapper, EngineMetrics.noop());
         this.interventions = new AgentInterventionService(registrationRepository,
                 interventionRepository, eventRepository, oversightLinkRepository,
-                notificationService, queryService, registryLookup, clock, objectMapper);
+                notificationService, queryService, registryLookup, clock, objectMapper,
+                EngineMetrics.noop());
         this.metrics = new AgentMetricService(registrationRepository, metricSampleRepository,
                 liveness, clock);
     }

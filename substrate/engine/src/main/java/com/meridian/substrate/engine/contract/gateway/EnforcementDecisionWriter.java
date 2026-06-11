@@ -30,10 +30,12 @@ import java.util.concurrent.atomic.AtomicLong;
  * pseudocode; retention is spec §15 #11 — flagged, not built).
  *
  * <p>Counters follow the {@code AdvisoryCheckService} v1 precedent
- * (in-process {@code AtomicLong}s, no metrics framework in the engine
- * module): {@code allow_unevaluated} (mode off), {@code allow_no_guard}
- * (empty guard set), {@code allow_unrowed} (evaluated, nothing matched,
- * level=matched-only).
+ * (in-process {@code AtomicLong}s): {@code allow_unevaluated} (mode off),
+ * {@code allow_no_guard} (empty guard set), {@code allow_unrowed} (evaluated,
+ * nothing matched, level=matched-only). Since Stage 3 the gateway ALSO
+ * records every evaluation into the {@code substrate_contract_gateway_*}
+ * Micrometer meters ({@code EngineMetrics}); these atomics remain the
+ * in-process audit counters the §4.3 pseudocode names.
  */
 @Service
 public class EnforcementDecisionWriter {

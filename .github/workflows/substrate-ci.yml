@@ -47,10 +47,65 @@ jobs:
       - name: Build
         run: npm run build
 
+  # Image build is the ONLY Docker-capable lane (no Docker on dev machines —
+  # the Dockerfile is verified here, per docs/deploy.md). Push is strictly
+  # OPT-IN: it requires the SUBSTRATE_REGISTRY* secrets and a push to main.
+  # With no registry secrets configured this job builds and discards the
+  # image — no login, no push, no AWS calls (plan §3: nothing provisioned
+  # during build; the image is an artifact, not a deployment).
   container:
     runs-on: ubuntu-latest
-    needs: [backend]
+    needs: [backend, frontend]
+    env:
+      # Job-level indirection: `secrets` is not usable in step `if` guards
+      # as reliably as `env`; empty string == "no registry configured".
+      REGISTRY: ${{ secrets.SUBSTRATE_REGISTRY }}
     steps:
       - uses: actions/checkout@v4
-      - name: Build container image
+      - name: Build container image (self-contained — frontend stage + bootJar)
         run: docker build -t meridian-substrate:${{ github.sha }} .
+      - name: Prove hardening (non-root user + healthcheck present)
+        run: |
+          docker inspect meridian-substrate:${{ github.sha }} \
+            --format 'user={{.Config.User}} healthcheck={{if .Config.Healthcheck}}present{{else}}MISSING{{end}}' \
+            | tee /tmp/inspect.out
+          grep -q 'user=substrate:substrate healthcheck=present' /tmp/inspect.out
+      - name: Push image (only with registry secrets, only on main)
+        if: env.REGISTRY != '' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          echo "${{ secrets.SUBSTRATE_REGISTRY_PASSWORD }}" \
+            | docker login "$REGISTRY" -u "${{ secrets.SUBSTRATE_REGISTRY_USERNAME }}" --password-stdin
+          docker tag meridian-substrate:${{ github.sha }} "$REGISTRY/meridian-substrate:${{ github.sha }}"
+          docker push "$REGISTRY/meridian-substrate:${{ github.sha }}"
+          # The deploy consumes digests, not tags (image_uri validation) —
+          # surface it for the operator's crane copy (deploy.md step 4).
+          docker inspect "$REGISTRY/meridian-substrate:${{ github.sha }}" \
+            --format 'pushed digest: {{index .RepoDigests 0}}'
+          docker logout "$REGISTRY"
+
+  # Syntax gate for the per-engagement IaC (infra/aws). terraform is NOT
+  # installed on dev machines, so this job is where `fmt -check` and
+  # `validate` actually run (referenced by docs/deploy.md and infra/aws
+  # READMEs). init -backend=false: no state, no credentials, no AWS calls —
+  # validation only, nothing is ever planned or applied from CI.
+  terraform:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: substrate/infra/aws
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.11.*"
+      - name: Format check
+        run: terraform fmt -check -recursive -diff
+      - name: Validate root module
+        run: |
+          terraform init -backend=false -input=false
+          terraform validate
+      - name: Validate bootstrap module
+        working-directory: substrate/infra/aws/bootstrap
+        run: |
+          terraform init -backend=false -input=false
+          terraform validate

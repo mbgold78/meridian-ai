@@ -18,20 +18,80 @@ spring:
     locations: classpath:db/migration/common,classpath:db/migration/{vendor}
 
 management:
-  endpoints:
-    web:
-      exposure:
-        include: health,info,metrics,prometheus
+  # Web exposure (management.endpoints.web.exposure.include) is deliberately
+  # NOT set here — ObservabilityEnvironmentPostProcessor computes the per-auth-mode
+  # default (anonymous: health,info — oidc: health,info,metrics behind the admin
+  # role; substrate.observability.actuator.expose=true widens anonymous mode for
+  # local debugging). Any explicit value (env var, profile YAML, command line)
+  # wins over the computed default.
   endpoint:
     health:
       probes:
         enabled: true
+  # ---- Stage 3 OTLP export mappings (plan §8) — driven entirely by the
+  # substrate.observability.* keys below; nothing is exported until an
+  # engagement flips substrate.observability.enabled=true.
+  otlp:
+    metrics:
+      export:
+        enabled: ${substrate.observability.enabled}
+        url: ${substrate.observability.otlp.endpoint}/v1/metrics
+        step: ${substrate.observability.otlp.step}
+    tracing:
+      endpoint: ${substrate.observability.otlp.endpoint}/v1/traces
+  tracing:
+    enabled: ${substrate.observability.tracing.enabled}
+    sampling:
+      probability: ${substrate.observability.tracing.sample-probability}
+  metrics:
+    tags:
+      # Per-engagement isolation posture (plan §8): every meter carries the
+      # engagement id so a customer's stack can prove single-tenancy.
+      engagement: ${substrate.engagement.id}
+  opentelemetry:
+    resource-attributes:
+      engagement: ${substrate.engagement.id}
 
 server:
   port: 8080
   shutdown: graceful
 
 substrate:
+  # Phase 5 auth-mode ladder (production plan §4; docs/auth.md). Code default is
+  # 'anonymous' (AuthProperties) — pre-Phase-5 behavior byte-for-byte, NO Spring
+  # Security on the request path. 'oidc' = generic OIDC resource server: any
+  # conformant IdP via substrate.auth.oidc.issuer-uri (customer brings the IdP;
+  # Keycloak is the throwaway test IdP — see application-postgres.yml +
+  # infra/keycloak/realm-substrate.json). All claim/role/persona mappings are
+  # per-engagement config under substrate.auth.oidc.* — never code.
+  # auth:
+  #   mode: anonymous
+  # ---- Phase 5 Stage 3 — observability (plan §8; docs/observability.md).
+  # OFF by default: no OTLP exporter beans, no tracer, zero export overhead.
+  # A customer engagement points substrate at THEIR collector with env vars:
+  #   SUBSTRATE_OBSERVABILITY_ENABLED=true
+  #   SUBSTRATE_OBSERVABILITY_OTLP_ENDPOINT=http://otel-collector:4318
+  # Collector auth headers (when required) are env-refs via the standard Boot
+  # keys (management.otlp.metrics.export.headers.* /
+  # management.otlp.tracing.headers.*) — secrets never land in the repo.
+  observability:
+    # Master switch: OTLP metric export + (unless overridden below) tracing.
+    enabled: ${SUBSTRATE_OBSERVABILITY_ENABLED:false}
+    otlp:
+      # Collector base URL (OTLP/HTTP); /v1/metrics and /v1/traces are appended.
+      endpoint: ${SUBSTRATE_OBSERVABILITY_OTLP_ENDPOINT:http://localhost:4318}
+      # Metric export interval.
+      step: ${SUBSTRATE_OBSERVABILITY_OTLP_STEP:60s}
+    tracing:
+      # Follows the master switch unless pinned per engagement.
+      enabled: ${SUBSTRATE_OBSERVABILITY_TRACING_ENABLED:${substrate.observability.enabled}}
+      sample-probability: ${SUBSTRATE_OBSERVABILITY_TRACE_SAMPLE:0.1}
+    actuator:
+      # Anonymous-mode opt-in ONLY (local debugging): exposes /actuator/metrics
+      # without auth. Under oidc the metrics endpoints are exposed and gated on
+      # the substrate.auth.oidc.admin-roles instead — never set this in a
+      # customer engagement build.
+      expose: ${SUBSTRATE_OBSERVABILITY_ACTUATOR_EXPOSE:false}
   # Filesystem roots (bind AppProperties; kebab-case — homepoc's dotted 'meridian.data.dir'
   # style never bound via relaxed binding, see AppProperties javadoc)
   data-dir: ./data

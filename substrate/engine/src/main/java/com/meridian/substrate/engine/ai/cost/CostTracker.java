@@ -1,8 +1,11 @@
 package com.meridian.substrate.engine.ai.cost;
 
 import com.meridian.substrate.common.ai.config.LlmProperties;
+import com.meridian.substrate.engine.observability.EngineMetrics;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.concurrent.atomic.AtomicInteger;
@@ -22,6 +25,11 @@ import java.util.concurrent.atomic.AtomicLong;
  * with chunk C5 (ChatService), which also persists per-interaction usage onto
  * {@code chat_interactions} token columns; this tracker remains the in-memory
  * process-lifetime aggregate behind {@code GET /llm/cost-summary}.
+ *
+ * <p><b>Stage 3 observability bridge (plan §8):</b> every {@link #recordUsage}
+ * call also feeds the {@code substrate_llm_*} Micrometer counters via
+ * {@link EngineMetrics#llmUsage} — token/cost telemetry survives restarts in
+ * the engagement's metrics backend even though these atomics do not.
  */
 @Service
 public class CostTracker {
@@ -31,13 +39,26 @@ public class CostTracker {
     private static final double TOKENS_PER_MILLION = 1_000_000.0;
 
     private final LlmProperties llmProperties;
+    private final EngineMetrics metrics;
 
     private final AtomicLong totalInputTokens = new AtomicLong(0);
     private final AtomicLong totalOutputTokens = new AtomicLong(0);
     private final AtomicInteger totalCalls = new AtomicInteger(0);
 
-    public CostTracker(LlmProperties llmProperties) {
+    /** Spring constructor (Stage 3 observability — metrics optional so partial slices wire). */
+    @Autowired
+    public CostTracker(LlmProperties llmProperties, ObjectProvider<EngineMetrics> metrics) {
+        this(llmProperties, metrics.getIfAvailable(EngineMetrics::noop));
+    }
+
+    public CostTracker(LlmProperties llmProperties, EngineMetrics metrics) {
         this.llmProperties = llmProperties;
+        this.metrics = metrics;
+    }
+
+    /** Pre-Stage-3 signature, kept for hand-constructed trackers (tests): metrics → sink. */
+    public CostTracker(LlmProperties llmProperties) {
+        this(llmProperties, EngineMetrics.noop());
     }
 
     /**
@@ -51,6 +72,9 @@ public class CostTracker {
         totalInputTokens.addAndGet(inputTokens);
         totalOutputTokens.addAndGet(outputTokens);
         totalCalls.incrementAndGet();
+
+        metrics.llmUsage(model, inputTokens, outputTokens,
+                estimatedCost(inputTokens, outputTokens));
 
         log.debug("Recorded LLM usage [model={}, input={}, output={}, cumulativeInput={}, cumulativeOutput={}]",
                 model, inputTokens, outputTokens,
@@ -82,5 +106,13 @@ public class CostTracker {
                 totalEstimatedCost,
                 calls
         );
+    }
+
+    /** Per-call estimate with the same configured rates {@link #getSummary} uses. */
+    private double estimatedCost(int inputTokens, int outputTokens) {
+        double inputRate = llmProperties.getCost().getInputRatePerMillion();
+        double outputRate = llmProperties.getCost().getOutputRatePerMillion();
+        return (inputTokens / TOKENS_PER_MILLION) * inputRate
+                + (outputTokens / TOKENS_PER_MILLION) * outputRate;
     }
 }

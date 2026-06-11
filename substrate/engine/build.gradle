@@ -25,6 +25,13 @@ dependencies {
     implementation 'com.fasterxml.jackson.core:jackson-databind'
     implementation 'com.fasterxml.jackson.datatype:jackson-datatype-jsr310'
 
+    // Micrometer facade (Phase 5 Stage 3 — plan §8): EngineMetrics is the
+    // single engine metric inventory. `api` because instrumented services
+    // expose EngineMetrics/MeterRegistry constructor overloads consumed by
+    // :app and by tests. Recording is in-memory only; OTLP export is the app
+    // module's substrate.observability.* decision (off by default).
+    api 'io.micrometer:micrometer-core'
+
     // ShedLock — contract-monitor sweep lease (engine-spec contracts.md §5.2,
     // §10.3; ADR-002). JDBC provider rides the V5__contracts.sql shedlock
     // table; spring-jdbc arrives via spring-boot-starter-data-jpa.

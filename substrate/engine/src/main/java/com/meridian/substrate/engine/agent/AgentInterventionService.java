@@ -19,8 +19,11 @@ import com.meridian.substrate.common.repo.AgentRegistrationRepository;
 import com.meridian.substrate.common.repo.AgentStatusEventRepository;
 import com.meridian.substrate.engine.agent.exception.AgentConflictException;
 import com.meridian.substrate.engine.contract.gateway.Ungoverned;
+import com.meridian.substrate.engine.observability.EngineMetrics;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -63,6 +66,24 @@ public class AgentInterventionService {
     private final AgentRegistryLookup registryLookup;
     private final Clock clock;
     private final ObjectMapper objectMapper;
+    private final EngineMetrics metrics;
+
+    /** Spring constructor (Stage 3 observability — metrics optional so partial slices wire). */
+    @Autowired
+    public AgentInterventionService(AgentRegistrationRepository registrationRepository,
+                                    AgentInterventionRepository interventionRepository,
+                                    AgentStatusEventRepository eventRepository,
+                                    AgentOversightLinkRepository oversightLinkRepository,
+                                    AgentNotificationService notificationService,
+                                    AgentQueryService queryService,
+                                    AgentRegistryLookup registryLookup,
+                                    Clock clock,
+                                    ObjectMapper objectMapper,
+                                    ObjectProvider<EngineMetrics> metrics) {
+        this(registrationRepository, interventionRepository, eventRepository,
+                oversightLinkRepository, notificationService, queryService, registryLookup,
+                clock, objectMapper, metrics.getIfAvailable(EngineMetrics::noop));
+    }
 
     public AgentInterventionService(AgentRegistrationRepository registrationRepository,
                                     AgentInterventionRepository interventionRepository,
@@ -72,7 +93,8 @@ public class AgentInterventionService {
                                     AgentQueryService queryService,
                                     AgentRegistryLookup registryLookup,
                                     Clock clock,
-                                    ObjectMapper objectMapper) {
+                                    ObjectMapper objectMapper,
+                                    EngineMetrics metrics) {
         this.registrationRepository = registrationRepository;
         this.interventionRepository = interventionRepository;
         this.eventRepository = eventRepository;
@@ -82,6 +104,7 @@ public class AgentInterventionService {
         this.registryLookup = registryLookup;
         this.clock = clock;
         this.objectMapper = objectMapper;
+        this.metrics = metrics;
     }
 
     // ------------------------------------------------------------------ M11 open
@@ -158,6 +181,7 @@ public class AgentInterventionService {
         AgentStatusEvent event = AgentVerbMechanics.appendEvent(eventRepository, reg,
                 AgentEventType.INTERVENTION_OPENED, actor, reason, payload, evidenceRefs,
                 idempotencyKey, now);
+        metrics.agentVerb(AgentEventType.INTERVENTION_OPENED.wireValue());
         registrationRepository.save(reg);
 
         // §13.4: INTERVENTION_OPENED fans out to the FULL oversight chain,
@@ -217,6 +241,7 @@ public class AgentInterventionService {
         AgentVerbMechanics.appendEvent(eventRepository, reg,
                 AgentEventType.INTERVENTION_ACKNOWLEDGED, actor, null, payload, null,
                 idempotencyKey, now);
+        metrics.agentVerb(AgentEventType.INTERVENTION_ACKNOWLEDGED.wireValue());
         registrationRepository.save(reg);
 
         log.info("Intervention acknowledged [agent={}, interventionId={}]",
@@ -288,6 +313,7 @@ public class AgentInterventionService {
         payload.put("resolution", resolution.name());
         AgentVerbMechanics.appendEvent(eventRepository, reg, AgentEventType.INTERVENTION_RESOLVED,
                 actor, resolutionNote, payload, null, idempotencyKey, now);
+        metrics.agentVerb(AgentEventType.INTERVENTION_RESOLVED.wireValue());
         registrationRepository.save(reg);
         registryLookup.invalidate(reg.getId());   // count/mode are gate state (§8.3 #2/#5)
 

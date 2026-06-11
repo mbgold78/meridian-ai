@@ -11,8 +11,9 @@ Tooling map: [`substrate/infra/aws/README.md`](../infra/aws/README.md).
 Customer-side prerequisites: [`substrate/infra/aws/customer-handoff/README.md`](../infra/aws/customer-handoff/README.md).
 
 > **Validation note:** `terraform fmt -check` and `terraform validate` run in
-> CI (CI wiring lands separately — not part of this runbook's scope).
-> Terraform is **not installed on Meridian dev machines**, so review — not
+> CI — the `terraform` job in `.github/workflows/substrate-ci.yml`
+> (`init -backend=false`: no state, no credentials, no AWS calls). Terraform
+> is **not installed on Meridian dev machines**, so CI plus review — not
 > local validation — is the quality gate for changes to `infra/aws/**`.
 
 Operator workstation requirements: `terraform >= 1.11`, `aws` CLI v2,
@@ -22,6 +23,45 @@ customer trusted in the deploy role (`MeridianPrincipalArn`).
 
 Throughout, `<id>` is the engagement id (also the Terraform `engagement_id`),
 `<acct>` is the customer account id, `<region>` the agreed region.
+
+---
+
+## Deploy shapes — testing vs production (plan §3)
+
+Same image, three shapes. The shape determines who hosts, which IdP signs
+tokens, and what data is allowed in:
+
+| Shape | Where it runs | IdP | Data allowed | Tooling |
+|---|---|---|---|---|
+| **Local dev** | Docker Compose on a Docker-capable workstation (`substrate/docker-compose.yml`); Docker-less dev uses `gradlew :app:bootRun` (H2, anonymous mode) | Keycloak container (`infra/keycloak/realm-substrate.json`) | Fixtures only | compose |
+| **Meridian-hosted testing** | Meridian's own AWS account, fixture engagements, spun up ONLY to validate this deploy tooling — **zero AWS bills during the build phase; nothing in this repo provisions anything by itself** | Keycloak (throwaway) | Fixtures only — **never customer data** | this runbook, pointed at a Meridian account |
+| **Customer production** | The customer's AWS account — their VPC, their IAM, their data residency | **Customer's IdP** (Okta, Entra ID, Auth0, internal — any conformant OIDC issuer) | The engagement's data; it never leaves their account | this runbook |
+
+The rest of this document is written for the customer-production shape; a
+Meridian-hosted testing run follows the identical steps with Meridian standing
+in as "the customer" (own account, own deploy role, Keycloak as IdP).
+
+## Keycloak vs customer IdP — the config swap
+
+Auth is generic OIDC (plan §4): Keycloak is the **throwaway test IdP**, never
+a production dependency. The swap is configuration only — no image rebuild:
+
+| Knob | Compose / testing (Keycloak) | Customer production |
+|---|---|---|
+| `SUBSTRATE_AUTH_MODE` | `oidc` (compose default; `anonymous` remains the Docker-less dev default) | `oidc` — pinned by the `auth_mode` tfvar validation |
+| `SUBSTRATE_OIDC_ISSUER_URI` | `http://keycloak:8080/realms/substrate` | Customer issuer (step 0.4) via the `oidc_issuer_uri` tfvar |
+| Roles claim (`substrate.auth.oidc.claims.roles`) | `realm_access.roles` (Keycloak default) | Dot-path into the customer's token, per engagement |
+| Persona mapping (`substrate.auth.oidc.persona.role-map`, `persona.default-level`) | Dev realm roles `substrate-admin\|operator\|exec\|coo` | Customer group/role names, agreed per engagement |
+| Admin gate (`substrate.auth.oidc.admin-roles`) | `substrate-admin` | Customer's admin role name |
+| Redirect URI registration | Pre-seeded in the dev realm | Customer IdP admin registers the step-5 `oidc_redirect_uri_hint` |
+
+Issuer and auth mode are first-class tfvars; the role-mapping keys ride the
+`app_extra_environment` tfvar (plain env vars on the task definition — e.g.
+`SUBSTRATE_AUTH_OIDC_CLAIMS_ROLES` via Spring relaxed binding; structured keys
+like the persona role-map via `SPRING_APPLICATION_JSON`, see
+`engagements/example/engagement.tfvars.example`). It is plain-config ONLY —
+secret material rides the ECS secrets channel, never tfvars. Full key
+reference: [`auth.md`](auth.md).
 
 ---
 
@@ -112,9 +152,17 @@ anything.
 
 ## Step 4 — Two-pass image flow (first deploy only)
 
-CI builds and pushes the substrate image; the deploy consumes an **image URI
-digest-pinned into the engagement's own registry**. On the first deploy that
-registry does not exist yet, hence two passes:
+CI builds the image on every substrate push (the `container` job in
+`.github/workflows/substrate-ci.yml` — the repo's only Docker-capable lane; it
+also asserts the non-root user and healthcheck). The push step is **guarded**:
+it runs only on `main` and only when the `SUBSTRATE_REGISTRY` /
+`SUBSTRATE_REGISTRY_USERNAME` / `SUBSTRATE_REGISTRY_PASSWORD` secrets are
+configured — with no registry configured, CI is build-only and nothing leaves
+the runner. The pushed digest is printed at the end of the job log.
+
+The deploy consumes an **image URI digest-pinned into the engagement's own
+registry**. On the first deploy that registry does not exist yet, hence two
+passes:
 
 1. **Pass 1 — create just the ECR repository:**
 
@@ -190,7 +238,7 @@ egress is scoped to 443 outbound; AWS control-plane traffic rides the VPC
 endpoints). To revoke later: flip `enable_ai_assist = false` and apply, then
 `put-secret-value` a dummy to invalidate the old key with Anthropic.
 
-## Step 7 — Verification
+## Step 7 — Verification (smoke checklist)
 
 Run every check; "apply exited 0" is not "product worked".
 
@@ -284,6 +332,34 @@ force a new ECS deployment as above.
 `crane copy` the new CI digest into the engagement registry (step 4.2), update
 `image_uri` to the new digest, `terraform apply`. The new task definition
 rolls out under the deployment circuit breaker (auto-rollback on failure).
+
+### Rollback
+
+Three layers, in escalation order:
+
+1. **Automatic (no operator action):** a rollout whose tasks fail to reach
+   steady state trips the ECS deployment circuit breaker, which rolls the
+   service back to the last working task definition. The `terraform apply`
+   fails loudly; the bad `image_uri` is still in tfvars — fix or revert it
+   before the next apply.
+2. **Image rollback (bad release that passed health checks):** re-pin
+   `image_uri` in `engagement.tfvars` to the previous digest (the engagement
+   registry retains every copied digest; tags are immutable) and
+   `terraform apply`. Run the step-7 smoke checklist afterwards.
+   **Flyway caveat:** migrations are forward-only — if the bad release shipped
+   a schema migration, the previous image must still boot against the migrated
+   schema. Verify before rolling back past a migration boundary; if it cannot,
+   roll FORWARD with a fixed image instead.
+3. **Config rollback:** tfvars are committed per engagement, so `git revert`
+   the offending change and `terraform apply`. For secrets, write the previous
+   value with `put-secret-value` and force a new deployment (tasks read
+   secrets at launch).
+4. **Data rollback (last resort, customer decision):** RDS PITR and snapshots
+   stay in the customer's account, and a restore always creates a NEW
+   instance **outside Terraform state** — this is incident response, not a
+   tfvars change. Agree the procedure with the customer under the engagement
+   contract, restore, then reconcile Terraform deliberately (state surgery or
+   cutover plan) before any further applies.
 
 ### Major Postgres version upgrade
 

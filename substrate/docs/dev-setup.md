@@ -37,9 +37,9 @@ Brings up:
 |---|---|---|
 | substrate-app | 8080 | `postgres` profile, real OIDC against Keycloak |
 | postgres | 5432 | engagement database, Flyway-managed |
-| keycloak | 8081 | dev IdP, realm `substrate` auto-imported with users `dev-operator` / `dev-exec` / `dev-coo` (password = username) |
+| keycloak | 8081 | dev IdP, realm `substrate` auto-imported with users `dev-admin` / `dev-operator` / `dev-exec` / `dev-coo` (password = username) + service client `substrate-agent` for MCP client-credentials |
 
-Keycloak is the **dev/testing IdP only**. Production deploys connect to the customer's IdP via generic OIDC (production plan §4).
+Keycloak is the **dev/testing IdP only**. Production deploys connect to the customer's IdP via generic OIDC (production plan §4). The full auth-mode ladder (claim mappings, persona projection, MCP principal binding, SSE token transport, verification lanes) is documented in [docs/auth.md](auth.md).
 
 ## Tests
 

@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { useAppDispatch, useAppSelector } from '@/app/hooks';
+import { useAuth } from '@/auth/useAuth';
 import { setPersonaLevel, type PersonaLevel } from './personaSlice';
 import { cn } from '@/lib/utils';
 
@@ -20,8 +21,71 @@ const PERSONAS: PersonaOption[] = [
 ];
 
 /**
+ * Friendly label for a persona level. Under oidc the backend role-map can
+ * project onto levels beyond the L1–L6 set (e.g. ADMIN/EXECUTIVE — see
+ * application-postgres.yml persona.role-map), so cover those too; unknown
+ * levels render verbatim rather than hiding information.
+ */
+function labelForLevel(level: string): string {
+  const known = PERSONAS.find((p) => p.level === level);
+  if (known) return known.label;
+  const extra: Record<string, string> = {
+    ADMIN: 'Administrator',
+    EXECUTIVE: 'Executive',
+  };
+  return extra[level] ?? level;
+}
+
+/**
+ * Under oidc the persona comes from verified token claims — there is nothing
+ * to switch. Render a read-only identity chip: display label + derived
+ * persona + sign-out. (Display-only mirror; the backend owns the
+ * authoritative claim→persona projection.)
+ */
+function PersonaIdentityBadge() {
+  const { identityLabel, personaLevel, signOut } = useAuth();
+  return (
+    <div
+      data-testid="persona-identity"
+      className="flex items-center gap-2 rounded-md border border-border bg-surface px-3 py-1.5 text-sm font-medium text-foreground"
+    >
+      <svg className="h-4 w-4 text-primary" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+        <path d="M10 8a3 3 0 100-6 3 3 0 000 6zM3.465 14.493a1.23 1.23 0 00.41 1.412A9.957 9.957 0 0010 18c2.31 0 4.438-.784 6.131-2.1.43-.333.604-.903.408-1.41a7.002 7.002 0 00-13.074.003z" />
+      </svg>
+      <span>{identityLabel ?? '—'}</span>
+      {personaLevel && (
+        <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-foreground-muted">
+          {labelForLevel(personaLevel)}
+        </span>
+      )}
+      <button
+        onClick={signOut}
+        aria-label="Sign out"
+        title="Sign out"
+        className="ml-1 rounded p-0.5 text-foreground-muted transition-colors hover:bg-muted hover:text-foreground"
+      >
+        <svg className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+          <path
+            fillRule="evenodd"
+            d="M3 4.25A2.25 2.25 0 015.25 2h5.5A2.25 2.25 0 0113 4.25v2a.75.75 0 01-1.5 0v-2a.75.75 0 00-.75-.75h-5.5a.75.75 0 00-.75.75v11.5c0 .414.336.75.75.75h5.5a.75.75 0 00.75-.75v-2a.75.75 0 011.5 0v2A2.25 2.25 0 0110.75 18h-5.5A2.25 2.25 0 013 15.75V4.25z"
+            clipRule="evenodd"
+          />
+          <path
+            fillRule="evenodd"
+            d="M19 10a.75.75 0 00-.75-.75H8.704l1.048-.943a.75.75 0 10-1.004-1.114l-2.5 2.25a.75.75 0 000 1.114l2.5 2.25a.75.75 0 101.004-1.114l-1.048-.943h9.546A.75.75 0 0019 10z"
+            clipRule="evenodd"
+          />
+        </svg>
+      </button>
+    </div>
+  );
+}
+
+/**
  * Persona dropdown — selects the persona level sent to the backend via the
- * X-Persona-Level header (api/client.ts request interceptor).
+ * X-Persona-Level header (api/client.ts request interceptor). Anonymous mode
+ * only: under oidc the persona is claim-derived and read-only
+ * (PersonaIdentityBadge above).
  *
  * DEVIATION (invisible constraint): the localStorage key stays
  * 'meridian-persona-level' because api/client.ts (chunk C7 scope) reads that
@@ -30,6 +94,14 @@ const PERSONAS: PersonaOption[] = [
  * the client storage keys.
  */
 export function PersonaSwitcher() {
+  const { mode } = useAuth();
+  if (mode === 'oidc') {
+    return <PersonaIdentityBadge />;
+  }
+  return <AnonymousPersonaSwitcher />;
+}
+
+function AnonymousPersonaSwitcher() {
   const dispatch = useAppDispatch();
   const currentLevel = useAppSelector((state) => state.persona.level);
   const [isOpen, setIsOpen] = useState(false);

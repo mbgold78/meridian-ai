@@ -20,6 +20,9 @@ locals {
   # DB endpoint comes from the database module, and the DB password is NEVER
   # in `environment` — it rides the ECS `secrets` channel below.
   container_environment = merge(
+    # Lowest precedence FIRST: engagement extras (role-mapping keys etc.) may
+    # never clobber the reserved core contract below.
+    var.app_extra_environment,
     {
       SPRING_PROFILES_ACTIVE         = "postgres"
       SUBSTRATE_DB_HOST              = module.database.address

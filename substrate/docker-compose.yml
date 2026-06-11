@@ -31,12 +31,19 @@ services:
       - ./infra/keycloak:/opt/keycloak/data/import:ro
 
   substrate-app:
+    # Self-contained image (frontend bundle + backend jar, non-root uid 1001,
+    # /actuator/health HEALTHCHECK baked in — see Dockerfile).
     build:
       context: .
       dockerfile: Dockerfile
     depends_on:
       postgres:
         condition: service_healthy
+      # Default auth mode here is oidc: tokens come from Keycloak, so bring it
+      # up first. service_started (not healthy): start-dev exposes no
+      # compose-usable healthcheck, and the app only dials the issuer lazily.
+      keycloak:
+        condition: service_started
     environment:
       SPRING_PROFILES_ACTIVE: postgres
       SUBSTRATE_DB_HOST: postgres
@@ -50,6 +57,17 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
     ports:
       - "8080:8080"
+    # The app's filesystem roots (application.yml ./data ./uploads ./staging,
+    # resolved against WORKDIR /opt/substrate — port-map S19). Named volumes
+    # mirror the customer-deploy posture, where EFS access points mount the
+    # same three paths (infra/aws/modules/service).
+    volumes:
+      - appdata:/opt/substrate/data
+      - appuploads:/opt/substrate/uploads
+      - appstaging:/opt/substrate/staging
 
 volumes:
   pgdata:
+  appdata:
+  appuploads:
+  appstaging:

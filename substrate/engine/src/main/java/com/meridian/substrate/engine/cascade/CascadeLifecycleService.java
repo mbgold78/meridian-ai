@@ -20,9 +20,12 @@ import com.meridian.substrate.engine.cascade.exception.CascadeConflictException;
 import com.meridian.substrate.engine.contract.gateway.Governed;
 import com.meridian.substrate.engine.contract.gateway.GovernedActions;
 import com.meridian.substrate.engine.contract.gateway.Ungoverned;
+import com.meridian.substrate.engine.observability.EngineMetrics;
 import jakarta.persistence.EntityNotFoundException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -84,7 +87,25 @@ public class CascadeLifecycleService {
     private final CascadeProperties properties;
     private final Clock clock;
     private final ObjectMapper objectMapper;
+    private final EngineMetrics metrics;
     private final CascadeStateMachine stateMachine = new CascadeStateMachine();
+
+    /** Spring constructor (Stage 3 observability — metrics optional so partial slices wire). */
+    @Autowired
+    public CascadeLifecycleService(CascadeRepository cascadeRepository,
+                                   CascadeLevelRepository levelRepository,
+                                   CascadeLevelActionRepository actionRepository,
+                                   CascadeDraftRepository draftRepository,
+                                   CascadeNotificationService notificationService,
+                                   CascadeAttestationHook attestationHook,
+                                   CascadeProperties properties,
+                                   Clock clock,
+                                   ObjectMapper objectMapper,
+                                   ObjectProvider<EngineMetrics> metrics) {
+        this(cascadeRepository, levelRepository, actionRepository, draftRepository,
+                notificationService, attestationHook, properties, clock, objectMapper,
+                metrics.getIfAvailable(EngineMetrics::noop));
+    }
 
     public CascadeLifecycleService(CascadeRepository cascadeRepository,
                                    CascadeLevelRepository levelRepository,
@@ -94,7 +115,8 @@ public class CascadeLifecycleService {
                                    CascadeAttestationHook attestationHook,
                                    CascadeProperties properties,
                                    Clock clock,
-                                   ObjectMapper objectMapper) {
+                                   ObjectMapper objectMapper,
+                                   EngineMetrics metrics) {
         this.cascadeRepository = cascadeRepository;
         this.levelRepository = levelRepository;
         this.actionRepository = actionRepository;
@@ -104,6 +126,22 @@ public class CascadeLifecycleService {
         this.properties = properties;
         this.clock = clock;
         this.objectMapper = objectMapper;
+        this.metrics = metrics;
+    }
+
+    /** Pre-Stage-3 signature, kept for hand-constructed services (tests, demo seeders). */
+    public CascadeLifecycleService(CascadeRepository cascadeRepository,
+                                   CascadeLevelRepository levelRepository,
+                                   CascadeLevelActionRepository actionRepository,
+                                   CascadeDraftRepository draftRepository,
+                                   CascadeNotificationService notificationService,
+                                   CascadeAttestationHook attestationHook,
+                                   CascadeProperties properties,
+                                   Clock clock,
+                                   ObjectMapper objectMapper) {
+        this(cascadeRepository, levelRepository, actionRepository, draftRepository,
+                notificationService, attestationHook, properties, clock, objectMapper,
+                EngineMetrics.noop());
     }
 
     // ------------------------------------------------------------------ commands
@@ -226,6 +264,7 @@ public class CascadeLifecycleService {
         levelRepository.saveAll(levels.values());
         action.setLevelId(levels.get(0).getId());
         action = actionRepository.save(action);
+        metrics.cascadeAction(action.getAction().wireValue());
 
         draft.setStatus(CascadeDraftStatus.ISSUED);
         draft.setIssuedCascadeId(cascade.getId());
@@ -398,6 +437,7 @@ public class CascadeLifecycleService {
         }
         action = actionRepository.save(action);
         cascade = cascadeRepository.save(cascade);
+        metrics.cascadeAction(action.getAction().wireValue());
         fanOut(cascade, levels, action);
 
         if (action.getAction() == CascadeActionType.RESOLVE_LOOKS_GOOD

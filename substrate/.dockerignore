@@ -1,0 +1,23 @@
+# Keep the image build context lean and deterministic. The Dockerfile's COPY
+# directives are already selective; this additionally keeps local build output
+# and runtime data out of the context so dev-machine builds match CI checkouts.
+.gradle/
+**/build/
+**/out/
+frontend/node_modules/
+frontend/test-results/
+frontend/playwright-report/
+# Locally-built vite output (gitignored): stage 1 builds the bundle fresh — a
+# stale local copy in `COPY app ./app` would merge into the overlay.
+app/src/main/resources/static/
+data/
+demo-screenshots/
+docs/
+infra/
+*.log
+logs/
+.env
+.env.*
+Dockerfile
+docker-compose.yml
+.dockerignore

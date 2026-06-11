@@ -1,3 +1,14 @@
+# v1 COMPUTE DECISION — ECS Fargate, not EKS (plan §3 customer-account shape):
+# substrate is ONE long-running service + one ALB per engagement, deployed into
+# an account Meridian does not operate day-to-day. Fargate keeps the customer's
+# standing operational surface at zero — no control plane to upgrade, no node
+# AMIs to patch, no cluster RBAC to govern — and per-engagement isolation is
+# the ACCOUNT boundary, so a k8s cluster's multi-tenancy machinery buys
+# nothing here. EKS becomes the right call only if a customer mandates their
+# existing k8s platform; this module is the seam to swap when that engagement
+# appears (everything outside it — network/database/secrets/observability — is
+# compute-agnostic).
+#
 # ECS Fargate service for substrate-app, fronted by an ALB (TLS terminates at
 # the ALB; ALB->task traffic is plaintext :8080 confined to the SG pair inside
 # private subnets — design §A7). Optional EFS keeps the app's filesystem roots

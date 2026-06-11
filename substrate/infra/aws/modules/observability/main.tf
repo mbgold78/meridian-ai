@@ -1,8 +1,10 @@
 # CloudWatch-native observability baseline (design §A11): the app already emits
 # structured JSON via logback, so awslogs ships it as-is; Container Insights is
 # enabled on the cluster (service module); alarms fan out to one SNS topic; one
-# dashboard per engagement. No Prometheus stack — /actuator/prometheus stays
-# available for a future AMP integration.
+# dashboard per engagement. No Prometheus/scrape stack — app-level metrics and
+# traces are OTLP PUSH (Stage 3, docs/observability.md): point the task at a
+# customer-run collector via SUBSTRATE_OBSERVABILITY_ENABLED +
+# SUBSTRATE_OBSERVABILITY_OTLP_ENDPOINT (e.g. an ADOT sidecar -> AMP/X-Ray).
 
 data "aws_caller_identity" "current" {}
 

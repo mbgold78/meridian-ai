@@ -1,0 +1,49 @@
+﻿Phase 5 FINAL GATE acceptance transcript -- ANONYMOUS mode (audit a + h)
+Date: 2026-06-11T13:50:21.9479931-04:00
+Boot: java -jar app\build\libs\app-0.1.0.jar --spring.profiles.active=dev --substrate.demo.seed=true --server.port=8080
+substrate.auth.mode: anonymous (dev default -- nothing set)
+NO TOKEN is sent on any request in this transcript.
+
+===== health (public, no headers) =====
+[PASS] GET http://localhost:8080/api/v1/health (no headers) -> 200 (expected 200)
+  body: {"data":{"status":"UP","timestamp":"2026-06-11T17:50:21.973160700Z"},"meta":{"timestamp":"2026-06-11T17:50:21.974212300Z","requestId":"363bcb5f-1ac1-492e-94b4-9a291bd6a2b8","version":"0.1.0","personaLevel":"L3_ANALYST"},"errors":[]}
+
+===== spec 12 cascades list (X-Persona-Level: EXECUTIVE, no token) =====
+[PASS] GET http://localhost:8080/api/v1/cascades?domainId=ec169fd1-4fc7-4128-9bba-8a945ec06d15 -H 'X-Persona-Level: EXECUTIVE' -> 200 (expected 200)
+  items=3
+  cascade: id=471e15d9-748c-4aa1-a5ba-4fd82ab4efdb summary='' state=in-flight signal=decline-pending
+  cascade: id=b06a0668-498a-49a5-b921-2f1026990eea summary='' state=in-flight signal=escalating
+  cascade: id=293c6c1e-1c2b-4ad2-b0db-b9c040dcfc66 summary='' state=in-flight signal=escalating
+  meta.personaLevel=EXECUTIVE  <- header VERBATIM-TRUSTED (pre-Phase-5 S9 intact)
+
+===== spec 13 contract detail (fixture co-tribal-knowledge-depopulation, no token) =====
+[PASS] GET http://localhost:8080/api/v1/contracts/co-tribal-knowledge-depopulation -H 'X-Persona-Level: EXECUTIVE' -> 200 (expected 200)
+  contractKey=co-tribal-knowledge-depopulation status=PROPOSED type=
+  title='Tribal-knowledge depopulation across four healthcare/insurance subs'
+  parties=3 meta.personaLevel=EXECUTIVE
+
+===== spec 16 agents list (Curasync domain, no token) =====
+[PASS] GET http://localhost:8080/api/v1/agents?domainId=a8f0ef3e-3189-4466-b86c-0739f08fe008 -H 'X-Persona-Level: EXECUTIVE' -> 200 (expected 200)
+  items=5
+  agent: name='Pre-Visit Intake Assistant' status=live mode=live
+  agent: name='Eligibility Verifier' status=live mode=live
+  agent: name='Coding Suggestion Agent' status=shadow mode=shadow
+  agent: name='No-Show Predictor' status=intervention-required mode=live
+  agent: name='Patient Message Router' status=paused mode=paused
+
+===== persona header verbatim trust (ADMIN header changes meta -- anonymous-mode S9 behavior) =====
+[PASS] GET http://localhost:8080/api/v1/cascades?domainId=ec169fd1-4fc7-4128-9bba-8a945ec06d15 -H 'X-Persona-Level: ADMIN' -> 200 (expected 200)
+  meta.personaLevel=ADMIN  <- header trusted verbatim, as before Phase 5
+
+===== audit (h): hash-chain verify (identity changes did not break the chain) =====
+[PASS] GET http://localhost:8080/api/v1/decision-log/verify?domainId=ec169fd1-4fc7-4128-9bba-8a945ec06d15 -H 'X-Persona-Level: EXECUTIVE' -> 200 (expected 200)
+  body: {"data":{"valid":true,"totalDecisions":5,"verifiedLinks":5,"firstBrokenAt":null,"message":"All 5 decisions verified; chain is intact."},"meta":{"timestamp":"2026-06-11T17:50:22.127904700Z","requestId":"21783183-c703-45cf-8c89-dcc429348918","version":"0.1.0","personaLevel":"EXECUTIVE"},"errors":[]}
+
+===== actuator: health public, metrics NOT exposed in anonymous mode (audit f) =====
+[PASS] GET http://localhost:8080/actuator/health (no headers) -> 200 (expected 200)
+  body: 123 34 115 116 97 116 117 115 34 58 34 85 80 34 44 34 103 114 111 117 112 115 34 58 91 34 108 105 118 101 110 101 115 115 34 44 34 114 101 97 100 105 110 101 115 115 34 93 125
+[PASS] GET http://localhost:8080/actuator/metrics (no headers) -> 404 (expected 404)
+[PASS] GET http://localhost:8080/actuator/env (no headers) -> 404 (expected 404)
+
+===== audit (a): NO Spring Security on the anonymous request path =====
+[PASS] boot log contains 0 Spring Security log lines (expected 0 -- AuthModeEnvironmentPostProcessor excludes ALL security auto-config in anonymous mode; pinned by AnonymousModeSecurityAbsenceTest)

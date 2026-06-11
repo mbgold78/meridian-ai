@@ -105,6 +105,17 @@ variable "app_fqdn" {
   default     = ""
 }
 
+variable "app_extra_environment" {
+  description = "Additional PLAIN-CONFIG env vars merged into the container environment — the per-engagement role-mapping channel (plan §4: roles claim, persona role-map, admin roles; e.g. SUBSTRATE_AUTH_OIDC_CLAIMS_ROLES via Spring relaxed binding, structured keys via SPRING_APPLICATION_JSON). NEVER secret material: values sit cleartext in the task definition — secrets ride the ECS secrets channel. Reserved core keys (SPRING_PROFILES_ACTIVE, SUBSTRATE_DB_*, SUBSTRATE_AUTH_MODE, SUBSTRATE_OIDC_ISSUER_URI, SUBSTRATE_ENGAGEMENT_ID) cannot be overridden — the merge order puts this map lowest-precedence."
+  type        = map(string)
+  default     = {}
+
+  validation {
+    condition     = length(setintersection([for k in keys(var.app_extra_environment) : upper(k)], ["SUBSTRATE_DB_PASSWORD", "ANTHROPIC_API_KEY"])) == 0
+    error_message = "app_extra_environment may not carry secret-channel variables (SUBSTRATE_DB_PASSWORD, ANTHROPIC_API_KEY) — those ride ECS secrets valueFrom."
+  }
+}
+
 # ---------------------------------------------------------------------------
 # Database
 # ---------------------------------------------------------------------------

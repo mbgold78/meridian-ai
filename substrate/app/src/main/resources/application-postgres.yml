@@ -9,6 +9,35 @@ spring:
 substrate:
   auth:
     mode: ${SUBSTRATE_AUTH_MODE:oidc}
+    # Generic OIDC resource server (production plan §4; docs/auth.md). The
+    # issuer is per-environment: docker-compose points it at the bundled
+    # Keycloak (http://keycloak:8080/realms/substrate); a customer engagement
+    # points it at THEIR IdP. Values are env-refs only — no secrets in-repo.
+    oidc:
+      issuer-uri: ${SUBSTRATE_OIDC_ISSUER_URI:}
+      # Optional direct JWKS fallback (air-gapped discovery) + audience pin.
+      jwk-set-uri: ${SUBSTRATE_OIDC_JWK_SET_URI:}
+      audience: ${SUBSTRATE_OIDC_AUDIENCE:}
+      claims:
+        # Keycloak realm roles live under realm_access.roles; Entra ID uses
+        # 'roles', Okta commonly 'groups' — per-engagement mapping.
+        roles: ${SUBSTRATE_OIDC_ROLES_CLAIM:realm_access.roles}
+        display-name: ${SUBSTRATE_OIDC_DISPLAY_NAME_CLAIM:name}
+      # Roles that satisfy admin gates (BrandingAdminAuthorizer & friends).
+      admin-roles: ${SUBSTRATE_OIDC_ADMIN_ROLES:substrate-admin}
+      persona:
+        # Ordered role -> persona-level projection (first match wins); aligns
+        # with the Keycloak dev realm's substrate-* roles out of the box.
+        role-map:
+          substrate-admin: ADMIN
+          substrate-exec: EXECUTIVE
+          substrate-coo: EXECUTIVE
+          substrate-operator: L3_ANALYST
+        default-level: L3_ANALYST
+      # mcp.principal-claim: 'sub' (default) — Keycloak client-credential
+      # tokens carry the service-account user id; set 'azp' when the
+      # engagement registers OAuth client ids as mcp_principal_id.
+      # sse.token-query-paths: defaults to /api/v1/chat/stream (RFC 6750 §2.3).
   # Blob store (C2): enable when docker-compose gains a MinIO service. Until then the
   # no-op UnconfiguredBlobStore applies (boot fine; branding asset upload 500s).
   # blob-store:

@@ -1,0 +1,8 @@
+# Phase 5 auth-mode ladder (docs/auth.md): keeps anonymous mode security-free
+# (byte-for-byte pre-Phase-5 behavior) while oidc mode gets standard Boot
+# security wiring. See AuthModeEnvironmentPostProcessor.
+# Stage 3 observability: per-auth-mode actuator exposure defaults
+# (docs/observability.md). See ObservabilityEnvironmentPostProcessor.
+org.springframework.boot.env.EnvironmentPostProcessor=\
+  com.meridian.substrate.app.infrastructure.auth.AuthModeEnvironmentPostProcessor,\
+  com.meridian.substrate.app.infrastructure.observability.ObservabilityEnvironmentPostProcessor

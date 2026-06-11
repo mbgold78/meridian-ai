@@ -18,8 +18,11 @@ import com.meridian.substrate.engine.agent.exception.AgentConflictException;
 import com.meridian.substrate.engine.contract.gateway.Governed;
 import com.meridian.substrate.engine.contract.gateway.GovernedActions;
 import com.meridian.substrate.engine.contract.gateway.Ungoverned;
+import com.meridian.substrate.engine.observability.EngineMetrics;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -62,6 +65,24 @@ public class AgentPromotionService {
     private final AgentRegistryLookup registryLookup;
     private final Clock clock;
     private final ObjectMapper objectMapper;
+    private final EngineMetrics metrics;
+
+    /** Spring constructor (Stage 3 observability — metrics optional so partial slices wire). */
+    @Autowired
+    public AgentPromotionService(AgentRegistrationRepository registrationRepository,
+                                 AgentStatusEventRepository eventRepository,
+                                 AgentComplianceReviewRepository reviewRepository,
+                                 AgentSightingRepository sightingRepository,
+                                 AgentQueryService queryService,
+                                 AgentGovernanceChainMirror chainMirror,
+                                 AgentRegistryLookup registryLookup,
+                                 Clock clock,
+                                 ObjectMapper objectMapper,
+                                 ObjectProvider<EngineMetrics> metrics) {
+        this(registrationRepository, eventRepository, reviewRepository, sightingRepository,
+                queryService, chainMirror, registryLookup, clock, objectMapper,
+                metrics.getIfAvailable(EngineMetrics::noop));
+    }
 
     public AgentPromotionService(AgentRegistrationRepository registrationRepository,
                                  AgentStatusEventRepository eventRepository,
@@ -71,7 +92,8 @@ public class AgentPromotionService {
                                  AgentGovernanceChainMirror chainMirror,
                                  AgentRegistryLookup registryLookup,
                                  Clock clock,
-                                 ObjectMapper objectMapper) {
+                                 ObjectMapper objectMapper,
+                                 EngineMetrics metrics) {
         this.registrationRepository = registrationRepository;
         this.eventRepository = eventRepository;
         this.reviewRepository = reviewRepository;
@@ -81,6 +103,7 @@ public class AgentPromotionService {
         this.registryLookup = registryLookup;
         this.clock = clock;
         this.objectMapper = objectMapper;
+        this.metrics = metrics;
     }
 
     // ------------------------------------------------------------------ M3 request
@@ -134,6 +157,7 @@ public class AgentPromotionService {
         }
         AgentVerbMechanics.appendEvent(eventRepository, reg, AgentEventType.PROMOTION_REQUESTED,
                 actor, null, payload, null, idempotencyKey, now);
+        metrics.agentVerb(AgentEventType.PROMOTION_REQUESTED.wireValue());
         registrationRepository.save(reg);   // managed instance — same object, kept effectively final for the fence lambdas
 
         log.info("Promotion requested [key={}, domainId={}]", reg.getAgentKey(), reg.getDomainId());
@@ -225,6 +249,7 @@ public class AgentPromotionService {
                             reviewerLabel != null && !reviewerLabel.isBlank()
                                     ? reviewerLabel : review.getRequestedByLabel()),
                     null, payload, evidenceRefs, "review:" + review.getId() + ":rejected", now);
+            metrics.agentVerb(AgentEventType.PROMOTION_REJECTED.wireValue());
             registrationRepository.save(reg);
         }
         return review;
@@ -287,6 +312,7 @@ public class AgentPromotionService {
         payload.put("consumedReviewId", review.getId().toString());
         AgentStatusEvent event = AgentVerbMechanics.appendEvent(eventRepository, reg,
                 AgentEventType.PROMOTED, actor, null, payload, null, idempotencyKey, now);
+        metrics.agentVerb(AgentEventType.PROMOTED.wireValue());
 
         review.setConsumedByEventId(event.getId());     // single-use, same tx (I9)
         reviewRepository.save(review);

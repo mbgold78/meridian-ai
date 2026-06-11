@@ -5,6 +5,7 @@
   "registrationAllowed": false,
   "roles": {
     "realm": [
+      { "name": "substrate-admin", "description": "Engagement admin — branding/config writes, admin gates" },
       { "name": "substrate-operator", "description": "Meridian engagement team — ingest, curate, author cascades" },
       { "name": "substrate-exec", "description": "Holding-co executive — issue cascades, view portfolio" },
       { "name": "substrate-coo", "description": "Subsidiary COO — respond to cascades, own contracts" }
@@ -21,10 +22,33 @@
       "directAccessGrantsEnabled": true,
       "redirectUris": ["http://localhost:8080/*", "http://localhost:5173/*"],
       "webOrigins": ["http://localhost:8080", "http://localhost:5173"],
-      "defaultClientScopes": ["openid", "profile", "email", "roles"]
+      "defaultClientScopes": ["basic", "profile", "email", "roles"]
+    },
+    {
+      "clientId": "substrate-agent",
+      "name": "Substrate Agent (MCP client-credentials)",
+      "description": "Dev-only service client for the ADR-002 D8 MCP principal binding: client_credentials tokens whose sub (service-account user id) / azp (this client id) bind to agent_registrations.mcp_principal_id / contract_parties.mcp_principal_id. Secret is dev-throwaway — never a production pattern (customer IdP issues real client credentials).",
+      "enabled": true,
+      "publicClient": false,
+      "protocol": "openid-connect",
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "secret": "dev-substrate-agent-secret",
+      "defaultClientScopes": ["basic", "profile", "email", "roles"]
     }
   ],
   "users": [
+    {
+      "username": "dev-admin",
+      "enabled": true,
+      "email": "admin@dev.local",
+      "emailVerified": true,
+      "firstName": "Dev",
+      "lastName": "Admin",
+      "credentials": [{ "type": "password", "value": "dev-admin", "temporary": false }],
+      "realmRoles": ["substrate-admin", "substrate-operator"]
+    },
     {
       "username": "dev-operator",
       "enabled": true,

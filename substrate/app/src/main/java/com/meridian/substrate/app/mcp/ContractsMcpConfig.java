@@ -1,6 +1,7 @@
 package com.meridian.substrate.app.mcp;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.meridian.substrate.app.infrastructure.auth.AuthProperties;
 import com.meridian.substrate.common.repo.AgentRegistrationRepository;
 import com.meridian.substrate.common.repo.AgentThrottleBudgetRepository;
 import com.meridian.substrate.common.repo.ContractPartyRepository;
@@ -22,11 +23,18 @@ import io.modelcontextprotocol.server.McpServerFeatures;
 import io.modelcontextprotocol.server.McpSyncServer;
 import io.modelcontextprotocol.server.transport.HttpServletStreamableServerTransportProvider;
 import io.modelcontextprotocol.spec.McpSchema;
+import jakarta.servlet.http.HttpServletRequest;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.web.servlet.ServletRegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -40,11 +48,19 @@ import java.util.Map;
  * MCP SDK out of {@code engine}'s {@code java-library} dependency graph).
  * Gated by {@code substrate.contracts.mcp.enabled} (default true, §1).
  *
- * <p><b>Identity (Phase 1–4):</b> localhost trust + the
- * {@value #PRINCIPAL_HEADER} header → an AGENT principal carried through the
- * SDK's transport context to tool handlers. Documented SPOOFABLE
- * (S9-equivalent; spec §15 #12) — Phase 5 OIDC client-credentials binds
- * principals to {@code contract_parties.mcp_principal_id} for real.
+ * <p><b>Identity — the Phase 5 ladder (ADR-002 D8 revisit, landed):</b>
+ * under {@code substrate.auth.mode=anonymous} (dev default), localhost trust +
+ * the {@value #PRINCIPAL_HEADER} header → an AGENT principal carried through
+ * the SDK's transport context to tool handlers — documented SPOOFABLE
+ * (S9-equivalent; spec §15 #12). Under {@code substrate.auth.mode=oidc} that
+ * header trust is DEAD (ignored with a WARN): {@code /mcp} sits behind the
+ * resource-server chain (unauthenticated → 401 before the servlet), and the
+ * principal is a claim of the VERIFIED client-credential JWT
+ * ({@code substrate.auth.oidc.mcp.principal-claim}, default {@code sub},
+ * fallback {@code azp}) — matched against
+ * {@code agent_registrations.mcp_principal_id} /
+ * {@code contract_parties.mcp_principal_id} by the agents.md §8.2 resolution
+ * ladder exactly as before.
  *
  * <p>The endpoint is registered as a raw servlet, NOT a Spring MVC
  * controller: MCP JSON-RPC framing must never pass through
@@ -57,10 +73,12 @@ import java.util.Map;
         havingValue = "true", matchIfMissing = true)
 public class ContractsMcpConfig {
 
+    private static final Logger log = LoggerFactory.getLogger(ContractsMcpConfig.class);
+
     /** §8.1 mount point. */
     public static final String MCP_ENDPOINT = "/mcp";
 
-    /** Pre-Phase-5 caller-identity header (spoofable; see class javadoc). */
+    /** Anonymous-mode caller-identity header (spoofable; DEAD under oidc — class javadoc). */
     public static final String PRINCIPAL_HEADER = "X-MCP-Principal";
 
     /** Transport-context key the header value travels under to tool handlers. */
@@ -132,25 +150,60 @@ public class ContractsMcpConfig {
     }
 
     /**
-     * Streamable HTTP servlet transport. The context extractor lifts
-     * {@value #PRINCIPAL_HEADER} off EVERY request into the SDK transport
-     * context — handler threads must never touch the servlet request
-     * directly (the SDK may execute them off the container thread).
+     * Streamable HTTP servlet transport. The context extractor lifts the
+     * caller principal off EVERY request into the SDK transport context —
+     * handler threads must never touch the servlet request directly (the SDK
+     * may execute them off the container thread). Under oidc the extractor
+     * runs on the container thread AFTER the security filter chain, so the
+     * SecurityContext holds the verified {@link JwtAuthenticationToken}.
      */
     @Bean
     public HttpServletStreamableServerTransportProvider contractsMcpTransportProvider(
-            McpJsonMapper contractsMcpJsonMapper) {
+            McpJsonMapper contractsMcpJsonMapper, AuthProperties authProperties) {
         return HttpServletStreamableServerTransportProvider.builder()
                 .jsonMapper(contractsMcpJsonMapper)
                 .mcpEndpoint(MCP_ENDPOINT)
                 .contextExtractor(request -> {
-                    String principal = request.getHeader(PRINCIPAL_HEADER);
-                    return (principal == null || principal.isBlank())
+                    String principal = resolvePrincipal(request, authProperties);
+                    return principal == null
                             ? McpTransportContext.EMPTY
                             : McpTransportContext.create(
-                                    Map.of(PRINCIPAL_CONTEXT_KEY, principal.trim()));
+                                    Map.of(PRINCIPAL_CONTEXT_KEY, principal));
                 })
                 .build();
+    }
+
+    /**
+     * The D8 principal ladder: anonymous mode trusts {@value #PRINCIPAL_HEADER}
+     * (Phase 1–4 posture, unchanged); oidc mode IGNORES it (WARN) and derives
+     * the principal from the verified JWT — {@code principal-claim} (default
+     * {@code sub}), falling back to {@code azp} for client-credential tokens
+     * where the registered identity is the OAuth client id.
+     */
+    private static String resolvePrincipal(HttpServletRequest request,
+                                           AuthProperties authProperties) {
+        String header = request.getHeader(PRINCIPAL_HEADER);
+        if (!authProperties.isOidc()) {
+            return (header == null || header.isBlank()) ? null : header.trim();
+        }
+        if (header != null) {
+            log.warn("Ignoring spoofable {} header under substrate.auth.mode=oidc — MCP"
+                    + " principals bind to the verified client-credential token"
+                    + " (ADR-002 D8 / agents.md §8)", PRINCIPAL_HEADER);
+        }
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (!(authentication instanceof JwtAuthenticationToken jwtAuthentication)) {
+            // The security chain 401s unauthenticated /mcp requests before the
+            // servlet; this guard is defense in depth for permissive setups.
+            return null;
+        }
+        Jwt jwt = jwtAuthentication.getToken();
+        String claim = authProperties.getOidc().getMcp().getPrincipalClaim();
+        String principal = (claim == null || claim.isBlank()) ? null : jwt.getClaimAsString(claim);
+        if (principal == null || principal.isBlank()) {
+            principal = jwt.getClaimAsString("azp");
+        }
+        return (principal == null || principal.isBlank()) ? null : principal.trim();
     }
 
     /** Mounts the transport servlet at {@value #MCP_ENDPOINT} (async for SSE streams). */

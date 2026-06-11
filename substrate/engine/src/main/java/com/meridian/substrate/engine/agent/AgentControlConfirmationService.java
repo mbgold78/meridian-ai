@@ -11,8 +11,11 @@ import com.meridian.substrate.engine.agent.exception.AgentConflictException;
 import com.meridian.substrate.engine.contract.gateway.Governed;
 import com.meridian.substrate.engine.contract.gateway.GovernedActions;
 import com.meridian.substrate.engine.contract.gateway.Ungoverned;
+import com.meridian.substrate.engine.observability.EngineMetrics;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -49,17 +52,32 @@ public class AgentControlConfirmationService {
     private final AgentQueryService queryService;
     private final Clock clock;
     private final ObjectMapper objectMapper;
+    private final EngineMetrics metrics;
+
+    /** Spring constructor (Stage 3 observability — metrics optional so partial slices wire). */
+    @Autowired
+    public AgentControlConfirmationService(AgentRegistrationRepository registrationRepository,
+                                           AgentStatusEventRepository eventRepository,
+                                           AgentQueryService queryService,
+                                           Clock clock,
+                                           ObjectMapper objectMapper,
+                                           ObjectProvider<EngineMetrics> metrics) {
+        this(registrationRepository, eventRepository, queryService, clock, objectMapper,
+                metrics.getIfAvailable(EngineMetrics::noop));
+    }
 
     public AgentControlConfirmationService(AgentRegistrationRepository registrationRepository,
                                            AgentStatusEventRepository eventRepository,
                                            AgentQueryService queryService,
                                            Clock clock,
-                                           ObjectMapper objectMapper) {
+                                           ObjectMapper objectMapper,
+                                           EngineMetrics metrics) {
         this.registrationRepository = registrationRepository;
         this.eventRepository = eventRepository;
         this.queryService = queryService;
         this.clock = clock;
         this.objectMapper = objectMapper;
+        this.metrics = metrics;
     }
 
     // ------------------------------------------------------------ M16 confirm-control
@@ -104,6 +122,7 @@ public class AgentControlConfirmationService {
         }
         AgentVerbMechanics.appendEvent(eventRepository, reg, AgentEventType.CONTROL_CONFIRMED,
                 actor, null, payload, evidenceRefs, idempotencyKey, now);
+        metrics.agentVerb(AgentEventType.CONTROL_CONFIRMED.wireValue());
         registrationRepository.save(reg);   // managed instance — same object, kept effectively final for the fence lambdas
 
         log.info("Control confirmed [key={}, verb={}, by={}]",
@@ -146,6 +165,7 @@ public class AgentControlConfirmationService {
         payload.put("verb", reg.getControlPendingVerb());
         AgentVerbMechanics.appendEvent(eventRepository, reg, AgentEventType.CONTROL_ACKNOWLEDGED,
                 actor, null, payload, null, idempotencyKey, now);
+        metrics.agentVerb(AgentEventType.CONTROL_ACKNOWLEDGED.wireValue());
         registrationRepository.save(reg);   // managed instance — same object, kept effectively final for the fence lambdas
 
         log.info("Control acknowledged by runtime [key={}, verb={}]",

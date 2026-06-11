@@ -436,9 +436,11 @@ public class ContractsMcpWriteTools {
     /** Distinct unchecked type so the wrapper can keep the read-tool error code. */
     private static final class PrincipalRequired extends RuntimeException {
         private PrincipalRequired() {
-            super("governed write tools resolve caller identity from the '"
-                    + ContractsMcpConfig.PRINCIPAL_HEADER + "' header — none was sent."
-                    + " (Phase 1-4 localhost trust; spoofable until Phase 5 OIDC.)");
+            super("governed write tools require caller identity — none was resolved."
+                    + " anonymous mode: send the '" + ContractsMcpConfig.PRINCIPAL_HEADER
+                    + "' header (localhost trust, spoofable by design); oidc mode: the"
+                    + " principal is a claim of the verified bearer token"
+                    + " (substrate.auth.oidc.mcp.principal-claim, default 'sub').");
         }
     }
 

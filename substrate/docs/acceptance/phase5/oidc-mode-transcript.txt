@@ -1,0 +1,45 @@
+﻿Phase 5 FINAL GATE acceptance transcript -- OIDC mode (audit b + f + h)
+Date: 2026-06-11T13:51:49.8637462-04:00
+Issuer: NONE (air-gapped jwk-set-uri lane) -- static JWKS at http://127.0.0.1:8099/jwks.json
+admin token: sub=81d7a9d9-a71e-484f-a1b8-a7ccd13b1e2e realm_access.roles=[substrate-admin]
+operator token: sub=be122d11-9eca-4a08-9bc2-47825634c3d7 realm_access.roles=[substrate-operator]
+
+===== unauthenticated API call -> 401; health stays public =====
+[PASS] GET http://localhost:8081/api/v1/domains (no headers) -> 401 (expected 401)
+[PASS] GET http://localhost:8081/api/v1/health (no headers) -> 200 (expected 200)
+[PASS] GET http://localhost:8081/actuator/health (no headers) -> 200 (expected 200)
+  actuator health body: {"status":"UP","groups":["liveness","readiness"]}
+
+===== unauthenticated + spoofed X-Persona-Level: ADMIN header -> STILL 401 (S9 severed) =====
+[PASS] GET http://localhost:8081/api/v1/domains -H 'X-Persona-Level: ADMIN' -> 401 (expected 401)
+
+===== verified ADMIN token + spoofed X-Persona-Level: EXECUTIVE -> persona from CLAIMS, header ignored =====
+[PASS] GET http://localhost:8081/api/v1/domains -H 'X-Persona-Level: EXECUTIVE' -H 'Authorization: Bearer eyJhbGciOiAiUlMyN...' -> 200 (expected 200)
+[PASS] meta.personaLevel=ADMIN (expected ADMIN from substrate-admin role; spoofed EXECUTIVE header inert)
+
+===== verified OPERATOR token + spoofed X-Persona-Level: ADMIN -> persona from CLAIMS (L3_ANALYST) =====
+[PASS] GET http://localhost:8081/api/v1/domains -H 'X-Persona-Level: ADMIN' -H 'Authorization: Bearer eyJhbGciOiAiUlMyN...' -> 200 (expected 200)
+[PASS] meta.personaLevel=L3_ANALYST (expected L3_ANALYST from substrate-operator role; spoofed ADMIN header inert)
+
+===== audit (f) actuator OIDC ladder: 401 unauthenticated / 403 non-admin / 200 admin =====
+[PASS] GET http://localhost:8081/actuator/metrics (no headers) -> 401 (expected 401)
+[PASS] GET http://localhost:8081/actuator/metrics -H 'Authorization: Bearer eyJhbGciOiAiUlMyN...' -> 403 (expected 403)
+[PASS] GET http://localhost:8081/actuator/metrics -H 'Authorization: Bearer eyJhbGciOiAiUlMyN...' -> 200 (expected 200)
+  substrate_* meters visible to admin: 2 (e.g. substrate.contract.gateway.evaluations, substrate.contract.gateway.evaluations.percentile)
+
+===== MCP: unauthenticated /mcp -> 401 even with spoofed X-MCP-Principal (ADR-002 D8) =====
+[PASS] POST http://localhost:8081/mcp -H 'X-MCP-Principal: demo-agent' -> 401 (expected 401)
+
+===== SSE: access_token query param accepted ONLY on stream paths (RFC 6750 s2.3) =====
+[PASS] GET /api/v1/chat/stream?access_token=<admin> -> 500 (expected anything but 401: token resolved from query on the SSE path)
+[PASS] GET http://localhost:8081/api/v1/domains?access_token=eyJhbGciOiAiUlMyNTYi...<token truncated -- locally-minted throwaway gate key, 1h expiry> (no headers) -> 401 (expected 401)
+
+===== audit (h): hash-chain verify green under oidc identity =====
+[PASS] GET http://localhost:8081/api/v1/decision-log/verify?domainId=5799c30e-68bb-4d85-a97d-471b0f2dbe07 -H 'Authorization: Bearer eyJhbGciOiAiUlMyN...' -> 200 (expected 200)
+  body: {"data":{"valid":true,"totalDecisions":5,"verifiedLinks":5,"firstBrokenAt":null,"message":"All 5 decisions verified; chain is intact."},"meta":{"timestamp":"2026-06-11T17:51:50.478538500Z","requestId":"f99d1ab6-decb-49f1-add9-2bb2554d6da1","version":"0.1.0","personaLevel":"ADMIN"},"errors":[]}
+
+===== WARN evidence: X-Persona-* headers ignored with WARN in the oidc boot log =====
+[PASS] 2 WARN line(s) found:
+  {"@timestamp":"2026-06-11T13:51:50.3101556-04:00","@version":"1","message":"Ignoring spoofable X-Persona-Level header under substrate.auth.mode=oidc — identity comes from the verified token only (port-map S9 severed) [path=/api/v1/domains]","logger_name":"com.meridian.substrate.app.infrastructure.auth.OidcIdentitySource","thread_name":"http-nio-8081-exec-5","level":"WARN","level_value":30000,"requ
+  {"@timestamp":"2026-06-11T13:51:50.3517678-04:00","@version":"1","message":"Ignoring spoofable X-Persona-Level header under substrate.auth.mode=oidc — identity comes from the verified token only (port-map S9 severed) [path=/api/v1/domains]","logger_name":"com.meridian.substrate.app.infrastructure.auth.OidcIdentitySource","thread_name":"http-nio-8081-exec-6","level":"WARN","level_value":30000,"requ
+

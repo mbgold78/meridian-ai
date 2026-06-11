@@ -35,5 +35,7 @@ terraform apply -var-file=engagements/<id>/engagement.tfvars
 `TF_VAR_external_id` must be set in the operator environment (never in tfvars).
 
 **Validation note:** `terraform fmt -check` and `terraform validate` run in CI
-(CI wiring lands separately) — terraform is not installed on dev machines, so
-review, not local validation, is the quality gate for changes here.
+— the `terraform` job in `.github/workflows/substrate-ci.yml`
+(`init -backend=false`: no credentials, no state, no AWS calls). Terraform is
+not installed on dev machines, so CI plus review — not local validation — is
+the quality gate for changes here. Nothing is ever planned or applied from CI.

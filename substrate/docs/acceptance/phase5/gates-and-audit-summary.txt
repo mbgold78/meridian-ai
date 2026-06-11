@@ -1,0 +1,118 @@
+Phase 5 FINAL GATE — gates + adversarial audit summary
+Date: 2026-06-11
+Machine: Windows 11 dev box, NO Docker (hard constraint honored — nothing provisioned anywhere)
+
+========================================================================
+1. FULL GATES (both forced to actually execute, not cache-replay)
+========================================================================
+
+BACKEND   cd substrate; .\gradlew.bat cleanTest build --no-build-cache
+          -> BUILD SUCCESSFUL in 2m 41s
+          JUnit XML aggregate (app+engine+common+ingestion build/test-results):
+            178 result files, 974 tests, 0 failures, 0 errors, 68 skipped
+          (skipped = Testcontainers ITs that self-disable without Docker:
+           the postgres IT lane + KeycloakOidcRoundTripIT(4) — they run in CI.)
+          NOTE: first run of the gate showed all tasks UP-TO-DATE and the
+          second pulled tests FROM-CACHE; the recorded gate is the third run
+          with cleanTest + --no-build-cache so every test re-executed today.
+
+FRONTEND  cd substrate\frontend
+          npm run type-check -> exit 0
+          npm run lint       -> exit 0 (--max-warnings 0)
+          npm run test --run -> 19 files, 133/133 passed
+          npm run build      -> exit 0 ("built in 11.23s"; pre-existing
+                                >500kB chunk warning, predates Phase 5;
+                                regenerates app/src/main/resources/static)
+
+Phase 5 test classes verified individually (executed, green):
+  OidcResourceServerSecurityTest 9 | OidcActorIdentityTest 1
+  OidcMcpPrincipalBindingTest 3    | OidcSseTokenResolutionTest 4
+  AnonymousModeSecurityAbsenceTest 2 | KeycloakOidcRoundTripIT 4 (skipped, by design)
+  ActuatorAnonymousExposureTest 5  | ActuatorAnonymousOptInExposureTest 3
+  ActuatorOidcSecurityTest 5       | ObservabilityEnvironmentPostProcessorTest 4
+  ObservabilityExportToggleTest 3  | RequestIdTraceBridgeTest 3
+  EngineMetricsTest 11 | ContractGatewayMetricsTest 6 | CostTrackerMetricsTest 2
+
+========================================================================
+2. ADVERSARIAL AUDIT VERDICTS
+========================================================================
+
+(a) ANONYMOUS MODE BYTE-FOR-BYTE — PASS (anonymous-mode-transcript.txt)
+    Booted dev profile + demo seed, NO token anywhere: health 200,
+    cascades list 200 (3 items), contract detail 200 (fixture
+    co-tribal-knowledge-depopulation, PROPOSED, 3 parties), agents list
+    200 (5 items), persona header trusted VERBATIM (EXECUTIVE/ADMIN both
+    echo straight into meta.personaLevel), actuator/metrics+env 404,
+    and the boot log contains ZERO Spring Security lines.
+
+(b) OIDC SEVERS S9 — PASS (oidc-mode-transcript.txt)
+    Booted mode=oidc against a LOCAL static JWKS (python http.server;
+    RS256 tokens minted by .phase5-gate/mint_jwt.py — no IdP, no Docker,
+    no cloud). Unauthenticated /api/v1/domains -> 401 (with and without
+    spoofed X-Persona-Level: ADMIN); /api/v1/health and /actuator/health
+    stay 200 public; verified admin token + spoofed EXECUTIVE header ->
+    meta.personaLevel=ADMIN (from realm_access.roles); operator token +
+    spoofed ADMIN header -> L3_ANALYST; 2x WARN "Ignoring spoofable
+    X-Persona-Level header" in the boot log.
+
+(c) ZERO AWS SDK/CREDENTIALS/PROVISIONING — PASS
+    No aws/amazon dependency in any build.gradle or package.json. Only
+    com.amazonaws strings are VPC-endpoint service names inside
+    infra/aws/*.tf (inert IaC text; CI validates with init -backend=false,
+    no credentials, no state). Remaining repo hits are README/Dockerfile
+    comments and a fictional "AWS IoT" demo fixture system name.
+    No AKIA keys, no private keys, no aws_secret_access_key anywhere.
+
+(d) NO SECRET MATERIAL IN THE DIFF — PASS (with a documented fixture)
+    Key-pattern grep over the whole diff: clean. infra/keycloak/
+    realm-substrate.json carries dev-throwaway fixture credentials
+    (password=username dev users; "dev-substrate-agent-secret" client
+    secret) for the compose-stack THROWAWAY test IdP — self-documented
+    in-file as never-a-production-pattern, same class as the compose
+    postgres dev password. Everything else is env-refs only.
+
+(e) TESTCONTAINERS KEYCLOAK IT — PASS
+    KeycloakOidcRoundTripIT compiles in :app:test, annotated
+    @Testcontainers(disabledWithoutDocker = true), 4/4 skipped locally.
+    CI backend job runs ./gradlew build on ubuntu-latest (Docker present)
+    so it executes there; container job builds the image and asserts
+    non-root user + healthcheck; push is triple-guarded and dormant.
+
+(f) ACTUATOR EXPOSURE MATRIX — PASS (tests + live)
+    Tests: anonymous (5), anonymous opt-in (3), oidc 401/403/200 ladder
+    (5), post-processor matrix (4). Live: anonymous metrics/env -> 404;
+    oidc metrics -> 401 bare / 403 operator / 200 admin (substrate_*
+    meters visible); health public in both modes.
+
+(g) DECLINE/PAUSE/REJECT NEVER-ERROR-COLORED — PASS
+    Every frontend file mapping decline/pause/reject states is untouched
+    vs HEAD (cascadeData.ts, CascadeDetailView.tsx, design-tokens.ts...).
+    Phase 5 backend diff to CascadeLifecycleService is metrics-only;
+    EngineMetrics explicitly tags DECLINE "a legitimate action, never an
+    error" (its test pins it). The pre-existing REJECTED->red mappings in
+    designer/decisions views predate Phase 5 and are a different domain
+    vocabulary (design-decision status), unmodified.
+
+(h) HASH-CHAIN VERIFY GREEN AFTER IDENTITY CHANGES — PASS
+    Boot-time: "Decision-chain boot verification complete: 23 chain(s)
+    intact." in BOTH modes. Live /api/v1/decision-log/verify -> valid=true
+    ("All 5 decisions verified; chain is intact.") in anonymous AND oidc
+    (admin token). OidcActorIdentityTest separately proves the JWT sub
+    lands in actor_member_id + the D14 anchor and the chain still verifies.
+
+========================================================================
+3. REMAINING HONEST CAVEATS (carried from stage reports, still true)
+========================================================================
+- KeycloakOidcRoundTripIT, the Dockerfile, and the terraform CI job are
+  first-executed on the first CI run (no Docker/terraform locally).
+- Real-IdP browser round-trip (compose stack) still needs a Docker host.
+- Compose oidc default points browsers at http://keycloak:8080
+  (host-unresolvable) — pre-existing, flagged for the auth stage owner.
+- The live SSE stream call returned 500 AFTER clearing auth (degraded
+  LLM mode, no ANTHROPIC_API_KEY on this box) — auth resolution from the
+  query parameter is what the gate proves; 401-vs-not is the boundary.
+- npm run build regenerated app/src/main/resources/static bundle hashes
+  (pre-existing vite outDir behavior).
+
+VERDICT: Phase 5 FINAL GATE — PASS. Both gates green with tests actually
+executed; all eight adversarial audits hold; no violations required fixes.

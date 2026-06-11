@@ -415,9 +415,11 @@ public class AgentMcpTools {
 
     private static final class PrincipalRequired extends RuntimeException {
         private PrincipalRequired() {
-            super("agent tools resolve caller identity from the '"
-                    + ContractsMcpConfig.PRINCIPAL_HEADER + "' header — none was sent."
-                    + " (Phase 1-4 localhost trust; spoofable until Phase 5 OIDC.)");
+            super("agent tools require caller identity — none was resolved."
+                    + " anonymous mode: send the '" + ContractsMcpConfig.PRINCIPAL_HEADER
+                    + "' header (localhost trust, spoofable by design); oidc mode: the"
+                    + " principal is a claim of the verified bearer token"
+                    + " (substrate.auth.oidc.mcp.principal-claim, default 'sub').");
         }
     }
 
