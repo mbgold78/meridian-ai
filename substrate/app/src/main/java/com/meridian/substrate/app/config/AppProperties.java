@@ -36,8 +36,33 @@ public class AppProperties {
 
     public static class Demo {
         private boolean seed = false;
+        private Contracts contracts = new Contracts();
 
         public boolean isSeed() { return seed; }
         public void setSeed(boolean seed) { this.seed = seed; }
+        public Contracts getContracts() { return contracts; }
+        public void setContracts(Contracts contracts) { this.contracts = contracts; }
+    }
+
+    /**
+     * {@code substrate.demo.contracts.*} — DemoPack-only contract levers
+     * (engine-spec contracts.md §1/§14.2). {@code activate=true} additionally
+     * records ACCEPTED responses for every required party of the
+     * {@code co-tribal-knowledge-depopulation} vector, flipping it ACTIVE for
+     * monitor demos (the 3b demo lever). {@code guards=true} seeds the §13
+     * row-3c SYNTHETIC guard-bearing contract ({@code demo-gateway-guards})
+     * and activates it — both FIXTURE contracts compile to ZERO guards by
+     * spec §16, so gateway demos and the 3c acceptance need this deliberately
+     * synthetic vector. Effective only when {@code substrate.demo.seed=true}
+     * (the seeder never runs otherwise).
+     */
+    public static class Contracts {
+        private boolean activate = false;
+        private boolean guards = false;
+
+        public boolean isActivate() { return activate; }
+        public void setActivate(boolean activate) { this.activate = activate; }
+        public boolean isGuards() { return guards; }
+        public void setGuards(boolean guards) { this.guards = guards; }
     }
 }

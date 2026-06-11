@@ -1,0 +1,5 @@
+PASS  REST detail == fixture FILE object  [co-tribal-knowledge-depopulation]  (status=PROPOSED, estimatedValue present)
+PASS  REST detail == fixture FILE object  [fi-shared-pre-fill-agent]  (status=PROPOSED, estimatedValue ABSENT (null preserved))
+PASS  MCP get_contract == REST data (JSON-equal)  [co-tribal-knowledge-depopulation]
+PASS  MCP get_contract == REST data (JSON-equal)  [fi-shared-pre-fill-agent]
+3a RESULT: PASS

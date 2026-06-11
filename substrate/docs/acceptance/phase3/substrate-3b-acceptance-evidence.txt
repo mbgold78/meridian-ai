@@ -1,0 +1,348 @@
+
+================ 0. Preconditions: co-tribal ACTIVE under fixed clock 2026-05-12T00:00:00Z ================
+status      : ACTIVE
+activatedAt : 2026-05-12T00:00:00Z
+monitor     : [('missing-monthly-report', 'ACTIVE', 'ATTESTATION_CADENCE')]
+
+================ 1. POST run-now missing-monthly-report  ==> expect BREACH_DETECTED period 2026-04 ================
+{
+    "data": {
+        "id": "bb57b705-33c7-4966-af14-243aa79c8645",
+        "monitorId": "d46e3f10-0dc3-42ed-bf93-a17c95431cec",
+        "startedAt": "2026-05-12T00:00:00Z",
+        "finishedAt": "2026-05-12T00:00:00Z",
+        "outcome": "BREACH_DETECTED",
+        "periodKey": "2026-04",
+        "details": {
+            "rule": "ATTESTATION_CADENCE",
+            "graceDays": 7,
+            "commitments": [
+                {
+                    "commitmentId": "99c30373-af20-4cb1-a1d9-359b51f5599c",
+                    "cadence": "MONTHLY",
+                    "periodKey": "2026-04",
+                    "graceDeadline": "2026-05-07",
+                    "result": "BREACH_DETECTED"
+                }
+            ]
+        }
+    },
+    "meta": {
+        "timestamp": "2026-06-11T05:22:36.943000600Z",
+        "requestId": "e99ad273-a639-43c5-ad18-6e760f62af88",
+        "version": "0.1.0",
+        "personaLevel": "L3_ANALYST"
+    },
+    "errors": []
+}
+
+================ 2. GET breaches  ==> expect DETECTED->SURFACED ================
+{
+    "data": [
+        {
+            "id": "93d8fa03-ecde-470e-805f-6c2e1862426e",
+            "contractId": "c78d994e-9546-4202-9da1-7654612ba67d",
+            "commitmentId": "99c30373-af20-4cb1-a1d9-359b51f5599c",
+            "monitorId": "d46e3f10-0dc3-42ed-bf93-a17c95431cec",
+            "periodKey": "2026-04",
+            "status": "SURFACED",
+            "severity": null,
+            "summary": "Missing attestation for period 2026-04 past 7 grace days \u00e2\u20ac\u201d Report monthly progress against the Beacon-provided template",
+            "detectedAt": "2026-05-12T00:00:00Z",
+            "detectedBy": "MONITOR",
+            "lastConfirmedAt": "2026-05-12T00:00:00Z",
+            "surfacedAt": "2026-05-12T00:00:00Z",
+            "acknowledgedBy": null,
+            "acknowledgedAt": null,
+            "resolution": null,
+            "resolutionActor": null,
+            "resolutionRationale": null,
+            "remediationEvidenceRefs": null,
+            "createdAt": "2026-06-11T05:22:36.927469Z",
+            "updatedAt": "2026-06-11T05:22:36.927469Z"
+        }
+    ],
+    "meta": {
+        "timestamp": "2026-06-11T05:22:36.999233100Z",
+        "requestId": "946183cc-0407-4c8f-b41c-c35d4f333cc2",
+        "version": "0.1.0",
+        "personaLevel": "L3_ANALYST"
+    },
+    "errors": []
+}
+
+================ 3. GET signals  ==> open-breach count moved to 1; pendingFederationInvitations=1 (vector-2 pin) ================
+{
+    "data": {
+        "pendingFederationInvitations": 1,
+        "openBreaches": {
+            "total": 1,
+            "bySeverity": {}
+        },
+        "declineEligible": [],
+        "needsInput": [],
+        "monitorCoverage": {
+            "structured": 2,
+            "unstructured": 0
+        },
+        "coordinationPatternsThisWeek": 3,
+        "reviewBoundariesDue": []
+    },
+    "meta": {
+        "timestamp": "2026-06-11T05:22:37.158402200Z",
+        "requestId": "2d163257-f9f1-4e40-98e5-f27619e78e14",
+        "version": "0.1.0",
+        "personaLevel": "L3_ANALYST"
+    },
+    "errors": []
+}
+
+================ 4. POST attest 2026-05 ON_TRACK on the Curasync monthly-report commitment ================
+{
+    "data": {
+        "id": "eaa3e6f4-329d-4529-8e64-2a46f747c8c2",
+        "commitmentId": "99c30373-af20-4cb1-a1d9-359b51f5599c",
+        "contractId": "c78d994e-9546-4202-9da1-7654612ba67d",
+        "partyId": "4597c7e3-2db1-4d4c-b170-6892dab5376a",
+        "periodKey": "2026-05",
+        "attestedBy": "operating-partner",
+        "attestedAt": "2026-05-12T00:00:00Z",
+        "complianceClaim": "ON_TRACK",
+        "statement": "May progress report submitted on the Beacon template",
+        "evidenceRefs": null,
+        "submittedVia": "API"
+    },
+    "meta": {
+        "timestamp": "2026-06-11T05:22:37.247101900Z",
+        "requestId": "7e4119ea-d692-4bde-b14c-ff6cb84c06bd",
+        "version": "0.1.0",
+        "personaLevel": "L3_ANALYST"
+    },
+    "errors": []
+}
+
+================ 5. POST run-now again  ==> expect COMPLIANT ================
+{
+    "data": {
+        "id": "bf28517a-4b57-4a47-8002-8879f757541b",
+        "monitorId": "d46e3f10-0dc3-42ed-bf93-a17c95431cec",
+        "startedAt": "2026-05-12T00:00:00Z",
+        "finishedAt": "2026-05-12T00:00:00Z",
+        "outcome": "COMPLIANT",
+        "periodKey": "2026-04",
+        "details": {
+            "rule": "ATTESTATION_CADENCE",
+            "graceDays": 7,
+            "commitments": [
+                {
+                    "commitmentId": "99c30373-af20-4cb1-a1d9-359b51f5599c",
+                    "cadence": "MONTHLY",
+                    "periodKey": "2026-04",
+                    "laterAttestationGoverns": "2026-05",
+                    "unattestedGapPeriod": "2026-04",
+                    "claim": "ON_TRACK",
+                    "result": "COMPLIANT"
+                }
+            ]
+        }
+    },
+    "meta": {
+        "timestamp": "2026-06-11T05:22:37.289390500Z",
+        "requestId": "7f0ed406-0f03-46d7-a1f2-7282ed7b99f9",
+        "version": "0.1.0",
+        "personaLevel": "L3_ANALYST"
+    },
+    "errors": []
+}
+
+================ 6. Activate vector 2 over the respond endpoint (both parties ACCEPTED) ================
+status  : ACTIVE
+monitors: [('utilization-imbalance', 'ACTIVE')]
+
+================ 7. ONE party's metric sample (utilization_share 0.72, 2026-Q1) then run-now ==> INDETERMINATE (ADR D11) ================
+{
+    "data": {
+        "id": "f4959ac7-658a-4871-8706-8277de9aa19d",
+        "contractId": "274572ad-34fd-43ac-9bf6-3355d822894a",
+        "partyId": "cf6349cc-3e4a-458f-ba61-c6553bc4b75e",
+        "metricKey": "utilization_share",
+        "metricValue": 0.72,
+        "periodKey": "2026-Q1",
+        "reportedBy": "operating-partner",
+        "reportedAt": "2026-05-12T00:00:00Z"
+    },
+    "meta": {
+        "timestamp": "2026-06-11T05:22:37.796196500Z",
+        "requestId": "5adf60fc-bdc5-4798-9e72-3e2c392f5d0b",
+        "version": "0.1.0",
+        "personaLevel": "L3_ANALYST"
+    },
+    "errors": []
+}
+{
+    "data": {
+        "id": "009aa8b3-ce40-442d-b7cc-c725fdf0e0d8",
+        "monitorId": "45003830-60f9-4bc9-87d2-a6e422f21607",
+        "startedAt": "2026-05-12T00:00:00Z",
+        "finishedAt": "2026-05-12T00:00:00Z",
+        "outcome": "INDETERMINATE",
+        "periodKey": "2026-Q1",
+        "details": {
+            "rule": "METRIC_THRESHOLD",
+            "metricKey": "utilization_share",
+            "threshold": 0.3,
+            "periodKey": "2026-Q1",
+            "missingPartyIds": [
+                "8041158f-f68e-44a4-aaa3-cfd408611816"
+            ],
+            "note": "incomplete period data \u00e2\u20ac\u201d NEVER computed on partial reports (ADR D11); needs-input signal ADHERENCE_STALE"
+        }
+    },
+    "meta": {
+        "timestamp": "2026-06-11T05:22:37.868897600Z",
+        "requestId": "8d7ce428-131c-42d2-9537-79c22a250f92",
+        "version": "0.1.0",
+        "personaLevel": "L3_ANALYST"
+    },
+    "errors": []
+}
+
+================ 8. GET signals  ==> ADHERENCE_STALE in needsInput (zero-yield surfaces, never silent) ================
+{
+    "data": {
+        "pendingFederationInvitations": 0,
+        "openBreaches": {
+            "total": 1,
+            "bySeverity": {}
+        },
+        "declineEligible": [],
+        "needsInput": [
+            {
+                "contractKey": "fi-shared-pre-fill-agent",
+                "monitorId": "45003830-60f9-4bc9-87d2-a6e422f21607",
+                "kind": "ADHERENCE_STALE"
+            }
+        ],
+        "monitorCoverage": {
+            "structured": 2,
+            "unstructured": 0
+        },
+        "coordinationPatternsThisWeek": 7,
+        "reviewBoundariesDue": []
+    },
+    "meta": {
+        "timestamp": "2026-06-11T05:22:37.947065Z",
+        "requestId": "b9e975cc-19d2-499c-a1ee-4b83421e9ff8",
+        "version": "0.1.0",
+        "personaLevel": "L3_ANALYST"
+    },
+    "errors": []
+}
+
+================ 9. Arming demo: accuracy 0.85 (< 0.90 predicate) reported; wait for the 60s sweep arming pass (§2.6) ================
+DECLINE_ELIGIBLE armed after ~48s:
+[
+  {
+    "contractKey": "fi-shared-pre-fill-agent",
+    "triggerId": "466f7375-a3ca-4e1f-8079-555421e85299",
+    "text": "Polestar agent reaches accuracy threshold below 90%"
+  }
+]
+
+================ 10. POST decline fi-shared (cites the armed accuracy trigger) ==> 200 + DECLINED + monitors SUSPENDED ================
+HTTP        : 200
+status      : DECLINED
+resolvedAt  : 2026-05-12T00:00:00Z
+monitors    : [('utilization-imbalance', 'SUSPENDED')]
+
+================ 11. GET fi-shared decisions ==> ALLOW_WITH_FLAG REVIEW_BOUNDARY_UNCONFIGURED (§6.2 null lane) ================
+{
+    "data": [
+        {
+            "id": "98ec91f5-ad8b-4f58-9d0b-5a98ff80a357",
+            "domainId": "ba091f87-aabf-4b54-bfcc-b05a58c8dd44",
+            "actionType": "contract.invoke_decline",
+            "actorType": "HUMAN",
+            "actorId": "operating-partner",
+            "decision": "ALLOW_WITH_FLAG",
+            "contractIds": [
+                "274572ad-34fd-43ac-9bf6-3355d822894a"
+            ],
+            "clauseIds": null,
+            "dispatchId": null,
+            "reason": "REVIEW_BOUNDARY_UNCONFIGURED",
+            "latencyMs": null,
+            "mode": "shadow",
+            "decidedAt": "2026-05-12T00:00:00Z"
+        }
+    ],
+    "meta": {
+        "timestamp": "2026-06-11T05:23:29.050862100Z",
+        "requestId": "2917580a-60c4-42a2-8b5c-1200fd1fa53d",
+        "version": "0.1.0",
+        "personaLevel": "L3_ANALYST"
+    },
+    "errors": []
+}
+
+================ 12. POST decline co-tribal over the OPEN breach ==> 200; breach survives (§6.3) ================
+HTTP        : 200
+status      : DECLINED
+monitors    : [('missing-monthly-report', 'SUSPENDED')]
+
+================ 13. GET co-tribal decisions ==> ALLOW_WITH_FLAG OPEN_BREACHES_AT_DECLINE ================
+{
+    "data": [
+        {
+            "id": "fe370c13-dbbc-4409-b339-3e7d9d344705",
+            "domainId": "ba091f87-aabf-4b54-bfcc-b05a58c8dd44",
+            "actionType": "contract.invoke_decline",
+            "actorType": "HUMAN",
+            "actorId": "operating-partner",
+            "decision": "ALLOW_WITH_FLAG",
+            "contractIds": [
+                "c78d994e-9546-4202-9da1-7654612ba67d"
+            ],
+            "clauseIds": null,
+            "dispatchId": null,
+            "reason": "OPEN_BREACHES_AT_DECLINE",
+            "latencyMs": null,
+            "mode": "shadow",
+            "decidedAt": "2026-05-12T00:00:00Z"
+        }
+    ],
+    "meta": {
+        "timestamp": "2026-06-11T05:23:29.192429700Z",
+        "requestId": "f6fa46cd-d617-48f5-8c86-9bcdf61b515d",
+        "version": "0.1.0",
+        "personaLevel": "L3_ANALYST"
+    },
+    "errors": []
+}
+
+================ 14. GET co-tribal breaches ==> the April breach SURVIVED decline (still SURFACED) ================
+{'status': 'SURFACED', 'periodKey': '2026-04', 'detectedBy': 'MONITOR', 'summary': 'Missing attestation for period 2026-04 past 7 grace days — Report monthly progress against the Beacon-provided template'}
+
+================ 15. Breach human verbs survive decline: acknowledge then waive (HUMAN, rationale mandatory; ADR D14 mirrored) ================
+status: ACKNOWLEDGED
+status: WAIVED | resolution: WAIVED | actor: operating-partner
+
+================ 16. Terminal guard: decline again ==> 409 INVALID_CONTRACT_STATE (state error, never decline vocabulary) ================
+{"data":null,"meta":{"timestamp":"2026-06-11T05:23:29.458025700Z","requestId":"22dac414-f019-481c-a852-95f5b5e73fc4","version":"0.1.0","personaLevel":null},"errors":[{"code":"INVALID_CONTRACT_STATE","message":"invoke_decline requires status=ACTIVE (was DECLINED; PROPOSED declines go through respond)","field":null}]}
+HTTP 409
+
+================ DONE ================
+
+================ SUPPLEMENT: ADR D14 hash-chain anchors + sweep/arming log lines (live run) ================
+2026-06-11T01:22:28 | Contract ACTIVATED [id=c78d994e-9546-4202-9da1-7654612ba67d, key=co-tribal-knowledge-depopulation]
+2026-06-11T01:22:28 | ADR D14 anchor appended [contractKey=co-tribal-knowledge-depopulation, anchor=CONTRACT_ACTIVATED, hash=7363407712bca42a955553e31ac45f7a4a993690abeb625f872ad81f82957b36]
+2026-06-11T01:22:36 | Breach DETECTED [id=93d8fa03-ecde-470e-805f-6c2e1862426e, contractId=c78d994e-9546-4202-9da1-7654612ba67d, monitorId=d46e3f10-0dc3-42ed-bf93-a17c95431cec, commitmentId=99c30373-af20-4cb1-a1d9-359b51f5599c, period=2026-04]
+2026-06-11T01:22:36 | Surfaced 1 DETECTED breach(es)
+2026-06-11T01:22:37 | Contract ACTIVATED [id=274572ad-34fd-43ac-9bf6-3355d822894a, key=fi-shared-pre-fill-agent]
+2026-06-11T01:22:37 | ADR D14 anchor appended [contractKey=fi-shared-pre-fill-agent, anchor=CONTRACT_ACTIVATED, hash=ad2de813a57351287b7c00e4df7bf72dc52e16c1fa55948f16b297419f62638b]
+2026-06-11T01:23:27 | Decline trigger ARMED [contractKey=fi-shared-pre-fill-agent, triggerId=466f7375-a3ca-4e1f-8079-555421e85299] — DECLINE_ELIGIBLE, never a breach (§2.6)
+2026-06-11T01:23:28 | Contract DECLINED [id=274572ad-34fd-43ac-9bf6-3355d822894a, key=fi-shared-pre-fill-agent, from=ACTIVE] — legitimate terminal outcome
+2026-06-11T01:23:28 | ADR D14 anchor appended [contractKey=fi-shared-pre-fill-agent, anchor=CONTRACT_DECLINED, hash=27d715f3155b58053b2565b0924edb8109e9fe953a0e97d043841c4ed6050232]
+2026-06-11T01:23:29 | Contract DECLINED [id=c78d994e-9546-4202-9da1-7654612ba67d, key=co-tribal-knowledge-depopulation, from=ACTIVE] — legitimate terminal outcome
+2026-06-11T01:23:29 | ADR D14 anchor appended [contractKey=co-tribal-knowledge-depopulation, anchor=CONTRACT_DECLINED, hash=f4d4fe9d8d730faa23e11217ff8bfbc0e3a2c0547676ee2df5dc590d4663ecfc]
+2026-06-11T01:23:29 | ADR D14 anchor appended [contractKey=co-tribal-knowledge-depopulation, anchor=BREACH_WAIVED, hash=0e8bdf854b6545fd20cad329948a4a0b4880dc3811eca717fa91cf320754d725]

@@ -7,6 +7,12 @@ import com.meridian.substrate.common.domain.CascadeDraft;
 import com.meridian.substrate.common.domain.Finding;
 import com.meridian.substrate.common.domain.enums.CascadeSuggestionState;
 import com.meridian.substrate.common.repo.FindingRepository;
+import com.meridian.substrate.engine.contract.gateway.ContractDeniedException;
+import com.meridian.substrate.engine.contract.gateway.ContractGateway;
+import com.meridian.substrate.engine.contract.gateway.GovernedAction;
+import com.meridian.substrate.engine.contract.gateway.GovernedActions;
+import com.meridian.substrate.engine.contract.gateway.Principal;
+import com.meridian.substrate.engine.contract.gateway.TargetRef;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -62,15 +68,18 @@ public class OrchestratorSuggestClient {
 
     private final OrchestratorMcpClient mcp;
     private final FindingRepository findingRepository;
+    private final ContractGateway gateway;
     private final ObjectMapper objectMapper;
     private final Clock clock;
 
     public OrchestratorSuggestClient(OrchestratorMcpClient mcp,
                                      FindingRepository findingRepository,
+                                     ContractGateway gateway,
                                      ObjectMapper objectMapper,
                                      Clock clock) {
         this.mcp = mcp;
         this.findingRepository = findingRepository;
+        this.gateway = gateway;
         this.objectMapper = objectMapper;
         this.clock = clock;
     }
@@ -150,6 +159,36 @@ public class OrchestratorSuggestClient {
             case COMPLETED -> {
                 OrchestratorMcpClient.DispatchResult result = mcp.getDispatchResult(taskId);
                 List<String> events = mcp.getDispatchEvents(taskId);
+
+                // §4.2 PEP 3 (ADR D2): applying an accepted get_dispatch_result
+                // IS a governed action — actionType=apply_dispatch_result,
+                // principal SERVICE/substrate-svc, carrying the dispatch id
+                // (stamped on the decision row). The agent is an ADVISOR; its
+                // output becomes substrate state only through this gate. An
+                // enforce-mode DENY lands the draft in the ERROR plumbing lane
+                // (never governance state, spec §2) with the denial cited —
+                // reads stay functional and nothing is silently retried;
+                // shadow rows WOULD_DENY and proceeds (ADR D4).
+                try {
+                    ObjectNode applySummary = objectMapper.createObjectNode();
+                    applySummary.put("taskId", taskId);
+                    if (result.model() != null) {
+                        applySummary.put("model", result.model());
+                    }
+                    gateway.evaluate(new GovernedAction(GovernedActions.APPLY_DISPATCH_RESULT,
+                            Principal.service(), draft.getDomainId(),
+                            new TargetRef(CascadeGovernedResolvers.TARGET_CASCADE_DRAFT,
+                                    draft.getId().toString()),
+                            applySummary, taskId));
+                } catch (ContractDeniedException denied) {
+                    markError(draft, "apply_dispatch_result denied by the contract gateway: "
+                            + denied.getMessage(), provenanceInstant(draft, "requestedAt"));
+                    log.warn("Dispatch-result apply DENIED [draftId={}, taskId={}, decisionId={}]"
+                                    + " — suggestion not landed (§4.2 PEP 3)",
+                            draft.getId(), taskId, denied.getDecisionId());
+                    return true;
+                }
+
                 draft.setSuggestedCritique(result.suggestedCritique());
                 draft.setSuggestedAcceptanceCriteria(result.suggestedAcceptanceCriteria());
                 ObjectNode provenance = objectMapper.createObjectNode();

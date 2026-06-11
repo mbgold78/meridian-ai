@@ -39,17 +39,18 @@ class FlywayMigrationTest {
 
         assertThat(history)
                 .extracting(row -> String.valueOf(row.get("version")))
-                .contains("1", "2", "4");
+                .contains("1", "2", "4", "5");
         assertThat(history)
                 .allSatisfy(row -> assertThat(row.get("success"))
                         .as("migration V%s succeeded", row.get("version"))
                         .isEqualTo(Boolean.TRUE));
-        // Vendor split: db/migration/postgresql/V2_1 (partial index) and V4_1
-        // (cascade_level_actions append-only trigger) must not run on the H2
-        // dev profile — H2 stays service-enforced (ADR-001 D9).
+        // Vendor split: db/migration/postgresql/V2_1 (partial index), V4_1
+        // (cascade_level_actions append-only trigger) and V5_1 (open-breach
+        // partial unique index) must not run on the H2 dev profile — H2 stays
+        // service-enforced (ADR-001 D9 / ADR-002 D13).
         assertThat(history)
                 .extracting(row -> String.valueOf(row.get("version")))
-                .doesNotContain("2.1", "4.1");
+                .doesNotContain("2.1", "4.1", "5.1");
     }
 
     @Test
@@ -68,7 +69,15 @@ class FlywayMigrationTest {
                 "branding_configs",
                 // V4 cascade engine (engine-spec cascade.md §3)
                 "cascades", "cascade_levels", "cascade_level_actions",
-                "cascade_drafts", "cascade_notifications");
+                "cascade_drafts", "cascade_notifications",
+                // V5 contract engine (engine-spec contracts.md §3.2)
+                "contracts", "contract_parties", "contract_party_responses",
+                "contract_commitments", "contract_decline_triggers",
+                "contract_entity_links", "contract_clause_guards",
+                "contract_monitors", "contract_monitor_runs",
+                "contract_attestations", "contract_metric_samples",
+                "contract_breaches", "contract_events",
+                "contract_enforcement_decisions", "shedlock");
 
         List<String> actual = jdbcTemplate.queryForList(
                 "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'",

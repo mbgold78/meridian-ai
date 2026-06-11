@@ -78,6 +78,19 @@ public class DecisionLogService {
         this.designDecisionRepository = designDecisionRepository;
         this.objectMapper = objectMapper;
         this.transactionTemplate = new TransactionTemplate(transactionManager);
+        // REQUIRES_NEW enforces the documented append contract mechanically:
+        // the chain write always commits inside the locked region, even when a
+        // caller is mid-transaction (previously REQUIRED silently joined an
+        // outer transaction, re-opening the fork window the lock exists to
+        // close). Required for the ADR-002 D14 contract-accountability mirror,
+        // which appends from an afterCommit synchronization where Spring docs
+        // mandate PROPAGATION_REQUIRES_NEW for any transactional work
+        // (REQUIRED there would "participate" in the already-committed
+        // transaction and never flush). design_decisions.domain_id is a soft
+        // ref (V2 DDL, no FK), so an early-committing append from inside a
+        // larger transaction (DemoPack seeding) cannot violate constraints.
+        this.transactionTemplate.setPropagationBehavior(
+                org.springframework.transaction.TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }
 
     /**
@@ -89,10 +102,12 @@ public class DecisionLogService {
      * per-domain lock held across the append transaction, so concurrent callers
      * cannot fork the chain.
      * <p>
-     * The append runs in its own transaction (committed before the lock is released).
-     * Callers must NOT invoke this method from inside a long-lived outer transaction:
-     * with default {@code REQUIRED} propagation the commit would then escape the
-     * locked region and re-open the fork window.
+     * The append runs in its own {@code REQUIRES_NEW} transaction (committed before
+     * the lock is released) — even when invoked from inside a caller's transaction
+     * or from an {@code afterCommit} synchronization (the ADR-002 D14 contract
+     * mirror), the commit can never escape the locked region. Note the flip side:
+     * an append from inside a caller's transaction commits independently and
+     * survives the caller's rollback.
      *
      * @param decision the decision to append (must have domainId set)
      * @return the persisted decision with hash fields populated

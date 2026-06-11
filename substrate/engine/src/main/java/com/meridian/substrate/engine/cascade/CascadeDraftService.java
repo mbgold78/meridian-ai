@@ -7,6 +7,9 @@ import com.meridian.substrate.common.domain.enums.CascadeDraftStatus;
 import com.meridian.substrate.common.domain.enums.CascadeSuggestionState;
 import com.meridian.substrate.common.repo.CascadeDraftRepository;
 import com.meridian.substrate.engine.cascade.exception.CascadeConflictException;
+import com.meridian.substrate.engine.contract.gateway.Governed;
+import com.meridian.substrate.engine.contract.gateway.GovernedActions;
+import com.meridian.substrate.engine.contract.gateway.Ungoverned;
 import jakarta.persistence.EntityNotFoundException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -85,6 +88,7 @@ public class CascadeDraftService {
     // -------------------------------------------------------------------- verbs
 
     /** §6.3 create — FREE_FORM + IMPERATIVE fully usable now; AI_SUGGESTED persists too. */
+    @Governed(actionType = GovernedActions.CASCADE_CREATE_DRAFT)
     @Transactional
     public CascadeDraft create(CreateCommand cmd) {
         if (cmd.domainId() == null || cmd.authoringMode() == null) {
@@ -111,6 +115,7 @@ public class CascadeDraftService {
     }
 
     /** §6.3 partial update — only while OPEN (409 otherwise). */
+    @Governed(actionType = GovernedActions.CASCADE_PATCH_DRAFT)
     @Transactional
     public CascadeDraft patch(UUID draftId, PatchCommand cmd) {
         CascadeDraft draft = lockedDraft(draftId);
@@ -147,12 +152,18 @@ public class CascadeDraftService {
      * when (and only when) a PENDING suggestion refresh lands, hence not
      * read-only: on-read refresh is the chosen §7 step-3 poll mechanism.
      */
+    @Ungoverned(reason = "read surface; transactional only for the §7 on-read suggestion refresh,"
+            + " whose dispatch-result landing is the §4.2 PEP-3 governed apply inside"
+            + " OrchestratorSuggestClient.refresh (actionType=apply_dispatch_result)")
     @Transactional
     public Optional<CascadeDraft> get(UUID draftId) {
         return draftRepository.findById(draftId).map(this::refreshIfPending);
     }
 
     /** §6.3 list — {@code domainId} required, {@code status} optional; newest first. */
+    @Ungoverned(reason = "read surface; transactional only for the §7 on-read suggestion refresh,"
+            + " whose dispatch-result landing is the §4.2 PEP-3 governed apply inside"
+            + " OrchestratorSuggestClient.refresh (actionType=apply_dispatch_result)")
     @Transactional
     public List<CascadeDraft> list(UUID domainId, CascadeDraftStatus status) {
         List<CascadeDraft> drafts = status != null
@@ -166,6 +177,7 @@ public class CascadeDraftService {
     }
 
     /** §6.3 {@code /discard} — OPEN → DISCARDED (409 otherwise). */
+    @Governed(actionType = GovernedActions.CASCADE_DISCARD_DRAFT)
     @Transactional
     public CascadeDraft discard(UUID draftId) {
         CascadeDraft draft = lockedDraft(draftId);
@@ -184,6 +196,7 @@ public class CascadeDraftService {
      * legitimate operator move (the prior provenance is superseded; the human
      * promotion step is unchanged).
      */
+    @Governed(actionType = GovernedActions.CASCADE_SUGGEST_DRAFT)
     @Transactional
     public CascadeDraft suggest(UUID draftId) {
         OrchestratorSuggestClient client = suggestClient.getIfAvailable();
@@ -208,6 +221,7 @@ public class CascadeDraftService {
      * one serialized unit (re-issue of an ISSUED draft returns the existing
      * cascade — 200, idempotent; first issue → 201).
      */
+    @Governed(actionType = GovernedActions.CASCADE_ISSUE)
     @Transactional
     public IssueOutcome issue(UUID draftId, CascadeLifecycleService.IssueCommand cmd) {
         CascadeDraft draft = lockedDraft(draftId);

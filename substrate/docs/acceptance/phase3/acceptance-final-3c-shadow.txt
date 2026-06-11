@@ -1,0 +1,68 @@
+
+================ 0. Preconditions: demo-gateway-guards seeded by the guards lever and ACTIVE (guards live, §2.2) ================
+status      : ACTIVE
+activatedAt : 2026-06-11T07:07:32.272957Z
+parties     : ['Gateway Demo Operations', 'Gateway Demo Agent Fleet']
+(MCP session: 90760beb-9fe9-4cb5-b013-d1cc616f9e4c)
+
+================ 1. MCP check_action agent.promote  ==> expect verdict BLOCK ================
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"verdict\":\"BLOCK\",\"matchedClauses\":[{\"clauseId\":\"d6eb2298-30b8-4f51-898b-1323f1cd5a66\",\"contractId\":\"5b799aff-b838-451a-8050-9f426e09e75e\",\"contractKey\":\"demo-gateway-guards\",\"effect\":\"DENY\",\"description\":\"Agent promotion is blocked under this demo contract (\u00a713 3c check_action lane)\"}],\"explanation\":\"DENY guard matched: 'Agent promotion is blocked under this demo contract (\u00a713 3c check_action lane)' (contract demo-gateway-guards) \u2014 the gateway would deny (enforce) / row WOULD_DENY (shadow).\"}"
+    }
+  ],
+  "isError": false,
+  "structuredContent": {
+    "verdict": "BLOCK",
+    "matchedClauses": [
+      {
+        "clauseId": "d6eb2298-30b8-4f51-898b-1323f1cd5a66",
+        "contractId": "5b799aff-b838-451a-8050-9f426e09e75e",
+        "contractKey": "demo-gateway-guards",
+        "effect": "DENY",
+        "description": "Agent promotion is blocked under this demo contract (\u00a713 3c check_action lane)"
+      }
+    ],
+    "explanation": "DENY guard matched: 'Agent promotion is blocked under this demo contract (\u00a713 3c check_action lane)' (contract demo-gateway-guards) \u2014 the gateway would deny (enforce) / row WOULD_DENY (shadow)."
+  }
+}
+
+================ 2. SHADOW: governed REST write (metric-samples = contract.report_metric, DENY-guarded) ==> expect HTTP 200 ================
+{"data":{"id":"226a8fa4-d8dd-4bf2-8ebf-97238214b638","contractId":"5b799aff-b838-451a-8050-9f426e09e75e","partyId":"52e9e7be-eaa8-4ac7-aae4-cc3b4b983860","metricKey":"utilization_share","metricValue":0.61,"periodKey":"2026-Q1","reportedBy":"operating-partner","reportedAt":"2026-06-11T07:07:35.093230600Z"},"meta":{"timestamp":"2026-06-11T07:07:35.103764600Z","requestId":"926dcd04-b015-43e5-92fc-e34f2cc0867a","version":"0.1.0","personaLevel":"L3_ANALYST"},"errors":[]}
+HTTP 200
+
+================ 3. GET decisions?decision=WOULD_DENY  ==> the shadow-mode would-be denial is rowed ================
+{
+    "data": [
+        {
+            "id": "1fde8249-e141-4504-a7b1-b5bde6a11caf",
+            "domainId": "4bcfa4bc-1092-4c1e-85fa-d05290e04d01",
+            "actionType": "contract.report_metric",
+            "actorType": "HUMAN",
+            "actorId": "operating-partner",
+            "decision": "WOULD_DENY",
+            "contractIds": [
+                "5b799aff-b838-451a-8050-9f426e09e75e"
+            ],
+            "clauseIds": [
+                "70109ff9-35bc-44c5-9a4a-3b1b83b05df6"
+            ],
+            "dispatchId": null,
+            "reason": "DENY_GUARD_MATCHED",
+            "latencyMs": 9,
+            "mode": "shadow",
+            "decidedAt": "2026-06-11T07:07:35.071625Z"
+        }
+    ],
+    "meta": {
+        "timestamp": "2026-06-11T07:07:35.130376600Z",
+        "requestId": "561972f4-af91-4611-bdd3-861b5adbaf9c",
+        "version": "0.1.0",
+        "personaLevel": "L3_ANALYST"
+    },
+    "errors": []
+}
+
+================ PHASE A (shadow) DONE — reboot with --substrate.contracts.enforcement.mode=enforce ================

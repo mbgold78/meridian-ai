@@ -4,6 +4,7 @@ import com.meridian.substrate.app.api.v1.request.ProcessStepCreateRequest;
 import com.meridian.substrate.app.core.exception.EntityNotFoundException;
 import com.meridian.substrate.common.domain.ProcessStep;
 import com.meridian.substrate.common.repo.ProcessStepRepository;
+import com.meridian.substrate.engine.contract.gateway.Governed;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -39,6 +40,7 @@ public class ProcessStepService {
                 .orElseThrow(() -> new EntityNotFoundException("ProcessStep", id));
     }
 
+    @Governed(actionType = "process_step.create")
     @Transactional
     public ProcessStep create(UUID processId, ProcessStepCreateRequest req) {
         ProcessStep step = new ProcessStep();
@@ -63,6 +65,7 @@ public class ProcessStepService {
         return saved;
     }
 
+    @Governed(actionType = "process_step.update")
     @Transactional
     public ProcessStep update(UUID id, ProcessStepCreateRequest req) {
         ProcessStep step = get(id);
@@ -79,6 +82,7 @@ public class ProcessStepService {
         return repository.save(step);
     }
 
+    @Governed(actionType = "process_step.delete")
     @Transactional
     public void delete(UUID id) {
         repository.deleteById(id);

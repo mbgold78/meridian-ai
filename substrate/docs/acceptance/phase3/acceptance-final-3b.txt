@@ -1,0 +1,334 @@
+
+================ 0. Preconditions: co-tribal ACTIVE under fixed clock 2026-05-12T00:00:00Z ================
+status      : ACTIVE
+activatedAt : 2026-05-12T00:00:00Z
+monitor     : [('missing-monthly-report', 'ACTIVE', 'ATTESTATION_CADENCE')]
+
+================ 1. POST run-now missing-monthly-report  ==> expect BREACH_DETECTED period 2026-04 ================
+{
+    "data": {
+        "id": "8a1b747e-fd8f-43b3-8929-2d09e8e21d5a",
+        "monitorId": "0b596ca2-84cf-4269-9721-320feef750f6",
+        "startedAt": "2026-05-12T00:00:00Z",
+        "finishedAt": "2026-05-12T00:00:00Z",
+        "outcome": "BREACH_DETECTED",
+        "periodKey": "2026-04",
+        "details": {
+            "rule": "ATTESTATION_CADENCE",
+            "graceDays": 7,
+            "commitments": [
+                {
+                    "commitmentId": "13f140d9-6d57-4b41-9936-1ce2faf10bfe",
+                    "cadence": "MONTHLY",
+                    "periodKey": "2026-04",
+                    "graceDeadline": "2026-05-07",
+                    "result": "BREACH_DETECTED"
+                }
+            ]
+        }
+    },
+    "meta": {
+        "timestamp": "2026-06-11T07:06:25.839364200Z",
+        "requestId": "569fd362-639f-4baa-a847-af8109b63aec",
+        "version": "0.1.0",
+        "personaLevel": "L3_ANALYST"
+    },
+    "errors": []
+}
+
+================ 2. GET breaches  ==> expect DETECTED->SURFACED ================
+{
+    "data": [
+        {
+            "id": "0705b263-5b64-4c7e-aa7f-acf0cfae28c3",
+            "contractId": "a8017b78-1bce-494c-8ae9-fd7f1f1bfcf0",
+            "commitmentId": "13f140d9-6d57-4b41-9936-1ce2faf10bfe",
+            "monitorId": "0b596ca2-84cf-4269-9721-320feef750f6",
+            "periodKey": "2026-04",
+            "status": "SURFACED",
+            "severity": null,
+            "summary": "Missing attestation for period 2026-04 past 7 grace days \u00e2\u20ac\u201d Report monthly progress against the Beacon-provided template",
+            "detectedAt": "2026-05-12T00:00:00Z",
+            "detectedBy": "MONITOR",
+            "lastConfirmedAt": "2026-05-12T00:00:00Z",
+            "surfacedAt": "2026-05-12T00:00:00Z",
+            "acknowledgedBy": null,
+            "acknowledgedAt": null,
+            "resolution": null,
+            "resolutionActor": null,
+            "resolutionRationale": null,
+            "remediationEvidenceRefs": null,
+            "createdAt": "2026-06-11T07:06:25.823280Z",
+            "updatedAt": "2026-06-11T07:06:25.827290Z"
+        }
+    ],
+    "meta": {
+        "timestamp": "2026-06-11T07:06:25.892431900Z",
+        "requestId": "51eda97a-85af-452a-8d6a-0809d7147578",
+        "version": "0.1.0",
+        "personaLevel": "L3_ANALYST"
+    },
+    "errors": []
+}
+
+================ 3. GET signals  ==> open-breach count moved to 1; pendingFederationInvitations=1 (vector-2 pin) ================
+{
+    "data": {
+        "pendingFederationInvitations": 1,
+        "openBreaches": {
+            "total": 1,
+            "bySeverity": {}
+        },
+        "declineEligible": [],
+        "needsInput": [],
+        "monitorCoverage": {
+            "structured": 2,
+            "unstructured": 0
+        },
+        "coordinationPatternsThisWeek": 3,
+        "reviewBoundariesDue": []
+    },
+    "meta": {
+        "timestamp": "2026-06-11T07:06:26.056175700Z",
+        "requestId": "7962631b-2716-48bb-8e4e-d5ee0abfdd54",
+        "version": "0.1.0",
+        "personaLevel": "L3_ANALYST"
+    },
+    "errors": []
+}
+
+================ 4. POST attest 2026-05 ON_TRACK on the Curasync monthly-report commitment ================
+{
+    "data": {
+        "id": "8747d680-73f3-4d30-85d4-ea0843280867",
+        "commitmentId": "13f140d9-6d57-4b41-9936-1ce2faf10bfe",
+        "contractId": "a8017b78-1bce-494c-8ae9-fd7f1f1bfcf0",
+        "partyId": "866c5730-58fc-409a-9c9c-fd3f2c6534a7",
+        "periodKey": "2026-05",
+        "attestedBy": "operating-partner",
+        "attestedAt": "2026-05-12T00:00:00Z",
+        "complianceClaim": "ON_TRACK",
+        "statement": "May progress report submitted on the Beacon template",
+        "evidenceRefs": null,
+        "submittedVia": "API"
+    },
+    "meta": {
+        "timestamp": "2026-06-11T07:06:26.153064100Z",
+        "requestId": "8b4e05ca-7213-41a3-af85-c9568ebaecfa",
+        "version": "0.1.0",
+        "personaLevel": "L3_ANALYST"
+    },
+    "errors": []
+}
+
+================ 5. POST run-now again  ==> expect COMPLIANT ================
+{
+    "data": {
+        "id": "479a2d6a-0fd2-4f99-aea3-5204320a2c8b",
+        "monitorId": "0b596ca2-84cf-4269-9721-320feef750f6",
+        "startedAt": "2026-05-12T00:00:00Z",
+        "finishedAt": "2026-05-12T00:00:00Z",
+        "outcome": "COMPLIANT",
+        "periodKey": "2026-04",
+        "details": {
+            "rule": "ATTESTATION_CADENCE",
+            "graceDays": 7,
+            "commitments": [
+                {
+                    "commitmentId": "13f140d9-6d57-4b41-9936-1ce2faf10bfe",
+                    "cadence": "MONTHLY",
+                    "periodKey": "2026-04",
+                    "laterAttestationGoverns": "2026-05",
+                    "unattestedGapPeriod": "2026-04",
+                    "claim": "ON_TRACK",
+                    "result": "COMPLIANT"
+                }
+            ]
+        }
+    },
+    "meta": {
+        "timestamp": "2026-06-11T07:06:26.197366500Z",
+        "requestId": "93470d5e-d660-4a40-b503-230a4994d6bf",
+        "version": "0.1.0",
+        "personaLevel": "L3_ANALYST"
+    },
+    "errors": []
+}
+
+================ 6. Activate vector 2 over the respond endpoint (both parties ACCEPTED) ================
+status  : ACTIVE
+monitors: [('utilization-imbalance', 'ACTIVE')]
+
+================ 7. ONE party's metric sample (utilization_share 0.72, 2026-Q1) then run-now ==> INDETERMINATE (ADR D11) ================
+{
+    "data": {
+        "id": "210452a4-c190-45d0-b44f-2aef8d9775fa",
+        "contractId": "0fb44dca-51ca-4fa2-b36f-da032b9775eb",
+        "partyId": "45f3ba79-b51b-4b0e-b987-0beee4c7cec9",
+        "metricKey": "utilization_share",
+        "metricValue": 0.72,
+        "periodKey": "2026-Q1",
+        "reportedBy": "operating-partner",
+        "reportedAt": "2026-05-12T00:00:00Z"
+    },
+    "meta": {
+        "timestamp": "2026-06-11T07:06:26.681370500Z",
+        "requestId": "32f2df54-3188-4908-b0b0-5b5f3ecca364",
+        "version": "0.1.0",
+        "personaLevel": "L3_ANALYST"
+    },
+    "errors": []
+}
+{
+    "data": {
+        "id": "35e8e31a-aa23-49b6-9eb5-67514b39cb24",
+        "monitorId": "05cdbf84-bf0a-46f1-91f3-1f40b4a7b29a",
+        "startedAt": "2026-05-12T00:00:00Z",
+        "finishedAt": "2026-05-12T00:00:00Z",
+        "outcome": "INDETERMINATE",
+        "periodKey": "2026-Q1",
+        "details": {
+            "rule": "METRIC_THRESHOLD",
+            "metricKey": "utilization_share",
+            "threshold": 0.3,
+            "periodKey": "2026-Q1",
+            "missingPartyIds": [
+                "ffadd453-d9d2-4ca9-b08e-737d220a2198"
+            ],
+            "note": "incomplete period data \u00e2\u20ac\u201d NEVER computed on partial reports (ADR D11); needs-input signal ADHERENCE_STALE"
+        }
+    },
+    "meta": {
+        "timestamp": "2026-06-11T07:06:26.749314600Z",
+        "requestId": "539354eb-4b70-4078-8d38-6c7ccf4c77ba",
+        "version": "0.1.0",
+        "personaLevel": "L3_ANALYST"
+    },
+    "errors": []
+}
+
+================ 8. GET signals  ==> ADHERENCE_STALE in needsInput (zero-yield surfaces, never silent) ================
+{
+    "data": {
+        "pendingFederationInvitations": 0,
+        "openBreaches": {
+            "total": 1,
+            "bySeverity": {}
+        },
+        "declineEligible": [],
+        "needsInput": [
+            {
+                "contractKey": "fi-shared-pre-fill-agent",
+                "monitorId": "05cdbf84-bf0a-46f1-91f3-1f40b4a7b29a",
+                "kind": "ADHERENCE_STALE"
+            }
+        ],
+        "monitorCoverage": {
+            "structured": 2,
+            "unstructured": 0
+        },
+        "coordinationPatternsThisWeek": 7,
+        "reviewBoundariesDue": []
+    },
+    "meta": {
+        "timestamp": "2026-06-11T07:06:26.830105700Z",
+        "requestId": "13d78dad-0960-4d2b-97c7-cd6de31e67bf",
+        "version": "0.1.0",
+        "personaLevel": "L3_ANALYST"
+    },
+    "errors": []
+}
+
+================ 9. Arming demo: accuracy 0.85 (< 0.90 predicate) reported; wait for the 60s sweep arming pass (§2.6) ================
+DECLINE_ELIGIBLE armed after ~20s:
+[
+  {
+    "contractKey": "fi-shared-pre-fill-agent",
+    "triggerId": "3f8ddc74-a1a7-4b6e-9ea2-263e1c0188f6",
+    "text": "Polestar agent reaches accuracy threshold below 90%"
+  }
+]
+
+================ 10. POST decline fi-shared (cites the armed accuracy trigger) ==> 200 + DECLINED + monitors SUSPENDED ================
+HTTP        : 200
+status      : DECLINED
+resolvedAt  : 2026-05-12T00:00:00Z
+monitors    : [('utilization-imbalance', 'SUSPENDED')]
+
+================ 11. GET fi-shared decisions ==> ALLOW_WITH_FLAG REVIEW_BOUNDARY_UNCONFIGURED (§6.2 null lane) ================
+{
+    "data": [
+        {
+            "id": "2161a1a1-bb7e-48f1-8448-ab7fa5db30dd",
+            "domainId": "3d20b189-93e8-4c89-aa1b-1c1f4919b3ca",
+            "actionType": "contract.invoke_decline",
+            "actorType": "HUMAN",
+            "actorId": "operating-partner",
+            "decision": "ALLOW_WITH_FLAG",
+            "contractIds": [
+                "0fb44dca-51ca-4fa2-b36f-da032b9775eb"
+            ],
+            "clauseIds": null,
+            "dispatchId": null,
+            "reason": "REVIEW_BOUNDARY_UNCONFIGURED",
+            "latencyMs": null,
+            "mode": "shadow",
+            "decidedAt": "2026-05-12T00:00:00Z"
+        }
+    ],
+    "meta": {
+        "timestamp": "2026-06-11T07:06:47.673955100Z",
+        "requestId": "fcf61069-c73d-425e-b3f6-51033786aecb",
+        "version": "0.1.0",
+        "personaLevel": "L3_ANALYST"
+    },
+    "errors": []
+}
+
+================ 12. POST decline co-tribal over the OPEN breach ==> 200; breach survives (§6.3) ================
+HTTP        : 200
+status      : DECLINED
+monitors    : [('missing-monthly-report', 'SUSPENDED')]
+
+================ 13. GET co-tribal decisions ==> ALLOW_WITH_FLAG OPEN_BREACHES_AT_DECLINE ================
+{
+    "data": [
+        {
+            "id": "ed5758ff-fa96-40ff-8182-689f0f32d50e",
+            "domainId": "3d20b189-93e8-4c89-aa1b-1c1f4919b3ca",
+            "actionType": "contract.invoke_decline",
+            "actorType": "HUMAN",
+            "actorId": "operating-partner",
+            "decision": "ALLOW_WITH_FLAG",
+            "contractIds": [
+                "a8017b78-1bce-494c-8ae9-fd7f1f1bfcf0"
+            ],
+            "clauseIds": null,
+            "dispatchId": null,
+            "reason": "OPEN_BREACHES_AT_DECLINE",
+            "latencyMs": null,
+            "mode": "shadow",
+            "decidedAt": "2026-05-12T00:00:00Z"
+        }
+    ],
+    "meta": {
+        "timestamp": "2026-06-11T07:06:47.825218800Z",
+        "requestId": "a37b945d-a09c-41b0-abcf-7eb91db7aa05",
+        "version": "0.1.0",
+        "personaLevel": "L3_ANALYST"
+    },
+    "errors": []
+}
+
+================ 14. GET co-tribal breaches ==> the April breach SURVIVED decline (still SURFACED) ================
+{'status': 'SURFACED', 'periodKey': '2026-04', 'detectedBy': 'MONITOR', 'summary': 'Missing attestation for period 2026-04 past 7 grace days — Report monthly progress against the Beacon-provided template'}
+
+================ 15. Breach human verbs survive decline: acknowledge then waive (HUMAN, rationale mandatory; ADR D14 mirrored) ================
+status: ACKNOWLEDGED
+status: WAIVED | resolution: WAIVED | actor: operating-partner
+
+================ 16. Terminal guard: decline again ==> 409 INVALID_CONTRACT_STATE (state error, never decline vocabulary) ================
+{"data":null,"meta":{"timestamp":"2026-06-11T07:06:48.101217200Z","requestId":"e8ea4c73-96cc-492b-b4cd-8adac9dac61f","version":"0.1.0","personaLevel":null},"errors":[{"code":"INVALID_CONTRACT_STATE","message":"invoke_decline requires status=ACTIVE (was DECLINED; PROPOSED declines go through respond)","field":null}]}
+HTTP 409
+
+================ DONE ================

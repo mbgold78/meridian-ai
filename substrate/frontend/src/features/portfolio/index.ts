@@ -9,11 +9,13 @@
  *
  * Plus the landing/vantage-point picker and the persistent shell.
  *
- * Data source: TEMPORARILY the Beacon fixtures behind the single
- * `BEACON_PORTFOLIO` swap point in `@/fixtures/beacon` (port-map §5 S5).
- * Phases 2–4 replace the fixture factory with React Query hooks +
- * adapters from substrate DTOs; the components themselves don't change
- * at swap time.
+ * Data source: the Beacon fixtures behind the single `BEACON_PORTFOLIO`
+ * swap point in `@/fixtures/beacon` (port-map §5 S5), being replaced
+ * slice-by-slice with React Query hooks + adapters from substrate DTOs.
+ * Swapped so far: cascades (Phase 2, ./cascadeData.ts) and contracts
+ * (Phase 3a, ./contractData.ts) — fixtures remain only as the
+ * degraded/demo fallback inside those seams. Subsidiaries and portfolio
+ * stats are still Phase-1 fixtures.
  */
 export { PORTFOLIO_ROUTES } from './routes';
 export { portfolioPaths, PORTFOLIO_ROOT } from './paths';

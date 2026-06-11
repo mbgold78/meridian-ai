@@ -8,6 +8,7 @@ import com.meridian.substrate.common.domain.enums.CascadeState;
 import com.meridian.substrate.common.repo.CascadeLevelActionRepository;
 import com.meridian.substrate.common.repo.CascadeLevelRepository;
 import com.meridian.substrate.common.repo.CascadeRepository;
+import com.meridian.substrate.engine.contract.gateway.Ungoverned;
 import jakarta.persistence.EntityNotFoundException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -75,6 +76,9 @@ public class CascadeProjectionRebuilder {
     }
 
     /** Rebuilds every cascade of a domain; returns the rebuilt ids. */
+    @Ungoverned(reason = "operator recovery: deterministic projection replay from the append-only"
+            + " action log (engine-spec cascade.md §10, ADR-001 D1) — creates no new business"
+            + " state, so it is not one of the three ADR D2 PEPs")
     @Transactional
     public List<UUID> rebuildAll(UUID domainId) {
         List<UUID> rebuilt = new ArrayList<>();
@@ -88,6 +92,9 @@ public class CascadeProjectionRebuilder {
     }
 
     /** Rebuilds one cascade's projections from its action log, under the per-cascade lock. */
+    @Ungoverned(reason = "operator recovery: deterministic projection replay from the append-only"
+            + " action log (engine-spec cascade.md §10, ADR-001 D1) — creates no new business"
+            + " state, so it is not one of the three ADR D2 PEPs")
     @Transactional
     public Cascade rebuild(UUID cascadeId) {
         Cascade cascade = cascadeRepository.findByIdForUpdate(cascadeId)

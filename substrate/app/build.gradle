@@ -33,6 +33,17 @@ dependencies {
     // Anthropic SDK
     implementation "com.anthropic:anthropic-java:${anthropicSdkVersion}"
 
+    // Official MCP Java SDK (engine-spec contracts.md §8.1) — substrate-contracts
+    // server: Streamable HTTP servlet transport mounted at /mcp by THIS module;
+    // tool logic stays in engine services, so the SDK never enters engine's
+    // java-library dependency graph. mcp-json-jackson2 binds the SDK to the
+    // app's Jackson 2 ObjectMapper (Boot 3.4 BOM) instead of the SDK's default
+    // Jackson 3 binding. The same artifacts provide the scripted
+    // Streamable-HTTP client the §14.5 parity suite uses (test scope rides the
+    // implementation dependency).
+    implementation "io.modelcontextprotocol.sdk:mcp-core:${mcpSdkVersion}"
+    implementation "io.modelcontextprotocol.sdk:mcp-json-jackson2:${mcpSdkVersion}"
+
     // Jackson
     implementation 'com.fasterxml.jackson.core:jackson-databind'
     implementation 'com.fasterxml.jackson.datatype:jackson-datatype-jsr310'
@@ -56,12 +67,35 @@ dependencies {
     testImplementation 'org.springframework.boot:spring-boot-testcontainers'
     testImplementation 'org.testcontainers:junit-jupiter'
     testImplementation 'org.testcontainers:postgresql'
+
+    // ShedLock lease IT (engine-spec contracts.md §14.4): the lease is held /
+    // released through the LockProvider API; engine keeps shedlock as
+    // implementation (not exported), so the test classpath needs core itself.
+    testImplementation "net.javacrumbs.shedlock:shedlock-core:${shedlockVersion}"
+
+    // §14.6 ArchUnit suite (3c, runs in CI from day one; H2/Docker-independent):
+    // governed-coverage rule over mutating methods, append-only repo rule,
+    // module rules, @UngovernedModule ADR D3 pin. Ingestion classes join the
+    // suite's IMPORT by filesystem location (see the test task below), NOT the
+    // test classpath: ingestion is a separate bootable app carrying its own
+    // application.yml + @EnableJpaRepositories — on the classpath it would
+    // collide with the app context in every Spring test.
+    testImplementation "com.tngtech.archunit:archunit-junit5:${archunitVersion}"
 }
 
 bootRun {
     if (project.hasProperty('profile')) {
         systemProperty 'spring.profiles.active', project.property('profile')
     }
+}
+
+// §14.6 — hand the ArchUnit suite the ingestion module's compiled classes by
+// path (GovernedArchitectureTest imports them for the module rules + the
+// ADR D3 @UngovernedModule pin without putting ingestion on the classpath).
+tasks.named('test') {
+    dependsOn ':ingestion:compileJava'
+    systemProperty 'substrate.archunit.ingestion-classes',
+            project(':ingestion').layout.buildDirectory.dir('classes/java/main').get().asFile.absolutePath
 }
 
 // ---------------------------------------------------------------------------

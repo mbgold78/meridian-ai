@@ -1,0 +1,57 @@
+
+================ 0. Preconditions: demo-gateway-guards seeded by the guards lever and ACTIVE (guards live, §2.2) ================
+status      : ACTIVE
+activatedAt : 2026-06-11T07:08:02.575521Z
+parties     : ['Gateway Demo Operations', 'Gateway Demo Agent Fleet']
+(MCP session: a1137cf5-49b6-4e53-8cc0-14ffbdac8f7e)
+
+================ 4. ENFORCE: the same REST write  ==> expect HTTP 409, code CONTRACT_DENIAL ================
+{"data":null,"meta":{"timestamp":"2026-06-11T07:08:05.218607500Z","requestId":"76b38864-65d6-4ba8-b48e-30186e78f2b2","version":"0.1.0","personaLevel":null},"errors":[{"code":"CONTRACT_DENIAL","message":"Action 'contract.report_metric' denied by contract [demo-gateway-guards] clause(s) 'Metric reporting is blocked under this demo contract (§13 3c REST/MCP deny lanes)' (reason DENY_GUARD_MATCHED) [decisionId 9bf8b0d0-a1db-48af-bbf3-1827a075d71b]","field":null}]}
+HTTP 409
+
+================ 5. ENFORCE: same verb over MCP report_metric (principal demo-agent) ==> expect isError + structured CONTRACT_DENIAL payload ================
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"code\":\"CONTRACT_DENIAL\",\"contractKeys\":[\"demo-gateway-guards\"],\"clauseIds\":[\"0c666418-5741-4e35-b60f-e45660324d86\"],\"reason\":\"DENY_GUARD_MATCHED\",\"decisionId\":\"3396ebfe-c793-4489-8c91-a2ff17e8e0da\",\"message\":\"Action 'contract.report_metric' denied by contract [demo-gateway-guards] clause(s) 'Metric reporting is blocked under this demo contract (\u00a713 3c REST/MCP deny lanes)' (reason DENY_GUARD_MATCHED) [decisionId 3396ebfe-c793-4489-8c91-a2ff17e8e0da]\"}"
+    }
+  ],
+  "isError": true,
+  "structuredContent": {
+    "code": "CONTRACT_DENIAL",
+    "contractKeys": [
+      "demo-gateway-guards"
+    ],
+    "clauseIds": [
+      "0c666418-5741-4e35-b60f-e45660324d86"
+    ],
+    "reason": "DENY_GUARD_MATCHED",
+    "decisionId": "3396ebfe-c793-4489-8c91-a2ff17e8e0da",
+    "message": "Action 'contract.report_metric' denied by contract [demo-gateway-guards] clause(s) 'Metric reporting is blocked under this demo contract (\u00a713 3c REST/MCP deny lanes)' (reason DENY_GUARD_MATCHED) [decisionId 3396ebfe-c793-4489-8c91-a2ff17e8e0da]"
+  }
+}
+
+================ 6. Open a real breach (attest MISSED — the attest verb is un-guarded here) ==> 200; breach DETECTED ================
+{'id': 'f83fc41a-d355-4ac0-8c72-65d5dc376464', 'status': 'DETECTED', 'detectedBy': 'HUMAN_ATTESTATION', 'summary': 'Attested MISSED for period ONE_TIME'}
+
+================ 7. MCP waive_breach as AGENT  ==> DENIED (ADR D16 built-in non-removable guard; isError CONTRACT_DENIAL / WAIVER_HUMAN_ONLY) ================
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"code\":\"CONTRACT_DENIAL\",\"contractKeys\":[],\"clauseIds\":[],\"reason\":\"WAIVER_HUMAN_ONLY\",\"decisionId\":\"8c175a45-b6f6-4f38-b4ae-74287fb783c6\",\"message\":\"Action 'contract.waive_breach' denied for AGENT principal 'demo-agent': breach waiver is human-only (ADR D16 built-in non-removable guard; agents may attest, acknowledge and propose remediation, never waive) [decisionId 8c175a45-b6f6-4f38-b4ae-74287fb783c6]\"}"
+    }
+  ],
+  "isError": true,
+  "structuredContent": {
+    "code": "CONTRACT_DENIAL",
+    "contractKeys": [],
+    "clauseIds": [],
+    "reason": "WAIVER_HUMAN_ONLY",
+    "decisionId": "8c175a45-b6f6-4f38-b4ae-74287fb783c6",
+    "message": "Action 'contract.waive_breach' denied for AGENT principal 'demo-agent': breach waiver is human-only (ADR D16 built-in non-removable guard; agents may attest, acknowledge and propose remediation, never waive) [decisionId 8c175a45-b6f6-4f38-b4ae-74287fb783c6]"
+  }
+}
+
+================ PHASE B (enforce) DONE ================

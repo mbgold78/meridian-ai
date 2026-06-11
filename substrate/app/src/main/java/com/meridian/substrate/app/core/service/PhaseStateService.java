@@ -4,6 +4,7 @@ import com.meridian.substrate.common.domain.PhaseState;
 import com.meridian.substrate.common.domain.enums.LifecyclePhase;
 import com.meridian.substrate.common.domain.enums.PhaseStatus;
 import com.meridian.substrate.common.repo.PhaseStateRepository;
+import com.meridian.substrate.engine.contract.gateway.Governed;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -48,6 +49,7 @@ public class PhaseStateService {
      * skips phases that already have rows. Called manually in Phase 1; later
      * phases may wire this into domain-creation flows.
      */
+    @Governed(actionType = "phase_state.initialize")
     @Transactional
     public List<PhaseState> initializeForDomain(UUID domainId) {
         EnumSet<LifecyclePhase> existing = EnumSet.noneOf(LifecyclePhase.class);

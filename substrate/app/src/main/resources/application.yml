@@ -40,6 +40,23 @@ substrate:
   demo:
     # C10 flips this true in the dev/demo profile
     seed: false
+    # substrate.demo.fixed-clock (UNSET by default — key documented only):
+    # ISO-8601 instant pinning the shared engine java.time.Clock (S15 demo
+    # determinism; the §13 3b acceptance lever). Example:
+    #   --substrate.demo.fixed-clock=2026-05-12T00:00:00Z
+    # Never set in a customer engagement build.
+    contracts:
+      # DemoPack-only (engine-spec contracts.md §1/§14.2): records fixture
+      # acceptances to flip co-tribal-knowledge-depopulation ACTIVE for
+      # monitor demos. Effective only when substrate.demo.seed=true.
+      activate: false
+      # DemoPack-only (§13 row 3c / spec §16): seeds + activates the SYNTHETIC
+      # guard-bearing contract demo-gateway-guards (agent.promote +
+      # contract.report_metric DENY guards; agent-fleet party bound to MCP
+      # principal 'demo-agent') — the 3c acceptance lever. Both fixture
+      # contracts compile to zero guards by design; never enable in a
+      # customer engagement build. Effective only when substrate.demo.seed=true.
+      guards: false
   cors:
     # Binds CorsProperties; YAML list or comma-separated string both accepted
     allowed-origins: http://localhost:5173,http://localhost:8080
@@ -80,6 +97,41 @@ substrate:
     overdue-renotify-days: 3
     overdue-renotify-limit: 5
     sweep-cron: "0 0 * * * *"
+  contracts:
+    # Coordination-contract engine (engine-spec contracts.md §1; ADR-002).
+    # Values mirror the spec defaults; behavior beans land in chunks 3a/3b/3c.
+    enforcement:
+      # off = gateway skipped (counter only); shadow = full evaluation,
+      # would-be denials logged WOULD_DENY, nothing blocked; enforce = DENY
+      # blocks. Per-engagement; ship shadow, flip after a clean window (ADR D4).
+      mode: shadow
+    decision-log:
+      # matched-only: row only decisions where >=1 guard matched (plus all
+      # FLAG/DENY/WOULD_DENY); plain no-guard ALLOWs are metrics counters.
+      # 'all': row everything. (ADR D17)
+      level: matched-only
+    monitor:
+      # Master switch for the scheduler sweep.
+      enabled: true
+      # Fixed-delay of the sweep (claims monitors whose next_run_at <= now).
+      sweep-interval: PT60S
+    clock:
+      # Zone for period-key computation. Injectable java.time.Clock bean
+      # everywhere (demo determinism per S15).
+      zone: UTC
+    trace:
+      # Cap on persisted monitor-run trace JSON; truncate with a
+      # {"truncated": true} marker.
+      max-bytes: 16384
+    types:
+      # Validated allowlist for contract_type (ADR D15).
+      allowlist: cross-portfolio-opportunity, federation-invitation
+    mcp:
+      # Mounts the substrate-contracts MCP server at /mcp (chunk 3a read tools).
+      enabled: true
+    # When true AND substrate.orchestrator.enabled, breach SURFACED may submit
+    # a remediation task via orchestrator submit_task. Off by default.
+    orchestrator-remediation: false
   llm:
     provider: anthropic
     anthropic:

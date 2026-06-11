@@ -4,10 +4,23 @@ import com.meridian.substrate.common.domain.Capability;
 import com.meridian.substrate.common.domain.Cascade;
 import com.meridian.substrate.common.domain.CascadeLevel;
 import com.meridian.substrate.common.domain.CascadeLevelAction;
+import com.meridian.substrate.common.domain.Contract;
+import com.meridian.substrate.common.domain.ContractCommitment;
+import com.meridian.substrate.common.domain.ContractEvent;
+import com.meridian.substrate.common.domain.ContractParty;
+import com.meridian.substrate.common.domain.ContractPartyResponse;
 import com.meridian.substrate.common.domain.Domain;
 import com.meridian.substrate.common.domain.Evidence;
 import com.meridian.substrate.common.domain.PhaseState;
 import com.meridian.substrate.common.domain.enums.BrandingConfigStatus;
+import com.meridian.substrate.common.domain.enums.BreachStatus;
+import com.meridian.substrate.common.domain.enums.CommitmentComplianceState;
+import com.meridian.substrate.common.domain.enums.ContractActorType;
+import com.meridian.substrate.common.domain.enums.ContractPartyType;
+import com.meridian.substrate.common.domain.enums.ContractStatus;
+import com.meridian.substrate.common.domain.enums.GatewayDecision;
+import com.meridian.substrate.common.domain.enums.MonitorStatus;
+import com.meridian.substrate.common.domain.enums.PartyResponse;
 import com.meridian.substrate.common.domain.enums.CascadeActionType;
 import com.meridian.substrate.common.domain.enums.CascadeAttentionSignal;
 import com.meridian.substrate.common.domain.enums.CascadeAuthoringMode;
@@ -88,6 +101,20 @@ class RepositorySmokeTest {
     @Autowired private CascadeLevelActionRepository cascadeLevelActionRepository;
     @Autowired private CascadeDraftRepository cascadeDraftRepository;
     @Autowired private CascadeNotificationRepository cascadeNotificationRepository;
+    @Autowired private ContractRepository contractRepository;
+    @Autowired private ContractPartyRepository contractPartyRepository;
+    @Autowired private ContractPartyResponseRepository contractPartyResponseRepository;
+    @Autowired private ContractCommitmentRepository contractCommitmentRepository;
+    @Autowired private ContractDeclineTriggerRepository contractDeclineTriggerRepository;
+    @Autowired private ContractEntityLinkRepository contractEntityLinkRepository;
+    @Autowired private ContractClauseGuardRepository contractClauseGuardRepository;
+    @Autowired private ContractMonitorRepository contractMonitorRepository;
+    @Autowired private ContractMonitorRunRepository contractMonitorRunRepository;
+    @Autowired private ContractAttestationRepository contractAttestationRepository;
+    @Autowired private ContractMetricSampleRepository contractMetricSampleRepository;
+    @Autowired private ContractBreachRepository contractBreachRepository;
+    @Autowired private ContractEventRepository contractEventRepository;
+    @Autowired private ContractEnforcementDecisionRepository contractEnforcementDecisionRepository;
 
     @Test
     void allDerivedAndJpqlQueriesParseAndExecute() {
@@ -174,6 +201,143 @@ class RepositorySmokeTest {
         assertThat(cascadeNotificationRepository.findByCascadeIdOrderByCreatedAtAsc(id)).isEmpty();
         assertThat(cascadeNotificationRepository.findByCascadeIdAndNotificationType(id, CascadeNotificationType.CASCADE_ISSUED)).isEmpty();
         assertThat(cascadeNotificationRepository.existsByDedupeKey("no-such-dedupe-key")).isFalse();
+    }
+
+    /**
+     * Contract engine repositories (engine-spec contracts.md §3.4): every
+     * derived/JPQL method invoked once on the empty H2 slice so property paths
+     * and the JPQL (incl. the PESSIMISTIC_WRITE variants and the null-matching
+     * {@code findOpenBySourceForUpdate}) parse and execute. H2-green is never
+     * the Postgres acceptance gate — PostgresContractPersistenceIT in CI is.
+     */
+    @Test
+    void contractQueriesParseAndExecute() {
+        UUID id = UUID.randomUUID();
+
+        assertThat(contractRepository.findByDomainId(id)).isEmpty();
+        assertThat(contractRepository.findByDomainIdAndStatus(id, ContractStatus.PROPOSED)).isEmpty();
+        assertThat(contractRepository.findByDomainIdAndContractKey(id, "no-such-key")).isEmpty();
+        assertThat(contractRepository.findByIdForUpdate(id)).isEmpty();
+
+        assertThat(contractPartyRepository.findByContractIdOrderBySequenceOrderAsc(id)).isEmpty();
+
+        assertThat(contractPartyResponseRepository.findById(id)).isEmpty();
+        assertThat(contractPartyResponseRepository.findByContractId(id)).isEmpty();
+        assertThat(contractPartyResponseRepository.findByPartyId(id)).isEmpty();
+
+        assertThat(contractCommitmentRepository.findByContractIdOrderBySequenceOrderAsc(id)).isEmpty();
+        assertThat(contractCommitmentRepository.findByPartyIdOrderBySequenceOrderAsc(id)).isEmpty();
+
+        assertThat(contractDeclineTriggerRepository.findByContractIdOrderBySequenceOrderAsc(id)).isEmpty();
+        assertThat(contractEntityLinkRepository.findByContractId(id)).isEmpty();
+
+        assertThat(contractClauseGuardRepository.findByActionTypeAndActiveTrue("agent.promote")).isEmpty();
+        assertThat(contractClauseGuardRepository.findByContractId(id)).isEmpty();
+
+        assertThat(contractMonitorRepository.findByContractId(id)).isEmpty();
+        assertThat(contractMonitorRepository.findByStatusAndNextRunAtBefore(
+                MonitorStatus.ACTIVE, Instant.EPOCH)).isEmpty();
+        assertThat(contractMonitorRepository.findByStatusAndNextRunAtBeforeForUpdate(
+                MonitorStatus.ACTIVE, Instant.EPOCH)).isEmpty();
+
+        assertThat(contractMonitorRunRepository.findById(id)).isEmpty();
+        assertThat(contractMonitorRunRepository.findByMonitorIdOrderByStartedAtAsc(id)).isEmpty();
+        assertThat(contractMonitorRunRepository.findByMonitorIdAndStartedAtAfterOrderByStartedAtAsc(
+                id, Instant.EPOCH)).isEmpty();
+
+        assertThat(contractAttestationRepository.findByCommitmentIdAndPeriodKey(id, "2026-05")).isEmpty();
+        assertThat(contractAttestationRepository.findByContractId(id)).isEmpty();
+
+        assertThat(contractMetricSampleRepository.findByContractIdAndMetricKeyAndPeriodKey(
+                id, "utilization_share", "2026-Q2")).isEmpty();
+
+        assertThat(contractBreachRepository.findByContractIdAndStatusIn(
+                id, List.of(BreachStatus.DETECTED, BreachStatus.SURFACED, BreachStatus.ACKNOWLEDGED))).isEmpty();
+        // null source components must match NULL columns (ADR D13 dedup lookup)
+        assertThat(contractBreachRepository.findOpenBySourceForUpdate(id, null, null, null)).isEmpty();
+        assertThat(contractBreachRepository.findOpenBySourceForUpdate(id, id, id, "2026-05")).isEmpty();
+
+        assertThat(contractEventRepository.findById(id)).isEmpty();
+        assertThat(contractEventRepository.findByContractIdOrderByOccurredAtAsc(id)).isEmpty();
+        assertThat(contractEventRepository.findByContractIdAndOccurredAtAfterOrderByOccurredAtAsc(
+                id, Instant.EPOCH)).isEmpty();
+
+        assertThat(contractEnforcementDecisionRepository.findById(id)).isEmpty();
+        assertThat(contractEnforcementDecisionRepository.findByDomainIdAndDecidedAtAfter(id, Instant.EPOCH)).isEmpty();
+        assertThat(contractEnforcementDecisionRepository.findByDomainIdAndDecision(
+                id, GatewayDecision.WOULD_DENY)).isEmpty();
+        assertThat(contractEnforcementDecisionRepository.findByDomainIdAndDecisionAndDecidedAtAfter(
+                id, GatewayDecision.DENY, Instant.EPOCH)).isEmpty();
+    }
+
+    /**
+     * Contract aggregate + party + immutable response + commitment +
+     * append-only event round-trip on the H2 slice: column defaults
+     * (complianceState UNEVALUATED, responseRequired true) and the
+     * insert-only surfaces save and read back without exposing any
+     * update/delete methods.
+     */
+    @Test
+    void contractRepositoriesRoundTrip() {
+        UUID domainId = UUID.randomUUID();
+
+        Contract contract = new Contract();
+        contract.setDomainId(domainId);
+        contract.setContractKey("smoke-contract");
+        contract.setContractType("cross-portfolio-opportunity");
+        contract.setTitle("Smoke contract");
+        contract.setStatus(ContractStatus.PROPOSED);
+        contract.setProposedAt(Instant.parse("2026-04-01T00:00:00Z"));
+        contract.setProposedBy("operator");
+        contract = contractRepository.save(contract);
+
+        ContractParty party = new ContractParty();
+        party.setContractId(contract.getId());
+        party.setPartyLabel("Smoke Party A");
+        party.setPartyType(ContractPartyType.ORG_UNIT);
+        party.setSequenceOrder(0);
+        party = contractPartyRepository.save(party);
+
+        ContractCommitment commitment = new ContractCommitment();
+        commitment.setContractId(contract.getId());
+        commitment.setPartyId(party.getId());
+        commitment.setText("Provide the smoke methodology");
+        commitment.setSequenceOrder(0);
+        commitment = contractCommitmentRepository.save(commitment);
+
+        ContractPartyResponse response = new ContractPartyResponse();
+        response.setPartyId(party.getId());
+        response.setContractId(contract.getId());
+        response.setResponse(PartyResponse.ACCEPTED);
+        response.setRespondedBy("operator");
+        response.setRespondedAt(Instant.parse("2026-04-02T00:00:00Z"));
+        contractPartyResponseRepository.save(response);
+
+        ContractEvent event = new ContractEvent();
+        event.setContractId(contract.getId());
+        event.setEventType("CONTRACT_PROPOSED");
+        event.setActorType(ContractActorType.HUMAN);
+        event.setActorId("operator");
+        event.setOccurredAt(Instant.parse("2026-04-01T00:00:00Z"));
+        contractEventRepository.save(event);
+
+        assertThat(contractRepository.findByDomainIdAndContractKey(domainId, "smoke-contract"))
+                .isPresent()
+                .get()
+                .satisfies(c -> assertThat(c.getStatus()).isEqualTo(ContractStatus.PROPOSED));
+        assertThat(contractPartyRepository.findByContractIdOrderBySequenceOrderAsc(contract.getId()))
+                .extracting(ContractParty::isResponseRequired)
+                .containsExactly(true);
+        assertThat(contractCommitmentRepository.findByContractIdOrderBySequenceOrderAsc(contract.getId()))
+                .extracting(ContractCommitment::getComplianceState)
+                .containsExactly(CommitmentComplianceState.UNEVALUATED);
+        assertThat(contractPartyResponseRepository.findByPartyId(party.getId()))
+                .isPresent()
+                .get()
+                .satisfies(r -> assertThat(r.getResponse()).isEqualTo(PartyResponse.ACCEPTED));
+        assertThat(contractEventRepository.findByContractIdOrderByOccurredAtAsc(contract.getId()))
+                .extracting(ContractEvent::getEventType)
+                .containsExactly("CONTRACT_PROPOSED");
     }
 
     /**

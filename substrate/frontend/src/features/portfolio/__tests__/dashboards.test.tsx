@@ -10,6 +10,7 @@ import type {
   CascadeActionDto,
   CascadeDetailDto,
   CascadeSummaryDto,
+  ContractDetailResponse,
 } from '@/api/endpoints';
 import type { ApiMeta, Domain } from '@/shared/types/api';
 
@@ -38,6 +39,7 @@ const apiMocks = vi.hoisted(() => ({
   getCascades: vi.fn(),
   getCascadeById: vi.fn(),
   getCascadeActions: vi.fn(),
+  getContractByKey: vi.fn(),
 }));
 
 vi.mock('@/app/theme', () => ({
@@ -61,6 +63,7 @@ beforeEach(() => {
   apiMocks.getCascades.mockRejectedValue(new Error('backend absent'));
   apiMocks.getCascadeById.mockRejectedValue(new Error('backend absent'));
   apiMocks.getCascadeActions.mockRejectedValue(new Error('backend absent'));
+  apiMocks.getContractByKey.mockRejectedValue(new Error('backend absent'));
 });
 
 function createTestQueryClient() {
@@ -418,6 +421,117 @@ describe('ContractDetailView (dashboard 4)', () => {
       'href',
       '/portfolio/subsidiary/curasync-clinical?tab=plan',
     );
+  });
+
+  it('renders the existing 404 fallback panel for unknown contract keys (spec §11.3)', async () => {
+    // No fixture match + live query rejected → loading beat, then not-found.
+    renderRoute('/portfolio/contract/co-nope');
+    expect(await screen.findByText('Contract not found')).toBeInTheDocument();
+  });
+});
+
+describe('contract read-model swap — live mode (engine-spec contracts.md §11.3)', () => {
+  /**
+   * Minimal §7.3 detail envelope. Content deliberately differs from the
+   * fixture contract with the same key so the live-over-fixture swap is
+   * observable in the rendered output.
+   */
+  const LIVE_CONTRACT: ContractDetailResponse = {
+    id: '00000000-0000-0000-0000-00000000c001',
+    contractKey: 'co-tribal-knowledge-depopulation',
+    type: 'cross-portfolio-opportunity',
+    title: 'Live engine-served contract title',
+    context: 'Live context paragraph from the read model.',
+    status: 'PROPOSED',
+    proposedAt: '2026-04-01T00:00:00Z',
+    proposedBy: 'operator',
+    activatedAt: null,
+    resolvedAt: null,
+    estimatedValue: '$9.9M live estimated value',
+    estimatedValueAmount: null,
+    parties: [
+      {
+        id: 'party-live-1',
+        partyLabel: 'Live Party One',
+        partyType: 'ORG_UNIT',
+        boundEntities: [],
+        responseRequired: true,
+        response: null,
+        commitments: [
+          {
+            id: 'cmt-live-1',
+            text: 'Live commitment text one',
+            dueBy: null,
+            cadence: null,
+            complianceState: 'UNEVALUATED',
+            lastEvaluatedAt: null,
+          },
+        ],
+      },
+      {
+        id: 'party-live-2',
+        partyLabel: 'Live Party Two',
+        partyType: 'DOMAIN',
+        boundEntities: [],
+        responseRequired: true,
+        response: null,
+        commitments: [
+          {
+            id: 'cmt-live-2',
+            text: 'Live commitment text two',
+            dueBy: null,
+            cadence: null,
+            complianceState: 'UNEVALUATED',
+            lastEvaluatedAt: null,
+          },
+        ],
+      },
+    ],
+    enforcement: {
+      monitor: 'Live monitoring prose.',
+      monitorMechanism: 'MCP live mechanism line rendered verbatim.',
+      declineTriggers: [
+        { id: 'dt-live-1', text: 'Live decline trigger', armed: false, invocableByPartyId: null },
+      ],
+    },
+    linkedEntities: [
+      {
+        entityType: 'SUBSIDIARY_SLUG',
+        entityId: null,
+        slug: 'curasync-clinical',
+        label: 'Curasync Clinical Systems',
+      },
+    ],
+    monitors: [],
+    breachSummary: { open: 0, bySeverity: {} },
+    reviewBoundary: null,
+  };
+
+  it('renders the adapter-driven live detail over the fixture, keeping Review/Decline inert (queue #28)', async () => {
+    apiMocks.getContractByKey.mockResolvedValue(envelope(LIVE_CONTRACT));
+    renderRoute('/portfolio/contract/co-tribal-knowledge-depopulation');
+
+    // Live data replaces the fixture fallback once the API answers.
+    expect(
+      await screen.findByRole('heading', { level: 1, name: 'Live engine-served contract title' }),
+    ).toBeInTheDocument();
+    expect(apiMocks.getContractByKey).toHaveBeenCalledWith(
+      'co-tribal-knowledge-depopulation',
+    );
+    expect(screen.getByText('Live Party One')).toBeInTheDocument();
+    expect(screen.getByText('Live commitment text two')).toBeInTheDocument();
+    // VERBATIM enforcement text in the font-mono mechanism panel (§7.3).
+    expect(
+      screen.getByText('MCP live mechanism line rendered verbatim.'),
+    ).toBeInTheDocument();
+    expect(screen.getByText('$9.9M live estimated value')).toBeInTheDocument();
+    // Fixture title no longer renders.
+    expect(
+      screen.queryByText(/Tribal-knowledge depopulation across four/),
+    ).not.toBeInTheDocument();
+    // Inert affordances stay inert in live mode (queue #28 — do NOT wire).
+    expect(screen.getByRole('button', { name: 'Review proposal' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Decline' })).toBeDisabled();
   });
 });
 

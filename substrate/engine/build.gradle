@@ -16,8 +16,20 @@ dependencies {
     api 'org.springframework.boot:spring-boot-starter-data-jpa'
     implementation 'org.springframework.boot:spring-boot-starter-validation'
 
+    // Spring AOP + AspectJ — the §4.2 PEP-2 GovernedActionAspect
+    // (engine-spec contracts.md §4.2/§9; ADR-002 D2). Transitively present via
+    // spring-boot-starter-data-jpa already; declared explicitly because engine
+    // source compiles against @Aspect/@Around directly.
+    implementation 'org.springframework.boot:spring-boot-starter-aop'
+
     implementation 'com.fasterxml.jackson.core:jackson-databind'
     implementation 'com.fasterxml.jackson.datatype:jackson-datatype-jsr310'
+
+    // ShedLock — contract-monitor sweep lease (engine-spec contracts.md §5.2,
+    // §10.3; ADR-002). JDBC provider rides the V5__contracts.sql shedlock
+    // table; spring-jdbc arrives via spring-boot-starter-data-jpa.
+    implementation "net.javacrumbs.shedlock:shedlock-spring:${shedlockVersion}"
+    implementation "net.javacrumbs.shedlock:shedlock-provider-jdbc-template:${shedlockVersion}"
 
     // Lombok
     compileOnly 'org.projectlombok:lombok'

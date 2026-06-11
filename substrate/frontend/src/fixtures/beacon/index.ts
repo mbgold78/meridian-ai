@@ -22,8 +22,18 @@
  * over GET /api/v1/cascades*). {@link BEACON_CASCADES} / {@link getCascade}
  * remain exported ONLY as the degraded/demo fallback consumed inside that
  * seam: live data renders whenever the API has produced it; these fixtures
- * render while it is loading or when the backend is absent. Subsidiaries,
- * contracts, and the portfolio stats below are still Phase-1 fixtures.
+ * render while it is loading or when the backend is absent.
+ *
+ * ── PHASE 3a STATUS: CONTRACTS ARE SWAPPED ──────────────────────────────
+ * The contract slice rides the live read API the same way (engine-spec
+ * contracts.md §11.3, ADR-002). The contract detail surface consumes
+ * contracts exclusively through `useBeaconContract` in
+ * `@/features/portfolio/contractData` (over GET /api/v1/contracts/{idOrKey}
+ * + the §7.3 adapter). {@link BEACON_CONTRACTS} / {@link getContract}
+ * remain exported ONLY as the degraded/demo fallback consumed inside that
+ * seam. Subsidiaries and the portfolio stats below are still Phase-1
+ * fixtures (the S6 signal-strip stats swap to GET /contracts/signals in a
+ * later chunk).
  *
  * The narrative content (subsidiary names, critiques, contracts) is
  * FICTIONAL (port-map appendix #9). It must never ship in a customer

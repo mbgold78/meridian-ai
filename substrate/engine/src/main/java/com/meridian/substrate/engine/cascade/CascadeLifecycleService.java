@@ -17,6 +17,9 @@ import com.meridian.substrate.common.repo.CascadeLevelActionRepository;
 import com.meridian.substrate.common.repo.CascadeLevelRepository;
 import com.meridian.substrate.common.repo.CascadeRepository;
 import com.meridian.substrate.engine.cascade.exception.CascadeConflictException;
+import com.meridian.substrate.engine.contract.gateway.Governed;
+import com.meridian.substrate.engine.contract.gateway.GovernedActions;
+import com.meridian.substrate.engine.contract.gateway.Ungoverned;
 import jakarta.persistence.EntityNotFoundException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -149,6 +152,9 @@ public class CascadeLifecycleService {
      * OPEN→ISSUED flip with {@code issuedCascadeId}. Re-issuing an ISSUED
      * draft returns the existing cascade (idempotent, draft-row anchored).
      */
+    @Ungoverned(reason = "single-evaluation: reached only through the governed"
+            + " CascadeDraftService.issue PEP (which takes the draft lock first);"
+            + " annotating both layers would double-evaluate and double-row the PDP")
     @Transactional
     public Cascade issue(UUID draftId, IssueCommand cmd) {
         requireIdempotencyKey(cmd.idempotencyKey());
@@ -232,6 +238,7 @@ public class CascadeLifecycleService {
     }
 
     /** §5.3 L1 — the frontier owner refines and routes the critique one level deeper. */
+    @Governed(actionType = GovernedActions.CASCADE_CASCADE)
     @Transactional
     public Cascade cascade(UUID cascadeId, int depth, CascadeCommand cmd) {
         return execute(cascadeId, cmd.idempotencyKey(), cmd.expectedChainSeq(), ctx -> {
@@ -248,6 +255,7 @@ public class CascadeLifecycleService {
     }
 
     /** §5.3 L2/L6 — the owner takes the work; downward propagation terminates. */
+    @Governed(actionType = GovernedActions.CASCADE_ABSORB)
     @Transactional
     public Cascade absorb(UUID cascadeId, int depth, AbsorbCommand cmd) {
         return execute(cascadeId, cmd.idempotencyKey(), cmd.expectedChainSeq(), ctx -> {
@@ -265,7 +273,13 @@ public class CascadeLifecycleService {
      * §5.3 L3/L4 — documented pushback, first-touch or endorse. A legitimate
      * decline ALWAYS surfaces as success (HTTP 200); only stale fencing,
      * illegal transitions or a non-owner actor conflict (ADR-001 #1).
+     *
+     * <p>3c PEP note: a legitimate cascade decline still surfaces as 200 —
+     * the {@code @Governed} evaluation can only deny via an operator-authored
+     * guard on {@code cascade.decline}; the gateway itself never error-codes
+     * decline (port-map trap #8 holds at both engines).
      */
+    @Governed(actionType = GovernedActions.CASCADE_DECLINE)
     @Transactional
     public Cascade decline(UUID cascadeId, int depth, DeclineCommand cmd) {
         return execute(cascadeId, cmd.idempotencyKey(), cmd.expectedChainSeq(), ctx -> {
@@ -280,6 +294,7 @@ public class CascadeLifecycleService {
     }
 
     /** §5.3 L5 — revised refinement reactivates the declined level below as a new round. */
+    @Governed(actionType = GovernedActions.CASCADE_RECASCADE)
     @Transactional
     public Cascade recascade(UUID cascadeId, int depth, RecascadeCommand cmd) {
         return execute(cascadeId, cmd.idempotencyKey(), cmd.expectedChainSeq(), ctx -> {
@@ -301,6 +316,7 @@ public class CascadeLifecycleService {
      * latest DECLINE of a level in the pending run; intermediate non-response
      * stays honestly visible in the log (originator short-circuit, ADR D3).
      */
+    @Governed(actionType = GovernedActions.CASCADE_RESOLVE)
     @Transactional
     public Cascade resolve(UUID cascadeId, ResolveCommand cmd) {
         if (cmd.resolution() == null) {

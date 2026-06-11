@@ -8,6 +8,7 @@ export * from './branding';
 export * from './capabilities';
 export * from './cascades';
 export * from './chat';
+export * from './contracts';
 export * from './cost';
 export * from './decisions';
 export * from './dna';

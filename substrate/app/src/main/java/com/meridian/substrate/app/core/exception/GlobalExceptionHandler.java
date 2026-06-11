@@ -9,6 +9,8 @@ import com.meridian.substrate.engine.cascade.CascadeQueryService;
 import com.meridian.substrate.engine.cascade.exception.CascadeConflictException;
 import com.meridian.substrate.engine.cascade.exception.CascadeForbiddenException;
 import com.meridian.substrate.engine.cascade.read.CascadeDetail;
+import com.meridian.substrate.engine.contract.exception.ContractConflictException;
+import com.meridian.substrate.engine.contract.gateway.ContractDeniedException;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.MDC;
 import org.springframework.dao.OptimisticLockingFailureException;
@@ -157,6 +159,53 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ApiResponse<Void>> handleCascadeForbidden(CascadeForbiddenException ex) {
         log.warn("Cascade forbidden [{}]: {}", ex.getCode(), ex.getMessage());
         return buildErrorResponse(HttpStatus.FORBIDDEN, ex.getCode().name(), ex.getMessage());
+    }
+
+    /**
+     * Contract command conflicts (engine-spec contracts.md §4.5): 409 with the
+     * spec code ({@code CONTRACT_CONTENT_FROZEN} /
+     * {@code INVALID_CONTRACT_STATE} / {@code RESPONSE_CONFLICT}). None of
+     * these is decline vocabulary: DECLINE is a legitimate first-class
+     * terminal resolution that returns 200 always (port-map trap #8; ADR-002
+     * D6) — conflicts arise only from frozen content, conflicting responses,
+     * or wrong-state commands. The fourth §4.5 code, {@code CONTRACT_DENIAL},
+     * is the gateway's ({@code ContractDeniedException}, below).
+     */
+    @ExceptionHandler(ContractConflictException.class)
+    public ResponseEntity<ApiResponse<Void>> handleContractConflict(ContractConflictException ex) {
+        log.warn("Contract conflict [{}]: {}", ex.getCode(), ex.getMessage());
+        return buildErrorResponse(HttpStatus.CONFLICT, ex.getCode().name(), ex.getMessage());
+    }
+
+    /**
+     * Enforcement-gateway denial (engine-spec contracts.md §4.5; ADR-002
+     * D1/D4): HTTP <b>409</b>, code {@code CONTRACT_DENIAL}, message = the
+     * gateway's human summary citing contract key + clause descriptions +
+     * decisionId. A governance outcome, never a 5xx — and never decline
+     * vocabulary (decline returns 200; port-map trap #8). The business
+     * transaction has already rolled back; the DENY decision row survives via
+     * REQUIRES_NEW (§10.4, ADR D17).
+     */
+    @ExceptionHandler(ContractDeniedException.class)
+    public ResponseEntity<ApiResponse<Void>> handleContractDenied(ContractDeniedException ex) {
+        log.warn("Contract denial [reason={}, decisionId={}]: {}",
+                ex.getDeny().reason(), ex.getDecisionId(), ex.getMessage());
+        return buildErrorResponse(HttpStatus.CONFLICT, ContractDeniedException.CODE, ex.getMessage());
+    }
+
+    /**
+     * Breach waiver attempted by a non-HUMAN actor (engine-spec contracts.md
+     * §5.4/§7.2; ADR-002 D16 built-in non-removable guard): 403. This is the
+     * service-level backstop — REST actors are HUMAN-typed pre-Phase-5, so
+     * the lane fires mainly for engine-internal misuse and (with 3c) the MCP
+     * write surface, where the gateway PEP additionally denies the
+     * {@code waive_breach} tool for AGENT principals.
+     */
+    @ExceptionHandler(com.meridian.substrate.engine.contract.exception.WaiverHumanOnlyException.class)
+    public ResponseEntity<ApiResponse<Void>> handleWaiverHumanOnly(
+            com.meridian.substrate.engine.contract.exception.WaiverHumanOnlyException ex) {
+        log.warn("Waiver denied for non-human actor: {}", ex.getMessage());
+        return buildErrorResponse(HttpStatus.FORBIDDEN, "WAIVER_HUMAN_ONLY", ex.getMessage());
     }
 
     @ExceptionHandler(Exception.class)

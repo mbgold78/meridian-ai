@@ -6,6 +6,7 @@ import com.meridian.substrate.common.domain.ReaderRegistration;
 import com.meridian.substrate.common.domain.enums.ReaderKind;
 import com.meridian.substrate.common.domain.enums.ReaderStatus;
 import com.meridian.substrate.common.repo.ReaderRegistrationRepository;
+import com.meridian.substrate.engine.contract.gateway.Governed;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -47,6 +48,7 @@ public class ReaderRegistrationService {
                 .orElseThrow(() -> new EntityNotFoundException("ReaderRegistration", id));
     }
 
+    @Governed(actionType = "reader_registration.create")
     @Transactional
     public ReaderRegistration create(ReaderRegistrationCreateRequest req) {
         ReaderRegistration r = new ReaderRegistration();
@@ -64,6 +66,7 @@ public class ReaderRegistrationService {
         return saved;
     }
 
+    @Governed(actionType = "reader_registration.mark_read")
     @Transactional
     public ReaderRegistration markRead(UUID id, String fingerprintHash) {
         ReaderRegistration r = get(id);
@@ -72,6 +75,7 @@ public class ReaderRegistrationService {
         return repository.save(r);
     }
 
+    @Governed(actionType = "reader_registration.delete")
     @Transactional
     public void delete(UUID id) {
         repository.deleteById(id);

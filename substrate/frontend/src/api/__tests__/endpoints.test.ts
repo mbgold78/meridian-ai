@@ -116,3 +116,34 @@ describe('cascade read endpoints (engine-spec cascade.md §6.1)', () => {
     expect(get).toHaveBeenCalledWith('/cascades/cas-1/actions');
   });
 });
+
+describe('contract read endpoints (engine-spec contracts.md §7.1)', () => {
+  it('exposes the contracts module through the barrel', () => {
+    expect(endpoints.getContracts).toBeTypeOf('function');
+    expect(endpoints.getContractByKey).toBeTypeOf('function');
+  });
+
+  it('getContracts hits GET /contracts with the required domainId (+ optional filters)', async () => {
+    const get = vi.spyOn(apiClient, 'get').mockResolvedValue({
+      data: { data: [], meta: META, errors: null },
+    });
+
+    await endpoints.getContracts('dom-1');
+    expect(get).toHaveBeenCalledWith('/contracts', { params: { domainId: 'dom-1' } });
+
+    await endpoints.getContracts('dom-1', { status: 'PROPOSED' });
+    expect(get).toHaveBeenCalledWith('/contracts', {
+      params: { domainId: 'dom-1', status: 'PROPOSED' },
+    });
+  });
+
+  it('getContractByKey hits GET /contracts/{idOrKey} — contractKey click-throughs resolve by key (§11.3)', async () => {
+    const get = vi.spyOn(apiClient, 'get').mockResolvedValue({
+      data: { data: {}, meta: META, errors: null },
+    });
+
+    await endpoints.getContractByKey('co-tribal-knowledge-depopulation');
+
+    expect(get).toHaveBeenCalledWith('/contracts/co-tribal-knowledge-depopulation');
+  });
+});

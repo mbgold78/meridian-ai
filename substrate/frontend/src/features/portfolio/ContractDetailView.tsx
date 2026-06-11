@@ -1,9 +1,10 @@
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { CaretLeft, GitBranch, Handshake } from '@phosphor-icons/react';
 import { Button } from '@/components/ui/button';
-import { getContract, getSubsidiary } from '@/fixtures/beacon';
+import { getSubsidiary } from '@/fixtures/beacon';
 import type { BeaconContract } from '@/fixtures/beacon';
 import { cn } from '@/lib/utils';
+import { useBeaconContract } from './contractData';
 import { portfolioPaths } from './paths';
 
 /**
@@ -15,6 +16,13 @@ import { portfolioPaths } from './paths';
  * MCP-enforced contracts (P19), not proposals. This view renders the
  * contract terms first-class: parties, commitments, monitoring, and the
  * decline triggers that scope each party's right of refusal.
+ *
+ * Data source (Phase 3a read-model swap, engine-spec contracts.md §11.3):
+ * live `GET /api/v1/contracts/{idOrKey}` via `useBeaconContract` (the
+ * §7.3 adapter), with the Beacon fixture contract as the deterministic
+ * degraded/demo fallback — see ./contractData.ts for the documented swap
+ * switch. Click-throughs resolve by contractKey; unknown keys render the
+ * existing 404 fallback panel.
  *
  * Routing: `/portfolio/contract/:contractId`. Unknown ids render a
  * fallback panel with a back link rather than crashing.
@@ -28,10 +36,11 @@ import { portfolioPaths } from './paths';
  */
 export function ContractDetailView() {
   const { contractId = '' } = useParams();
-  const contract = getContract(contractId);
+  const { contract, status } = useBeaconContract(contractId);
   const [searchParams] = useSearchParams();
   const fromParam = searchParams.get('from') ?? '';
 
+  if (status === 'loading') return <ContractLoading />;
   if (!contract) return <ContractNotFound id={contractId} fromParam={fromParam} />;
 
   const back = resolveBackLink(fromParam);
@@ -348,8 +357,28 @@ function ContractFooter({ back }: { back: BackLink }) {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Fallback — contract id not in fixture                              */
+/*  Fallbacks — loading / unknown contract id                          */
 /* ------------------------------------------------------------------ */
+
+/**
+ * Shown only while the live detail query is in flight for an id with no
+ * fixture counterpart (fixture-matched ids render immediately).
+ */
+function ContractLoading() {
+  return (
+    <div className="mx-auto max-w-screen-md px-8 py-12">
+      <div
+        className="rounded-md border border-border bg-surface p-8"
+        role="status"
+        aria-live="polite"
+      >
+        <p className="text-[14px] leading-[20px] text-foreground-muted">
+          Loading contract…
+        </p>
+      </div>
+    </div>
+  );
+}
 
 function ContractNotFound({ id, fromParam }: { id: string; fromParam: string }) {
   const back = resolveBackLink(fromParam);

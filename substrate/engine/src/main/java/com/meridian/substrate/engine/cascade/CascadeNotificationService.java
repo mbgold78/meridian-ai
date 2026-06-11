@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.meridian.substrate.common.domain.CascadeNotification;
 import com.meridian.substrate.common.domain.enums.CascadeNotificationType;
 import com.meridian.substrate.common.repo.CascadeNotificationRepository;
+import com.meridian.substrate.engine.contract.gateway.Ungoverned;
 import jakarta.persistence.EntityNotFoundException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -53,6 +54,9 @@ public class CascadeNotificationService {
      *
      * @return the persisted row, or empty when the dedupe key already exists
      */
+    @Ungoverned(reason = "engine-internal §8 transactional-outbox insert, written inside already-"
+            + "governed command transactions (and by the notification-only sweeper) — not one of"
+            + " the three ADR D2 PEPs")
     @Transactional
     public Optional<CascadeNotification> insert(UUID cascadeId, UUID actionId, Integer depth,
                                                 CascadeNotificationType type,
@@ -87,6 +91,8 @@ public class CascadeNotificationService {
     }
 
     /** Mark-read watermark for the in-app feed (idempotent). */
+    @Ungoverned(reason = "in-app feed read watermark (idempotent readAt stamp) — UI plumbing on"
+            + " the notification outbox, not governance-relevant business state")
     @Transactional
     public CascadeNotification markRead(UUID notificationId) {
         CascadeNotification row = repository.findById(notificationId)
