@@ -5,6 +5,10 @@ import com.meridian.substrate.app.api.v1.response.ApiMeta;
 import com.meridian.substrate.app.api.v1.response.ApiResponse;
 import com.meridian.substrate.common.ai.LlmRateLimitException;
 import com.meridian.substrate.common.ai.LlmUnavailableException;
+import com.meridian.substrate.engine.cascade.CascadeQueryService;
+import com.meridian.substrate.engine.cascade.exception.CascadeConflictException;
+import com.meridian.substrate.engine.cascade.exception.CascadeForbiddenException;
+import com.meridian.substrate.engine.cascade.read.CascadeDetail;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.MDC;
 import org.springframework.dao.OptimisticLockingFailureException;
@@ -18,6 +22,7 @@ import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.util.List;
+import java.util.UUID;
 
 /**
  * Global exception handler that maps exceptions to structured API error responses.
@@ -26,6 +31,12 @@ import java.util.List;
 @Slf4j
 @RestControllerAdvice
 public class GlobalExceptionHandler {
+
+    private final CascadeQueryService cascadeQueryService;
+
+    public GlobalExceptionHandler(CascadeQueryService cascadeQueryService) {
+        this.cascadeQueryService = cascadeQueryService;
+    }
 
     @ExceptionHandler(EntityNotFoundException.class)
     public ResponseEntity<ApiResponse<Void>> handleEntityNotFound(EntityNotFoundException ex) {
@@ -106,6 +117,48 @@ public class GlobalExceptionHandler {
         return buildErrorResponse(status, status.name(), reason);
     }
 
+    /**
+     * Unknown ids surfaced from inside engine command transactions (e.g. the
+     * cascade lifecycle's locked lookups, notification mark-read) arrive as
+     * the JPA exception type — same 404 envelope as the app-layer
+     * {@link EntityNotFoundException} (engine-spec cascade.md §6.2 error table).
+     */
+    @ExceptionHandler(jakarta.persistence.EntityNotFoundException.class)
+    public ResponseEntity<ApiResponse<Void>> handleJpaEntityNotFound(
+            jakarta.persistence.EntityNotFoundException ex) {
+        log.warn("Entity not found: {}", ex.getMessage());
+        return buildErrorResponse(HttpStatus.NOT_FOUND, "NOT_FOUND", ex.getMessage());
+    }
+
+    /**
+     * Cascade command conflicts (engine-spec cascade.md §6.2): 409 with the
+     * exception's spec code ({@code CASCADE_STALE_STATE} /
+     * {@code CASCADE_ILLEGAL_TRANSITION} / {@code CASCADE_TERMINAL}) and the
+     * CURRENT {@link CascadeDetail} in the envelope {@code data} — the client
+     * refreshes ("cascade moved on — review current state"), never renders a
+     * generic failure (§11.5). None of these codes is decline vocabulary:
+     * a legitimate decline is 200 (ADR-001 non-negotiable #1).
+     */
+    @ExceptionHandler(CascadeConflictException.class)
+    public ResponseEntity<ApiResponse<CascadeDetail>> handleCascadeConflict(CascadeConflictException ex) {
+        log.warn("Cascade conflict [{}]: {}", ex.getCode(), ex.getMessage());
+        ApiMeta meta = ApiMeta.now(MDC.get("requestId"), null);
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(new ApiResponse<>(currentCascadeDetail(ex.getCascadeId()), meta,
+                        List.of(ApiError.of(ex.getCode().name(), ex.getMessage()))));
+    }
+
+    /**
+     * Cascade actor guards (engine-spec cascade.md §6.2): 403 with
+     * {@code CASCADE_NOT_LEVEL_OWNER} / {@code CASCADE_NOT_ORIGINATOR}.
+     * Persona-header trust in Phase 2 (S9); OIDC hardens the source in Phase 5.
+     */
+    @ExceptionHandler(CascadeForbiddenException.class)
+    public ResponseEntity<ApiResponse<Void>> handleCascadeForbidden(CascadeForbiddenException ex) {
+        log.warn("Cascade forbidden [{}]: {}", ex.getCode(), ex.getMessage());
+        return buildErrorResponse(HttpStatus.FORBIDDEN, ex.getCode().name(), ex.getMessage());
+    }
+
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ApiResponse<Void>> handleAll(Exception ex) {
         log.error("Unhandled exception", ex);
@@ -117,5 +170,24 @@ public class GlobalExceptionHandler {
         ApiMeta meta = ApiMeta.now(MDC.get("requestId"), null);
         ApiResponse<Void> body = ApiResponse.error(List.of(ApiError.of(code, message)), meta);
         return ResponseEntity.status(status).body(body);
+    }
+
+    /**
+     * Best-effort current-state projection for the 409 envelope {@code data};
+     * {@code null} for draft-anchored conflicts (no cascade row yet) or if the
+     * re-read itself fails — the conflict envelope must never be masked by its
+     * own enrichment.
+     */
+    private CascadeDetail currentCascadeDetail(UUID cascadeId) {
+        if (cascadeId == null) {
+            return null;
+        }
+        try {
+            return cascadeQueryService.detail(cascadeId).orElse(null);
+        } catch (RuntimeException reReadFailure) {
+            log.warn("Could not project current cascade detail for conflict envelope [cascadeId={}]",
+                    cascadeId, reReadFailure);
+            return null;
+        }
     }
 }

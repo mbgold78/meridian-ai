@@ -6,9 +6,9 @@ import org.springframework.web.context.annotation.RequestScope;
 /**
  * Request-scoped bean holding the current persona level and identity.
  * Populated by {@link PersonaInterceptor} from the spoofable
- * {@code X-Persona-Level} / {@code X-Persona-Id} headers — Phase 1
- * anonymous-auth mode only (port-map S9); OIDC replaces this as the
- * identity source in Phase 5.
+ * {@code X-Persona-Level} / {@code X-Persona-Id} / {@code X-Persona-Label}
+ * headers — Phase 1/2 anonymous-auth mode only (port-map S9); OIDC replaces
+ * this as the identity source in Phase 5.
  *
  * <p><b>Placement note (deviation from homepoc):</b> homepoc kept this class at
  * {@code app.ai.persona}, which the rename plan maps into the engine module
@@ -23,6 +23,7 @@ public class PersonaContext {
 
     private String personaLevel = "L3_ANALYST";
     private String personaId;
+    private String personaLabel;
 
     public String getPersonaLevel() {
         return personaLevel;
@@ -40,11 +41,26 @@ public class PersonaContext {
         this.personaId = personaId;
     }
 
+    /**
+     * Display label of the acting persona ({@code X-Persona-Label}) — the
+     * cascade engine records it as {@code actor_label} on every action
+     * (engine-spec cascade.md §5.5; ADR-001 D11). Nullable: callers fall back
+     * to the persona-level display when absent.
+     */
+    public String getPersonaLabel() {
+        return personaLabel;
+    }
+
+    public void setPersonaLabel(String personaLabel) {
+        this.personaLabel = personaLabel;
+    }
+
     /** Returns a plain detached copy safe to use across thread boundaries. */
     public PersonaContext snapshot() {
         PersonaContext copy = new PersonaContext();
         copy.personaLevel = this.personaLevel;
         copy.personaId = this.personaId;
+        copy.personaLabel = this.personaLabel;
         return copy;
     }
 }

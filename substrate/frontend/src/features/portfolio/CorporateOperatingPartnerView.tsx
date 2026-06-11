@@ -12,7 +12,6 @@ import {
   Warning,
 } from '@phosphor-icons/react';
 import {
-  BEACON_CASCADES,
   BEACON_PORTFOLIO,
   CROSS_PORTFOLIO_OPPORTUNITIES,
   INDUSTRY_LABEL,
@@ -20,21 +19,25 @@ import {
   LIFECYCLE_PHASE_ORDER,
 } from '@/fixtures/beacon';
 import type {
-  BeaconCascade,
   BeaconCrossOpportunity,
   BeaconSubsidiary,
-  CascadeLevel,
   Industry,
   LifecyclePhase,
 } from '@/fixtures/beacon';
+import type { CascadeAttentionSignalWire } from '@/api/endpoints';
 import { cn } from '@/lib/utils';
+import { attentionOrder, useBeaconCascades } from './cascadeData';
+import type { CascadeGridRow } from './cascadeData';
 import { portfolioPaths } from './paths';
 
 /**
  * Corporate Operating Partner dashboard — the Beacon surfaces' marquee
  * view (ported from homepoc under the product route namespace, chunk C9).
- * Reads entirely from the fixture swap point in `@/fixtures/beacon`;
- * no backend, no fetch — until the Phase 2–4 live swap.
+ * Subsidiaries/opportunities/signals still read from the fixture swap
+ * point in `@/fixtures/beacon` (Phase 2–4 live swap pending). The cascade
+ * grid is LIVE as of the Phase 2 read-model swap: rows come from
+ * `useBeaconCascades()` (./cascadeData — GET /api/v1/cascades + adapter),
+ * with the fixture cascades as the deterministic degraded/demo fallback.
  *
  * Five composition zones, top-to-bottom, per Stage 3 spec:
  *   1. Portfolio header strip (Instrument Serif display + live indicator).
@@ -162,6 +165,9 @@ function compareSubs(
 
 export function CorporateOperatingPartnerView() {
   const subsidiaries = BEACON_PORTFOLIO.subsidiaries;
+  // Cascade read-model swap (engine-spec §11): live API rows when the
+  // backend answers, deterministic fixture fallback when it doesn't.
+  const { rows: cascadeRows } = useBeaconCascades();
 
   const interventionAgents = useMemo(
     () =>
@@ -226,7 +232,7 @@ export function CorporateOperatingPartnerView() {
 
         <CrossPortfolioOpportunities opportunities={CROSS_PORTFOLIO_OPPORTUNITIES} />
 
-        <IssuedCascades cascades={BEACON_CASCADES} />
+        <IssuedCascades rows={cascadeRows} />
 
         <SubsidiaryRoster
           subs={sortedSubs}
@@ -593,11 +599,13 @@ function OpportunityCard({ opp }: OpportunityCardProps) {
 /* ------------------------------------------------------------------ */
 
 interface IssuedCascadesProps {
-  cascades: BeaconCascade[];
+  rows: CascadeGridRow[];
 }
 
-function IssuedCascades({ cascades }: IssuedCascadesProps) {
-  const inFlight = cascades.filter((c) => c.currentState === 'in-flight');
+function IssuedCascades({ rows }: IssuedCascadesProps) {
+  // Operator attention order (engine-spec §11 item 4): decline-pending
+  // first, then overdue, then escalating by lastActivityAt desc.
+  const inFlight = attentionOrder(rows.filter((r) => r.currentState === 'in-flight'));
   if (inFlight.length === 0) return null;
   return (
     <section aria-label="Cascades you've issued">
@@ -610,8 +618,8 @@ function IssuedCascades({ cascades }: IssuedCascadesProps) {
         </p>
       </header>
       <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
-        {inFlight.map((cascade) => (
-          <CascadeCard key={cascade.id} cascade={cascade} />
+        {inFlight.map((row) => (
+          <CascadeCard key={row.id} row={row} />
         ))}
       </div>
     </section>
@@ -619,14 +627,13 @@ function IssuedCascades({ cascades }: IssuedCascadesProps) {
 }
 
 interface CascadeCardProps {
-  cascade: BeaconCascade;
+  row: CascadeGridRow;
 }
 
-function CascadeCard({ cascade }: CascadeCardProps) {
-  const bottomLevel = cascade.levels[cascade.levels.length - 1];
-  const headingSummary = firstSentence(cascade.originalCritique);
-  const originatedDate = formatCascadeDate(cascade.originatedAt);
-  const stateChip = cascadeStateChip(bottomLevel);
+function CascadeCard({ row }: CascadeCardProps) {
+  const headingSummary = firstSentence(row.originalCritique);
+  const originatedDate = formatCascadeDate(row.originatedAt);
+  const chip = ATTENTION_SIGNAL_CHIP[row.attentionSignal];
   return (
     <article className="flex flex-col rounded-md border border-border bg-surface-raised p-6 transition-colors duration-100 hover:border-border-strong">
       <div className="flex items-center gap-1.5">
@@ -639,22 +646,27 @@ function CascadeCard({ cascade }: CascadeCardProps) {
         {headingSummary}
       </h3>
       <p className="mt-2 text-[13px] leading-[18px] text-foreground-muted">
-        Originated {originatedDate} · Currently at L{bottomLevel.level} ·{' '}
-        {cascade.levels.length} level chain
+        Originated {originatedDate} · Currently at L{row.frontierDepth} ·{' '}
+        {row.levelCount} level chain
       </p>
-      <div className="mt-4">
+      <div className="mt-4 flex flex-wrap items-center gap-2">
         <span
           className={cn(
             'inline-flex shrink-0 items-center rounded-md border border-transparent px-2 py-0.5 text-[11px] font-medium leading-[14px] uppercase tracking-[0.05em]',
-            stateChip.cls,
+            chip.cls,
           )}
         >
-          {stateChip.label}
+          {chip.label}
         </span>
+        {row.overdue && (
+          <span className="inline-flex shrink-0 items-center rounded-md border border-transparent bg-warning-surface px-2 py-0.5 text-[11px] font-medium leading-[14px] uppercase tracking-[0.05em] text-warning">
+            Overdue
+          </span>
+        )}
       </div>
       <div className="mt-auto flex justify-end pt-6">
         <Link
-          to={portfolioPaths.cascade(cascade.id)}
+          to={portfolioPaths.cascade(row.id)}
           className="inline-flex items-center gap-1 text-[13px] font-medium leading-[18px] text-foreground transition-colors duration-100 hover:text-primary"
         >
           Inspect cascade
@@ -693,33 +705,38 @@ function formatCascadeDate(iso: string): string {
   return `${CASCADE_SHORT_MONTH[monthIdx]} ${Number(m[3])} ${m[1]}`;
 }
 
-function cascadeStateChip(
-  level: CascadeLevel,
-): { label: string; cls: string } {
-  switch (level.state) {
-    case 'declined':
-      return {
-        label: 'Decline pending',
-        cls: 'bg-destructive-surface text-destructive',
-      };
-    case 'cascaded':
-      return {
-        label: 'Escalating',
-        cls: 'bg-info-surface text-info',
-      };
-    case 'absorbed':
-      return {
-        label: 'Absorbed',
-        cls: 'bg-success-surface text-success',
-      };
-    case 'looking':
-    default:
-      return {
-        label: 'Looking',
-        cls: 'bg-warning-surface text-warning',
-      };
-  }
-}
+/**
+ * Attention-signal chip mapping (engine-spec §11 item 3): decline-pending →
+ * destructive (leader-attention, beside in-intervention agents), escalating
+ * → info, absorbed → success; `overdue` is a separate warn overlay chip.
+ * Terminal signals never reach the in-flight grid but the record stays
+ * total. Decline is never an error — destructive = leader-attention tone.
+ */
+const ATTENTION_SIGNAL_CHIP: Record<
+  CascadeAttentionSignalWire,
+  { label: string; cls: string }
+> = {
+  'decline-pending': {
+    label: 'Decline pending',
+    cls: 'bg-destructive-surface text-destructive',
+  },
+  escalating: {
+    label: 'Escalating',
+    cls: 'bg-info-surface text-info',
+  },
+  absorbed: {
+    label: 'Absorbed',
+    cls: 'bg-success-surface text-success',
+  },
+  'resolved-looks-good': {
+    label: 'Resolved — looks good',
+    cls: 'bg-success-surface text-success',
+  },
+  'resolved-declined': {
+    label: 'Resolved — declined',
+    cls: 'bg-surface text-foreground-muted',
+  },
+};
 
 /* ------------------------------------------------------------------ */
 /*  Zone 5 — Subsidiary roster                                         */

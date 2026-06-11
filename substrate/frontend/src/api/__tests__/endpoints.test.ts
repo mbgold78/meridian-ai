@@ -74,3 +74,45 @@ describe('wire-path pins', () => {
     expect(get).toHaveBeenCalledWith('/ecosystem/findings', { params: { domainId: 'some-domain' } });
   });
 });
+
+describe('cascade read endpoints (engine-spec cascade.md §6.1)', () => {
+  it('exposes the cascades module through the barrel', () => {
+    expect(endpoints.getCascades).toBeTypeOf('function');
+    expect(endpoints.getCascadeById).toBeTypeOf('function');
+    expect(endpoints.getCascadeActions).toBeTypeOf('function');
+  });
+
+  it('getCascades hits GET /cascades with the required domainId (+ optional filters)', async () => {
+    const get = vi.spyOn(apiClient, 'get').mockResolvedValue({
+      data: { data: [], meta: META, errors: null },
+    });
+
+    await endpoints.getCascades('dom-1');
+    expect(get).toHaveBeenCalledWith('/cascades', { params: { domainId: 'dom-1' } });
+
+    await endpoints.getCascades('dom-1', { state: 'in-flight' });
+    expect(get).toHaveBeenCalledWith('/cascades', {
+      params: { domainId: 'dom-1', state: 'in-flight' },
+    });
+  });
+
+  it('getCascadeById hits GET /cascades/{id}', async () => {
+    const get = vi.spyOn(apiClient, 'get').mockResolvedValue({
+      data: { data: {}, meta: META, errors: null },
+    });
+
+    await endpoints.getCascadeById('cas-1');
+
+    expect(get).toHaveBeenCalledWith('/cascades/cas-1');
+  });
+
+  it('getCascadeActions hits GET /cascades/{id}/actions', async () => {
+    const get = vi.spyOn(apiClient, 'get').mockResolvedValue({
+      data: { data: [], meta: META, errors: null },
+    });
+
+    await endpoints.getCascadeActions('cas-1');
+
+    expect(get).toHaveBeenCalledWith('/cascades/cas-1/actions');
+  });
+});

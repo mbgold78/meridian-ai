@@ -1,9 +1,10 @@
 import { Link, useParams } from 'react-router-dom';
 import { CaretLeft, GitBranch } from '@phosphor-icons/react';
 import { Button } from '@/components/ui/button';
-import { getCascade } from '@/fixtures/beacon';
 import type { BeaconCascade, CascadeLevel } from '@/fixtures/beacon';
+import type { CascadeActionDto, CascadeActionTypeWire } from '@/api/endpoints';
 import { cn } from '@/lib/utils';
+import { useBeaconCascade, useBeaconCascadeActions } from './cascadeData';
 import { portfolioPaths } from './paths';
 
 /**
@@ -13,18 +14,26 @@ import { portfolioPaths } from './paths';
  * The Operating Partner clicks "Inspect cascade" on the dashboard and
  * lands here. They see the original critique they issued (durable
  * through the chain), every downstream level's translation, the current
- * resting state at the bottom of the chain, and an affordance to drill
- * to that level. The "Drill to L[N]" button is a read-only signal that
- * the substrate makes single-throat-to-choke possible — it doesn't
- * actually navigate anywhere in v1.
+ * resting state at the bottom of the chain, and — in live mode — the
+ * append-only action timeline (additive surface, ADR-001 D13). There is
+ * still no drill verb or drill affordance; the full timeline read is the
+ * only navigation. // EXTENSION POINT(cascade-3)
+ *
+ * Data source (Phase 2 read-model swap, engine-spec §11): live
+ * `GET /api/v1/cascades/{id}` via `useBeaconCascade`, with the Beacon
+ * fixture cascade as the deterministic degraded/demo fallback — see
+ * ./cascadeData.ts for the documented swap switch.
  *
  * Routing: `/portfolio/cascade/:cascadeId`. Unknown ids render a
  * fallback panel with a back link rather than crashing.
  */
 export function CascadeDetailView() {
   const { cascadeId = '' } = useParams();
-  const cascade = getCascade(cascadeId);
+  const { cascade, status } = useBeaconCascade(cascadeId);
+  // Actions exist only in live mode; fixtures predate the action log.
+  const actions = useBeaconCascadeActions(cascadeId, status === 'live');
 
+  if (status === 'loading') return <CascadeLoading />;
   if (!cascade) return <CascadeNotFound id={cascadeId} />;
 
   return (
@@ -33,6 +42,7 @@ export function CascadeDetailView() {
       <CascadeHeader cascade={cascade} />
       <div className="px-8 pb-12 pt-8">
         <LevelTimeline levels={cascade.levels} />
+        {actions && actions.length > 0 && <ActionTimeline actions={actions} />}
         <CascadeFooter cascade={cascade} />
       </div>
     </div>
@@ -61,6 +71,16 @@ function CascadeBackLink() {
 /*  Header strip — eyebrow, original critique, acceptance criteria     */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Eyebrow per aggregate state — live cascades can arrive resolved, and a
+ * resolved Decline is a peer terminal outcome, never failure vocabulary.
+ */
+const STATE_EYEBROW: Record<BeaconCascade['currentState'], string> = {
+  'in-flight': 'In-flight cascade',
+  'resolved-looks-good': 'Resolved cascade — looks good',
+  'resolved-declined': 'Resolved cascade — declined',
+};
+
 function CascadeHeader({ cascade }: { cascade: BeaconCascade }) {
   return (
     <header className="border-b border-border px-8 py-8">
@@ -74,7 +94,7 @@ function CascadeHeader({ cascade }: { cascade: BeaconCascade }) {
               className="text-primary"
             />
             <p className="text-[11px] font-medium uppercase tracking-[0.05em] text-primary">
-              In-flight cascade
+              {STATE_EYEBROW[cascade.currentState]}
             </p>
           </div>
           <h1 className="mt-3 font-serif text-[36px] font-semibold leading-[40px] -tracking-[0.01em] text-foreground">
@@ -212,9 +232,14 @@ function LevelContent({ level }: { level: CascadeLevel }) {
       </p>
     );
   }
+  // LOOKING frontier rows come from the live engine only (fixtures never
+  // contained them) — minimal "awaiting response since {date}" beat per
+  // engine-spec §11 item 2. Dwell/reassignment/expiry semantics remain
+  // deliberately unbuilt. // EXTENSION POINT(cascade-1)
   return (
     <p className="mt-3 text-[14px] leading-[20px] text-foreground-muted">
-      This level is currently looking at the cascade — no decision yet.
+      Awaiting response since {formatCascadeDate(level.timestamp)} — no
+      decision yet.
     </p>
   );
 }
@@ -240,6 +265,74 @@ const LEVEL_STATE_PILL: Record<
     cls: 'bg-destructive-surface text-destructive',
   },
 };
+
+/* ------------------------------------------------------------------ */
+/*  Action timeline — live mode only (additive, ADR-001 D13)           */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Verb labels for the append-only action log. Neutral/leader-attention
+ * vocabulary only — a decline is a documented governance outcome, never
+ * an error (engine-spec invariant I7).
+ */
+const ACTION_LABEL: Record<CascadeActionTypeWire, string> = {
+  issue: 'Issued',
+  cascade: 'Cascaded',
+  absorb: 'Absorbed',
+  decline: 'Declined',
+  recascade: 'Recascaded',
+  'resolve-looks-good': 'Resolved — looks good',
+  'resolve-declined': 'Resolved — declined',
+};
+
+function actionExcerpt(action: CascadeActionDto): string | null {
+  return (
+    action.refinedCritique ?? action.declineReasoning ?? action.resolutionNote ?? null
+  );
+}
+
+function ActionTimeline({ actions }: { actions: CascadeActionDto[] }) {
+  return (
+    <section aria-label="Cascade action timeline" className="mt-10">
+      <header className="mb-4">
+        <h2 className="text-[18px] font-semibold leading-[24px] text-foreground">
+          Action timeline
+        </h2>
+        <p className="mt-1 text-sm text-foreground-muted">
+          The append-only action log — every recorded step, oldest first.
+        </p>
+      </header>
+      <ol role="list" className="flex flex-col gap-2">
+        {actions.map((action) => (
+          <li
+            key={action.id}
+            className="flex items-baseline gap-3 rounded-md border border-border bg-surface px-4 py-3"
+          >
+            <span
+              className="shrink-0 font-mono text-[12px] leading-[16px] text-foreground-subtle"
+              style={{ fontFeatureSettings: '"tnum"' }}
+            >
+              #{action.chainSeq}
+            </span>
+            <div className="min-w-0">
+              <p className="text-[13px] leading-[18px] text-foreground">
+                <span className="font-medium">{ACTION_LABEL[action.action]}</span>
+                {' · '}L{action.depth} · {action.actorLabel} ·{' '}
+                {formatCascadeDate(action.actedAt)}
+                {action.nextOwnerLabel ? ` → ${action.nextOwnerLabel}` : ''}
+              </p>
+              {actionExcerpt(action) && (
+                <p className="mt-1 text-[13px] leading-[18px] text-foreground-muted">
+                  {actionExcerpt(action)}
+                </p>
+              )}
+            </div>
+          </li>
+        ))}
+      </ol>
+    </section>
+  );
+}
 
 /* ------------------------------------------------------------------ */
 /*  Footer panel                                                       */
@@ -275,8 +368,28 @@ function footerSummary(
 }
 
 /* ------------------------------------------------------------------ */
-/*  Fallback — cascade id not in fixture                               */
+/*  Fallbacks — loading / unknown cascade id                           */
 /* ------------------------------------------------------------------ */
+
+/**
+ * Shown only while the live detail query is in flight for an id with no
+ * fixture counterpart (fixture-matched ids render immediately).
+ */
+function CascadeLoading() {
+  return (
+    <div className="mx-auto max-w-screen-md px-8 py-12">
+      <div
+        className="rounded-md border border-border bg-surface p-8"
+        role="status"
+        aria-live="polite"
+      >
+        <p className="text-[14px] leading-[20px] text-foreground-muted">
+          Loading cascade…
+        </p>
+      </div>
+    </div>
+  );
+}
 
 function CascadeNotFound({ id }: { id: string }) {
   return (

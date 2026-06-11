@@ -3,6 +3,13 @@ package com.meridian.substrate.app.core.exception;
 import com.meridian.substrate.app.api.v1.request.CapabilityCreateRequest;
 import com.meridian.substrate.app.config.JacksonConfig;
 import com.meridian.substrate.common.ai.LlmRateLimitException;
+import com.meridian.substrate.common.domain.enums.CascadeAttentionSignal;
+import com.meridian.substrate.common.domain.enums.CascadeLevelState;
+import com.meridian.substrate.common.domain.enums.CascadeState;
+import com.meridian.substrate.engine.cascade.CascadeQueryService;
+import com.meridian.substrate.engine.cascade.exception.CascadeConflictException;
+import com.meridian.substrate.engine.cascade.exception.CascadeForbiddenException;
+import com.meridian.substrate.engine.cascade.read.CascadeDetail;
 import jakarta.validation.Valid;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -23,28 +30,38 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
+import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * Pins all nine exception mappings of {@link GlobalExceptionHandler}
- * (port-map §2.2) and the no-stack-trace-leak guarantee.
+ * Pins all exception mappings of {@link GlobalExceptionHandler}
+ * (port-map §2.2; engine-spec cascade.md §6.2 additive cascade mappings)
+ * and the no-stack-trace-leak guarantee.
  */
 class GlobalExceptionHandlerTest {
 
+    private static final UUID CASCADE_ID =
+            UUID.fromString("00000000-0000-0000-0000-00000000c45c");
+
     private MockMvc mvc;
+    private CascadeQueryService cascadeQueryService;
 
     @BeforeEach
     void setUp() {
+        cascadeQueryService = mock(CascadeQueryService.class);
         mvc = MockMvcBuilders
                 .standaloneSetup(new ThrowingProbeController())
-                .setControllerAdvice(new GlobalExceptionHandler())
+                .setControllerAdvice(new GlobalExceptionHandler(cascadeQueryService))
                 .setMessageConverters(new MappingJackson2HttpMessageConverter(new JacksonConfig().objectMapper()))
                 .build();
     }
@@ -61,7 +78,7 @@ class GlobalExceptionHandlerTest {
 
     @Test
     void noResourceFound_maps404() {
-        ResponseEntity<?> response = new GlobalExceptionHandler()
+        ResponseEntity<?> response = new GlobalExceptionHandler(cascadeQueryService)
                 .handleNoResource(new NoResourceFoundException(HttpMethod.GET, "/missing"));
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
     }
@@ -120,6 +137,50 @@ class GlobalExceptionHandlerTest {
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.errors[0].code").value("FORBIDDEN"))
                 .andExpect(jsonPath("$.errors[0].message").value("Admin persona required"));
+    }
+
+    /**
+     * Engine-spec cascade.md §6.2: conflict → 409 with the spec code AND the
+     * current {@code CascadeDetail} in the envelope {@code data} so the client
+     * refreshes instead of rendering a generic failure.
+     */
+    @Test
+    void cascadeConflict_maps409_withCurrentDetailInData() throws Exception {
+        when(cascadeQueryService.detail(CASCADE_ID)).thenReturn(Optional.of(minimalDetail()));
+
+        mvc.perform(get("/boom/cascade-conflict"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.errors[0].code").value("CASCADE_STALE_STATE"))
+                .andExpect(jsonPath("$.errors[0].message").value("chain moved"))
+                .andExpect(jsonPath("$.data.id").value(CASCADE_ID.toString()))
+                .andExpect(jsonPath("$.data.currentState").value("in-flight"))
+                .andExpect(jsonPath("$.data.chainSeq").value(2));
+    }
+
+    /** Draft-anchored conflicts carry no cascade id — data stays null, 409 still enveloped. */
+    @Test
+    void cascadeConflict_withoutCascadeId_maps409_withNullData() throws Exception {
+        mvc.perform(get("/boom/cascade-conflict-draft"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.data").doesNotExist())
+                .andExpect(jsonPath("$.errors[0].code").value("CASCADE_ILLEGAL_TRANSITION"));
+    }
+
+    @Test
+    void cascadeForbidden_maps403_withSpecCode() throws Exception {
+        mvc.perform(get("/boom/cascade-forbidden"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.data").doesNotExist())
+                .andExpect(jsonPath("$.errors[0].code").value("CASCADE_NOT_LEVEL_OWNER"));
+    }
+
+    /** Engine-thrown JPA not-found (locked lifecycle lookups) → the same 404 envelope. */
+    @Test
+    void jpaEntityNotFound_maps404() throws Exception {
+        mvc.perform(get("/boom/jpa-not-found"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.errors[0].code").value("NOT_FOUND"))
+                .andExpect(jsonPath("$.errors[0].message").value("Cascade not found: " + CASCADE_ID));
     }
 
     @Test
@@ -186,5 +247,39 @@ class GlobalExceptionHandlerTest {
         public Map<String, String> unhandled() {
             throw new IllegalStateException("secret internal detail");
         }
+
+        @GetMapping("/cascade-conflict")
+        public Map<String, String> cascadeConflict() {
+            throw new CascadeConflictException(
+                    CascadeConflictException.Code.CASCADE_STALE_STATE, CASCADE_ID, "chain moved");
+        }
+
+        @GetMapping("/cascade-conflict-draft")
+        public Map<String, String> cascadeConflictDraft() {
+            throw new CascadeConflictException(
+                    CascadeConflictException.Code.CASCADE_ILLEGAL_TRANSITION, null,
+                    "only OPEN drafts can issue");
+        }
+
+        @GetMapping("/cascade-forbidden")
+        public Map<String, String> cascadeForbidden() {
+            throw new CascadeForbiddenException(
+                    CascadeForbiddenException.Code.CASCADE_NOT_LEVEL_OWNER, CASCADE_ID,
+                    "actor is not the current owner of depth 2");
+        }
+
+        @GetMapping("/jpa-not-found")
+        public Map<String, String> jpaNotFound() {
+            throw new jakarta.persistence.EntityNotFoundException("Cascade not found: " + CASCADE_ID);
+        }
+    }
+
+    /** Minimal in-flight detail — only the fields the 409 contract asserts on. */
+    private static CascadeDetail minimalDetail() {
+        return new CascadeDetail(CASCADE_ID, "Operating Partner", null, null,
+                "original critique", "acceptance criteria", null,
+                CascadeState.IN_FLIGHT, CascadeAttentionSignal.ESCALATING, false,
+                3, 2, CascadeLevelState.LOOKING, "Curasync HIM Director",
+                null, null, null, null, null, 2, List.of(), null, List.of());
     }
 }

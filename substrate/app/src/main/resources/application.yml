@@ -68,9 +68,18 @@ substrate:
   # substrate.engine.tools.dispatch-pool-size (C3) defaults to 8 in code; persona-access
   # allow/deny lists default to homepoc's persona→tool allowlist — override only per engagement.
   orchestrator:
-    # MCP seam to the sibling orchestrator product. Absent => degraded mode (no AI assist).
+    # MCP seam to the sibling orchestrator product. Absent => degraded mode (no AI assist):
+    # POST /api/v1/cascade-drafts/{id}/suggest is 404, everything else unaffected (ADR-001 D14).
     enabled: ${SUBSTRATE_ORCHESTRATOR_ENABLED:false}
     base-url: ${SUBSTRATE_ORCHESTRATOR_URL:}
+  cascade:
+    # Escalation sweeper (engine-spec cascade.md §9, ADR-001 D5): notification-ONLY,
+    # never a state transition. Values mirror the CascadeProperties code defaults —
+    # first-engagement calibration items. Per-cascade responseSlaDays=0 disables the SLA.
+    default-response-sla-days: 7
+    overdue-renotify-days: 3
+    overdue-renotify-limit: 5
+    sweep-cron: "0 0 * * * *"
   llm:
     provider: anthropic
     anthropic:

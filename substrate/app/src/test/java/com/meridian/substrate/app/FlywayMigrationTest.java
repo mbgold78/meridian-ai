@@ -39,15 +39,17 @@ class FlywayMigrationTest {
 
         assertThat(history)
                 .extracting(row -> String.valueOf(row.get("version")))
-                .contains("1", "2");
+                .contains("1", "2", "4");
         assertThat(history)
                 .allSatisfy(row -> assertThat(row.get("success"))
                         .as("migration V%s succeeded", row.get("version"))
                         .isEqualTo(Boolean.TRUE));
-        // Vendor split: db/migration/postgresql/V2_1 must not run on the H2 dev profile.
+        // Vendor split: db/migration/postgresql/V2_1 (partial index) and V4_1
+        // (cascade_level_actions append-only trigger) must not run on the H2
+        // dev profile — H2 stays service-enforced (ADR-001 D9).
         assertThat(history)
                 .extracting(row -> String.valueOf(row.get("version")))
-                .doesNotContain("2.1");
+                .doesNotContain("2.1", "4.1");
     }
 
     @Test
@@ -63,7 +65,10 @@ class FlywayMigrationTest {
                 "document_registry", "evidence", "assertions", "system_uploads",
                 "capabilities", "capability_name_history", "capability_process_links",
                 "capability_system_links", "phase_states", "reader_registrations",
-                "branding_configs");
+                "branding_configs",
+                // V4 cascade engine (engine-spec cascade.md §3)
+                "cascades", "cascade_levels", "cascade_level_actions",
+                "cascade_drafts", "cascade_notifications");
 
         List<String> actual = jdbcTemplate.queryForList(
                 "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'",

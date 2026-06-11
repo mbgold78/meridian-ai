@@ -25,6 +25,7 @@ public class PersonaInterceptor implements HandlerInterceptor {
             personaContext.setPersonaLevel(level);
         }
         personaContext.setPersonaId(request.getHeader("X-Persona-Id"));
+        personaContext.setPersonaLabel(request.getHeader("X-Persona-Label"));
         return true;
     }
 }

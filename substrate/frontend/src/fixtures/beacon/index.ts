@@ -14,6 +14,17 @@
  * import ONLY from this module (`@/fixtures/beacon`), never from the
  * sibling files, so the swap happens in one place.
  *
+ * ── PHASE 2 STATUS: CASCADES ARE SWAPPED ────────────────────────────────
+ * The cascade slice now rides the live read API (engine-spec cascade.md
+ * §11, ADR-001 D13). Portfolio surfaces consume cascades exclusively
+ * through the hooks in `@/features/portfolio/cascadeData`
+ * (`useBeaconCascades` / `useBeaconCascade` / `useBeaconCascadeActions`
+ * over GET /api/v1/cascades*). {@link BEACON_CASCADES} / {@link getCascade}
+ * remain exported ONLY as the degraded/demo fallback consumed inside that
+ * seam: live data renders whenever the API has produced it; these fixtures
+ * render while it is loading or when the backend is absent. Subsidiaries,
+ * contracts, and the portfolio stats below are still Phase-1 fixtures.
+ *
  * The narrative content (subsidiary names, critiques, contracts) is
  * FICTIONAL (port-map appendix #9). It must never ship in a customer
  * engagement build — excise at route + directory level when the live
