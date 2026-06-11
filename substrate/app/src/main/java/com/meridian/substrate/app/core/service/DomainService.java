@@ -26,14 +26,20 @@ public class DomainService {
     }
 
     /**
-     * Retrieve all domains.
+     * Retrieve all domains in creation order. The order is part of the wire
+     * contract since Phase 6a: the frontend workspace resolver falls back to
+     * "first domain in server order" and the Beacon dashboards bind to the
+     * FIRST demo domain — the DemoPack's primary demo domain is created
+     * before the per-subsidiary Beacon satellite domains
+     * ({@code AgentDemoSeeder}), so creation order keeps it first on every
+     * vendor (unsorted {@code findAll()} is unspecified on Postgres).
      *
-     * @return list of all domains
+     * @return list of all domains, oldest first
      */
     @Transactional(readOnly = true)
     public List<Domain> getAllDomains() {
         log.debug("Fetching all domains");
-        return domainRepository.findAll();
+        return domainRepository.findAll(org.springframework.data.domain.Sort.by("createdAt", "id"));
     }
 
     /**

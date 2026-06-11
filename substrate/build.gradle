@@ -34,5 +34,11 @@ subprojects {
 
     tasks.withType(Test).configureEach {
         useJUnitPlatform()
+        // Spring test-context cache (one Boot context per distinct property
+        // set) outgrew the 512m worker default when the 6c gateway suites
+        // landed — Governed3cAcceptanceTest OOMed building its
+        // EntityManagerFactory. Same-shape suites share context keys where
+        // possible; this is the headroom for the rest.
+        maxHeapSize = '2g'
     }
 }

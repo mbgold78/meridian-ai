@@ -4,6 +4,7 @@
  * imported those modules directly); fixed during the port so the barrel is
  * the complete surface. Keep this list in sync when adding a module.
  */
+export * from './agents';
 export * from './branding';
 export * from './capabilities';
 export * from './cascades';

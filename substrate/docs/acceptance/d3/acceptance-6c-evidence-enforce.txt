@@ -1,0 +1,74 @@
+
+================ 7. Deploy + pause a fresh agent for the enforce beats ==> 200, enforcement.effect=gateway-block (the D17 window is CLOSED and the ladder is ENFORCE) ================
+deployed: a-enf
+HTTP        : HTTP 200
+enforcement : {'effect': 'gateway-block', 'confirmationState': 'not-required', 'disclosure': "registry flip enforced at the gateway: the agent's next governed call is denied (guard cache invalidated, 30s TTL net)"}
+
+================ 8. ENFORCE: agent_heartbeat as the PAUSED agent ==> structured isError AGENT_GATE_DENIAL / AGENT_CONTROL_SUSPENDED ================
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"code\":\"AGENT_GATE_DENIAL\",\"reason\":\"AGENT_CONTROL_SUSPENDED\",\"contractKeys\":[],\"clauseIds\":[],\"decisionId\":\"a2d04bc9-5674-46be-a908-c07f265cdab7\",\"message\":\"Action 'agent.heartbeat' denied for AGENT principal 'acceptance-6c-agent-a-enf' (reason AGENT_CONTROL_SUSPENDED): agent 'a-enf' is paused \u2014 the registry flip is the control plane; the touch was sighted and the oversight chain signalled (agents.md \u00a76.4) [decisionId a2d04bc9-5674-46be-a908-c07f265cdab7]\"}"
+    }
+  ],
+  "isError": true,
+  "structuredContent": {
+    "code": "AGENT_GATE_DENIAL",
+    "reason": "AGENT_CONTROL_SUSPENDED",
+    "contractKeys": [],
+    "clauseIds": [],
+    "decisionId": "a2d04bc9-5674-46be-a908-c07f265cdab7",
+    "message": "Action 'agent.heartbeat' denied for AGENT principal 'acceptance-6c-agent-a-enf' (reason AGENT_CONTROL_SUSPENDED): agent 'a-enf' is paused \u2014 the registry flip is the control plane; the touch was sighted and the oversight chain signalled (agents.md \u00a76.4) [decisionId a2d04bc9-5674-46be-a908-c07f265cdab7]"
+  }
+}
+
+================ 9. Kill, then heartbeat ==> SEEN_AFTER_KILL (the highest-urgency signal class) ================
+controlViolations : [{'agentKey': 'a-enf', 'kind': 'ACTIVE_WHILE_PAUSED', 'lastSeenAt': '2026-06-11T11:33:11.049333Z'}, {'agentKey': 'a-enf', 'kind': 'SEEN_AFTER_KILL', 'lastSeenAt': '2026-06-11T11:33:11.049333Z'}]
+budgetsExhausted  : []
+gateCoverage      : {'structured': 0, 'unstructured': 0, 'unevaluated': 0}
+
+================ 10. Unregistered principal ==> denied (registration-required honesty) ================
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"code\":\"AGENT_NOT_REGISTERED\",\"message\":\"principal 'never-registered-agent' is not bound to any agent registration (agent_registrations.mcp_principal_id) \u2014 substrate grants no agent write surface without one; deploy a registration and bind the principal (POST /api/v1/agents, M18)\"}"
+    }
+  ],
+  "isError": true,
+  "structuredContent": {
+    "code": "AGENT_NOT_REGISTERED",
+    "message": "principal 'never-registered-agent' is not bound to any agent registration (agent_registrations.mcp_principal_id) \u2014 substrate grants no agent write surface without one; deploy a registration and bind the principal (POST /api/v1/agents, M18)"
+  }
+}
+
+================ 11. Throttle 2/window, then three governed calls ==> third is AGENT_BUDGET_EXHAUSTED ================
+deployed: a-thr
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"code\":\"AGENT_GATE_DENIAL\",\"reason\":\"AGENT_BUDGET_EXHAUSTED\",\"contractKeys\":[],\"clauseIds\":[],\"decisionId\":\"cfbf6dc6-960f-47ee-a0d3-138f75e32d31\",\"message\":\"Action 'agent.heartbeat' denied for AGENT principal 'acceptance-6c-agent-a-thr' (reason AGENT_BUDGET_EXHAUSTED): agent 'a-thr' exhausted its ACTIONS_PER_WINDOW budget (3 > 2 per 60m window) \u2014 agents.md \u00a78.3 #4 [decisionId cfbf6dc6-960f-47ee-a0d3-138f75e32d31]\"}"
+    }
+  ],
+  "isError": true,
+  "structuredContent": {
+    "code": "AGENT_GATE_DENIAL",
+    "reason": "AGENT_BUDGET_EXHAUSTED",
+    "contractKeys": [],
+    "clauseIds": [],
+    "decisionId": "cfbf6dc6-960f-47ee-a0d3-138f75e32d31",
+    "message": "Action 'agent.heartbeat' denied for AGENT principal 'acceptance-6c-agent-a-thr' (reason AGENT_BUDGET_EXHAUSTED): agent 'a-thr' exhausted its ACTIONS_PER_WINDOW budget (3 > 2 per 60m window) \u2014 agents.md \u00a78.3 #4 [decisionId cfbf6dc6-960f-47ee-a0d3-138f75e32d31]"
+  }
+}
+controlViolations : [{'agentKey': 'a-enf', 'kind': 'ACTIVE_WHILE_PAUSED', 'lastSeenAt': '2026-06-11T11:33:11.049333Z'}, {'agentKey': 'a-enf', 'kind': 'SEEN_AFTER_KILL', 'lastSeenAt': '2026-06-11T11:33:11.049333Z'}]
+budgetsExhausted  : [{'agentKey': 'a-thr', 'budgetKind': 'ACTIONS_PER_WINDOW'}]
+gateCoverage      : {'structured': 1, 'unstructured': 0, 'unevaluated': 1}
+
+================ 12. The seeded agent.promote DENY guard (contracts 3c lever) blocks promote ==> 409 CONTRACT_DENIAL ================
+deployed: a-promo
+{"data":null,"meta":{"timestamp":"2026-06-11T11:33:12.359866400Z","requestId":"f728c6f7-cbd8-4880-9eea-0772d62ff40b","version":"0.1.0","personaLevel":null},"errors":[{"code":"CONTRACT_DENIAL","message":"Action 'agent.promote' denied by contract [demo-gateway-guards] clause(s) 'Agent promotion is blocked under this demo contract (§13 3c check_action lane)' (reason DENY_GUARD_MATCHED) [decisionId e0588a16-622e-478a-9e88-f8a07b8b0fd7]","field":null}]}
+HTTP 409
+
+================ PHASE B (enforce) DONE ================

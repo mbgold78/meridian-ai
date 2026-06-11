@@ -2,12 +2,17 @@ import { useMemo, useState } from 'react';
 import { CaretDown, CaretRight, Robot } from '@phosphor-icons/react';
 import type {
   AgentStatus,
-  BeaconAgent,
   BeaconFinding,
   BeaconSubsidiary,
   Severity,
 } from '@/fixtures/beacon';
 import { cn } from '@/lib/utils';
+import {
+  useBeaconAgentDetail,
+  useBeaconAgentSignals,
+  useBeaconAgents,
+} from '../agentData';
+import type { AgentDataSource, AgentRow } from '../agentData';
 import { todayIso } from '../clock';
 
 /**
@@ -15,12 +20,22 @@ import { todayIso } from '../clock';
  *
  * Three regions, top to bottom:
  *   1. Fleet stat strip — agents active, agents in intervention, open
- *      findings. Counts are computed from the fixture so they cannot
- *      drift from the rest of the demo.
- *   2. Recent agent activity — vertical row list with status pills.
- *      The fixture's `recentActivity` text is rendered verbatim; the
- *      "12 minutes ago" timestamp the spec proposes is a fixture
- *      extension candidate, documented in the completion report.
+ *      findings. Phase 6a swap (engine-spec agents.md §13.5/§13.1): the
+ *      agent counts ride GET /agents/signals when live ("Agents active" ←
+ *      agentsTotal — the fixture card counts the whole non-retired fleet,
+ *      behavior preserved; "Agents in intervention" ←
+ *      agentsInterventionRequired) and fall back to fixture-derived counts.
+ *      The open-findings count stays on the fixture until the findings API
+ *      swap.
+ *   2. Recent agent activity — vertical row list with status pills, riding
+ *      GET /agents via the `agentData` seam (fixture fallback in degraded/
+ *      demo mode). The status pill is GOVERNANCE state; `retired` never
+ *      reaches the pill map (default exclusion + adapter guard, ADR-003 D4).
+ *      `recentActivity` is backend-DERIVED (sighting → lifecycle event →
+ *      "No activity observed"); null adherence is an em-dash, never a
+ *      fabricated number. Verb affordances (pause/kill, 409-refresh,
+ *      "unconfirmed at runtime", liveness line) are 6b detail-panel work —
+ *      no Ops verb UI ships ahead of its API.
  *   3. Open findings — 2-column grid of cards with severity pills and
  *      related-system chips when the finding is process-bound.
  *
@@ -29,18 +44,25 @@ import { todayIso } from '../clock';
  * DEMO_CURRENT_DATE constant directly — port-map §5 S15.
  */
 export function OperationsTab({ sub }: { sub: BeaconSubsidiary }) {
+  const { agents, source } = useBeaconAgents(sub);
+  const signals = useBeaconAgentSignals(sub);
+
   const stats = useMemo(() => {
-    const intervention = sub.agents.filter((a) => a.status === 'intervention-required').length;
+    const intervention =
+      signals?.agentsInterventionRequired ??
+      agents.filter((a) => a.status === 'intervention-required').length;
     return {
-      active: sub.agents.length,
+      active: signals?.agentsTotal ?? agents.length,
       intervention,
       findings: sub.findings.length,
     };
-  }, [sub]);
+  }, [signals, agents, sub]);
 
   // Inline expansion state for the agent fleet — clicking an agent row
   // toggles a panel that shows the agent's deployment criteria + the
-  // full oversight chain. Per governance-3 spec Item 7 (Option a).
+  // full oversight chain. Per governance-3 spec Item 7 (Option a). In live
+  // mode the criteria arrive via the click-through detail call — the render
+  // rule keeps deploymentCriteria off the row shape ([AGENT-PROVENANCE]).
   const [expandedAgentId, setExpandedAgentId] = useState<string | null>(null);
 
   return (
@@ -75,29 +97,32 @@ export function OperationsTab({ sub }: { sub: BeaconSubsidiary }) {
             Recent agent activity
           </h3>
         </header>
-        {sub.agents.length === 0 ? (
+        {agents.length === 0 ? (
           <p className="rounded-md border border-border bg-surface p-6 text-[14px] text-foreground-muted">
             No agents deployed for this subsidiary yet.
           </p>
         ) : (
           <ul className="overflow-hidden rounded-md border border-border bg-surface">
-            {sub.agents.map((agent, i) => {
+            {agents.map((agent, i) => {
               const isExpanded = expandedAgentId === agent.id;
               return (
                 <li
                   key={agent.id}
                   className={cn(
-                    i !== sub.agents.length - 1 && 'border-b border-border',
+                    i !== agents.length - 1 && 'border-b border-border',
                   )}
                 >
                   <AgentActivityRow
                     agent={agent}
+                    source={source}
                     isExpanded={isExpanded}
                     onToggle={() =>
                       setExpandedAgentId(isExpanded ? null : agent.id)
                     }
                   />
-                  {isExpanded && <AgentDeploymentPanel agent={agent} />}
+                  {isExpanded && (
+                    <AgentDeploymentPanel agent={agent} sub={sub} source={source} />
+                  )}
                 </li>
               );
             })}
@@ -168,14 +193,18 @@ function FleetStatCard({ label, value, tone = 'neutral' }: FleetStatCardProps) {
 /* ------------------------------------------------------------------ */
 
 interface AgentActivityRowProps {
-  agent: BeaconAgent;
+  agent: AgentRow;
+  source: AgentDataSource;
   isExpanded: boolean;
   onToggle: () => void;
 }
 
-function AgentActivityRow({ agent, isExpanded, onToggle }: AgentActivityRowProps) {
+function AgentActivityRow({ agent, source, isExpanded, onToggle }: AgentActivityRowProps) {
   const provenance = formatAgentProvenance(agent);
-  const hasDeployment = Boolean(agent.deploymentCriteria);
+  // Live registrations ALWAYS have a mandate (provenance is structural
+  // post-swap — deploy gate, [AGENT-PROVENANCE]); the row shape just does
+  // not carry it (click-through only). Fixture rows keep the field check.
+  const hasDeployment = source === 'live' || Boolean(agent.deploymentCriteria);
   const Caret = isExpanded ? CaretDown : CaretRight;
   return (
     <button
@@ -227,8 +256,27 @@ function AgentActivityRow({ agent, isExpanded, onToggle }: AgentActivityRowProps
  * and the full oversight chain in a structured form. Reserved field
  * from governance-1 (queue item #16); rendered for the first time
  * here per governance-3 Item 7 Option a.
+ *
+ * Phase 6a: in live mode the criteria load via the click-through detail
+ * call (GET /agents/{idOrKey}) on expand — the verbatim render rule keeps
+ * deploymentCriteria OFF the fleet row ([AGENT-PROVENANCE]); while the
+ * detail is in flight the panel shows its not-yet-recorded fallback rather
+ * than fabricating text.
  */
-function AgentDeploymentPanel({ agent }: { agent: BeaconAgent }) {
+function AgentDeploymentPanel({
+  agent,
+  sub,
+  source,
+}: {
+  agent: AgentRow;
+  sub: BeaconSubsidiary;
+  source: AgentDataSource;
+}) {
+  const detail = useBeaconAgentDetail(sub, agent.id, source === 'live');
+  const deploymentCriteria =
+    source === 'live' ? detail?.deploymentCriteria : agent.deploymentCriteria;
+  const oversightChain =
+    source === 'live' ? (detail?.oversightChain ?? agent.oversightChain) : agent.oversightChain;
   return (
     <div
       role="region"
@@ -240,9 +288,9 @@ function AgentDeploymentPanel({ agent }: { agent: BeaconAgent }) {
           <p className="text-[11px] font-medium uppercase tracking-[0.05em] text-foreground-muted">
             Deployment criteria
           </p>
-          {agent.deploymentCriteria ? (
+          {deploymentCriteria ? (
             <p className="mt-2 text-[14px] leading-[20px] text-foreground">
-              {agent.deploymentCriteria}
+              {deploymentCriteria}
             </p>
           ) : (
             <p className="mt-2 text-[14px] leading-[20px] italic text-foreground-muted">
@@ -254,9 +302,9 @@ function AgentDeploymentPanel({ agent }: { agent: BeaconAgent }) {
           <p className="text-[11px] font-medium uppercase tracking-[0.05em] text-foreground-muted">
             Oversight chain
           </p>
-          {agent.oversightChain && agent.oversightChain.length > 0 ? (
+          {oversightChain && oversightChain.length > 0 ? (
             <ol role="list" className="mt-2 flex flex-col gap-1.5">
-              {agent.oversightChain.map((owner, idx) => (
+              {oversightChain.map((owner, idx) => (
                 <li
                   key={`${owner}-${idx}`}
                   className="flex items-baseline gap-2 text-[13px] leading-[18px] text-foreground"
@@ -285,14 +333,15 @@ function AgentDeploymentPanel({ agent }: { agent: BeaconAgent }) {
 
 /**
  * Builds the compact provenance line for an agent row. Returns null if
- * any of the four provenance fields are missing — the row simply omits
- * the line in that case (e.g. agents at subsidiaries that haven't been
- * polished for substrate-as-governance surfacing yet).
+ * any of the provenance fields are missing — the row simply omits the
+ * line in that case (fixture rows at unpolished subsidiaries). Live rows
+ * always carry provenance (the deploy gate makes it structural —
+ * [AGENT-PROVENANCE]), so the line always renders post-swap.
  *
  * The deployment criteria field is intentionally NOT included here; it's
  * reserved for the click-through detail surface (governance-3).
  */
-function formatAgentProvenance(agent: BeaconAgent): string | null {
+function formatAgentProvenance(agent: AgentRow): string | null {
   const { deployedBy, deployedAt, oversightChain } = agent;
   if (!deployedBy || !deployedAt || !oversightChain || oversightChain.length === 0) {
     return null;

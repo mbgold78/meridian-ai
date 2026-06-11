@@ -102,7 +102,7 @@ class PostgresContractGatewayDenyRollbackIT {
             // The governed business mutation, same transaction as the PDP call
             // (§4.2 PEP posture): it must NOT survive the DENY.
             registryService.create(twoPartyContract(domainId, "biz-mutation-denied"));
-            gateway.evaluate(new GovernedAction("agent.promote",
+            gateway.evaluate(new GovernedAction("cascade.issue",
                     Principal.agent("it-agent"), domainId, null, null));
         })).isInstanceOf(ContractDeniedException.class)
                 .satisfies(thrown -> {
@@ -126,7 +126,7 @@ class PostgresContractGatewayDenyRollbackIT {
                     assertThat(row.getId()).isEqualTo(denial.getDecisionId());
                     assertThat(row.getDecision()).isEqualTo(GatewayDecision.DENY);
                     assertThat(row.getMode()).isEqualTo("enforce");
-                    assertThat(row.getActionType()).isEqualTo("agent.promote");
+                    assertThat(row.getActionType()).isEqualTo("cascade.issue");
                     assertThat(row.getClauseIds().get(0).asText())
                             .isEqualTo(guardId.toString());
                 });
@@ -141,7 +141,7 @@ class PostgresContractGatewayDenyRollbackIT {
 
         Decision decision = tx.execute(status -> {
             registryService.create(twoPartyContract(domainId, "biz-mutation-shadowed"));
-            return gateway.evaluate(new GovernedAction("agent.promote",
+            return gateway.evaluate(new GovernedAction("cascade.issue",
                     Principal.agent("it-agent"), domainId, null, null));
         });
 
@@ -172,7 +172,7 @@ class PostgresContractGatewayDenyRollbackIT {
                 Instant.now(), "gateway-it",
                 List.of(party("Party A"), party("Party B")),
                 List.of(), List.of(),
-                List.of(new ContractRegistryService.GuardCommand("agent.promote", null,
+                List.of(new ContractRegistryService.GuardCommand("cascade.issue", null,
                         GuardEffect.DENY, null,
                         "Synthetic DENY guard — §13 3c acceptance posture")),
                 List.of());

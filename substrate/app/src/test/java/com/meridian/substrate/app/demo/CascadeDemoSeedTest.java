@@ -505,10 +505,18 @@ class CascadeDemoSeedTest {
     // ----------------------------------------------------------------- helpers
 
     private UUID demoDomainId() {
-        List<Domain> domains = domainRepository.findAll();
-        assertThat(domains).hasSize(1);
-        assertThat(domains.get(0).isDemo()).isTrue();
-        return domains.get(0).getId();
+        // The PRIMARY demo domain — since Phase 6a the AgentDemoSeeder also
+        // creates one Beacon SATELLITE domain per fixture subsidiary (a Beacon
+        // subsidiary IS a Domain — engine-spec agents.md §15), marked
+        // metadata.beaconSubsidiary; the cascade fixtures live in the primary
+        // domain only.
+        List<Domain> primaries = domainRepository.findAll().stream()
+                .filter(Domain::isDemo)
+                .filter(d -> d.getMetadata() == null
+                        || !d.getMetadata().path("beaconSubsidiary").asBoolean(false))
+                .toList();
+        assertThat(primaries).hasSize(1);
+        return primaries.get(0).getId();
     }
 
     private Cascade byCritique(UUID domainId, String originalCritique) {

@@ -39,6 +39,27 @@ public final class GovernedActions {
     /** Spec-§4.1 spelling; carried with a non-null {@code dispatchId}. */
     public static final String APPLY_DISPATCH_RESULT = "apply_dispatch_result";
 
+    // ----------------------------------------------- agent registry (ADR-003)
+    /**
+     * Agent deploy transits the gateway as a HUMAN-principal governed action
+     * (engine-spec agents.md §5.4) — a contract can guard agent deployment.
+     * The 6c built-in non-removable guard additionally denies AGENT
+     * principals on this action (agents never operate lifecycle, §8.4).
+     */
+    public static final String AGENT_DEPLOY = "agent.deploy";
+    /** The contracts 3c acceptance seeds a DENY guard on this name (§8.4); verb wired at 6b. */
+    public static final String AGENT_PROMOTE = "agent.promote";
+    /** agents.md §12 — MCP {@code agent_heartbeat} (HEARTBEAT sighting; observation scope). */
+    public static final String AGENT_HEARTBEAT = "agent.heartbeat";
+    /** agents.md §12 — MCP {@code report_agent_activity} (sightings + metric samples). */
+    public static final String AGENT_REPORT_ACTIVITY = "agent.report_activity";
+    /**
+     * agents.md §12/§5.1 M17 — MCP {@code acknowledge_control}: the ONE
+     * governed write a PAUSED/RETIRED agent principal retains (§8.3 check 1
+     * exception — acknowledging shutdown is the compliant act).
+     */
+    public static final String AGENT_ACKNOWLEDGE_CONTROL = "agent.acknowledge_control";
+
     // --------------------------------------------------- cascade engine (D2)
     public static final String CASCADE_CREATE_DRAFT = "cascade.create_draft";
     public static final String CASCADE_PATCH_DRAFT = "cascade.patch_draft";

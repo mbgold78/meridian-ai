@@ -1,7 +1,13 @@
 package com.meridian.substrate.app.mcp;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.meridian.substrate.common.repo.AgentRegistrationRepository;
+import com.meridian.substrate.common.repo.AgentThrottleBudgetRepository;
 import com.meridian.substrate.common.repo.ContractPartyRepository;
+import com.meridian.substrate.engine.agent.AgentControlConfirmationService;
+import com.meridian.substrate.engine.agent.AgentLivenessService;
+import com.meridian.substrate.engine.agent.AgentMetricService;
+import com.meridian.substrate.engine.agent.AgentQueryService;
 import com.meridian.substrate.engine.contract.gateway.AdvisoryCheckService;
 import com.meridian.substrate.engine.contract.monitor.AttestationService;
 import com.meridian.substrate.engine.contract.monitor.BreachService;
@@ -16,6 +22,7 @@ import io.modelcontextprotocol.server.McpServerFeatures;
 import io.modelcontextprotocol.server.McpSyncServer;
 import io.modelcontextprotocol.server.transport.HttpServletStreamableServerTransportProvider;
 import io.modelcontextprotocol.spec.McpSchema;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.web.servlet.ServletRegistrationBean;
 import org.springframework.context.annotation.Bean;
@@ -103,6 +110,28 @@ public class ContractsMcpConfig {
     }
 
     /**
+     * agents.md §12 (6c): agent tools join the SAME server — no second MCP
+     * server, one principal model, one gating config (ADR-003 D16). Gated by
+     * {@code substrate.agents.mcp.enabled} (agents.md §1, default true);
+     * disabling drops the tools while REST stays unaffected.
+     */
+    @Bean
+    @ConditionalOnProperty(name = "substrate.agents.mcp.enabled",
+            havingValue = "true", matchIfMissing = true)
+    public AgentMcpTools agentMcpTools(AgentQueryService agentQueryService,
+                                       AgentLivenessService agentLivenessService,
+                                       AgentMetricService agentMetricService,
+                                       AgentControlConfirmationService agentControlConfirmationService,
+                                       AgentRegistrationRepository agentRegistrationRepository,
+                                       AgentThrottleBudgetRepository agentThrottleBudgetRepository,
+                                       ObjectMapper objectMapper,
+                                       McpJsonMapper contractsMcpJsonMapper) {
+        return new AgentMcpTools(agentQueryService, agentLivenessService, agentMetricService,
+                agentControlConfirmationService, agentRegistrationRepository,
+                agentThrottleBudgetRepository, objectMapper, contractsMcpJsonMapper);
+    }
+
+    /**
      * Streamable HTTP servlet transport. The context extractor lifts
      * {@value #PRINCIPAL_HEADER} off EVERY request into the SDK transport
      * context — handler threads must never touch the servlet request
@@ -147,10 +176,13 @@ public class ContractsMcpConfig {
             HttpServletStreamableServerTransportProvider contractsMcpTransportProvider,
             McpJsonMapper contractsMcpJsonMapper,
             ContractsMcpTools contractsMcpTools,
-            ContractsMcpWriteTools contractsMcpWriteTools) {
+            ContractsMcpWriteTools contractsMcpWriteTools,
+            ObjectProvider<AgentMcpTools> agentMcpTools) {
         List<McpServerFeatures.SyncToolSpecification> tools = new ArrayList<>();
         tools.addAll(contractsMcpTools.specifications());        // §8.2 read tools
         tools.addAll(contractsMcpWriteTools.specifications());   // §8.3 governed write tools
+        // agents.md §12 (6c): agent tools on the SAME server, when enabled.
+        agentMcpTools.ifAvailable(agents -> tools.addAll(agents.specifications()));
         return McpServer.sync(contractsMcpTransportProvider)
                 .serverInfo(SERVER_NAME, SERVER_VERSION)
                 .capabilities(McpSchema.ServerCapabilities.builder().tools(true).build())

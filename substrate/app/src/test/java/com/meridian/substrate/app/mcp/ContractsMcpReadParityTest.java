@@ -111,14 +111,18 @@ class ContractsMcpReadParityTest {
                 .map(McpSchema.Tool::name).toList();
         // The FULL server inventory, pinned exactly: §8.2 read tools (this
         // suite) + the §8.3 governed write tools (behavior pinned by
-        // ContractsMcpWriteTest, chunk 3c).
+        // ContractsMcpWriteTest, chunk 3c) + the agents.md §12 agent tools
+        // (phase 6c — SAME server, no second one; behavior pinned by
+        // AgentMcpToolsTest).
         assertThat(tools).containsExactlyInAnyOrder(
                 "list_contracts", "get_contract", "get_commitments",
                 "get_obligations_for_principal", "get_breaches",
                 "get_enforcement_decisions", "check_action",
                 "attest_commitment", "record_commitment_progress", "report_metric",
                 "respond_to_contract", "invoke_decline",
-                "acknowledge_breach", "mark_breach_remediated", "waive_breach");
+                "acknowledge_breach", "mark_breach_remediated", "waive_breach",
+                "list_agents", "get_agent", "get_my_registration", "get_my_control_state",
+                "agent_heartbeat", "report_agent_activity", "acknowledge_control");
     }
 
     @Test

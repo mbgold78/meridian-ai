@@ -82,14 +82,34 @@ class DemoSeedEnabledTest {
     }
 
     @Test
-    void bulkSeedCreatesExactlyOneDemoDomain() {
+    void bulkSeedCreatesExactlyOnePrimaryDemoDomainPlusBeaconSatellites() {
         List<Domain> domains = domainRepository.findAll();
-        assertThat(domains).hasSize(1);
-        assertThat(domains.get(0).isDemo())
+        // Phase 6a: AgentDemoSeeder adds one Beacon SATELLITE domain per
+        // fixture subsidiary (22 — a Beacon subsidiary IS a Domain,
+        // engine-spec agents.md §15), all isDemo, all flagged
+        // metadata.beaconSubsidiary. Exactly ONE primary demo domain remains.
+        List<Domain> primaries = domains.stream()
+                .filter(d -> d.getMetadata() == null
+                        || !d.getMetadata().path("beaconSubsidiary").asBoolean(false))
+                .toList();
+        assertThat(primaries).hasSize(1);
+        assertThat(primaries.get(0).isDemo())
                 .as("DemoPack domain must be marked isDemo=true (port-map §5 S1)")
                 .isTrue();
-        assertThat(domains.get(0).getName()).isEqualTo("Operational Risk");
-        assertThat(domains.get(0).getCreatedBy()).isEqualTo("seed");
+        assertThat(primaries.get(0).getName()).isEqualTo("Operational Risk");
+        assertThat(primaries.get(0).getCreatedBy()).isEqualTo("seed");
+
+        List<Domain> satellites = domains.stream()
+                .filter(d -> !primaries.contains(d))
+                .toList();
+        assertThat(satellites).hasSize(22);
+        assertThat(satellites)
+                .as("every Beacon satellite is a demo domain (trap #9: demo data never ships)")
+                .allSatisfy(d -> {
+                    assertThat(d.isDemo()).isTrue();
+                    assertThat(d.getCreatedBy()).isEqualTo("seed");
+                    assertThat(d.getMetadata().get("beaconSlug").asText()).isNotBlank();
+                });
     }
 
     @Test
@@ -107,8 +127,32 @@ class DemoSeedEnabledTest {
                 .isEqualTo(fixtureCount("demopack/canonical-entities.json"));
         assertThat(entityOverlapRepository.count()).isEqualTo(fixtureCount("demopack/entity-overlaps.json"));
         assertThat(findingRepository.count()).isEqualTo(fixtureCount("demopack/findings.json"));
+        // Phase 6b: the AgentDemoSeeder drives the REAL verb path, and that
+        // path chain-mirrors DEPLOYED + PROMOTED anchors into design_decisions
+        // (engine-spec agents.md §11/§15; ADR-003 D14/D18) — one AGENT_DEPLOYED
+        // per fixture agent + one AGENT_PROMOTED per non-shadow fixture agent,
+        // on top of the fixture design decisions.
         assertThat(designDecisionRepository.count())
-                .isEqualTo(fixtureCount("demopack/design-decisions.json"));
+                .isEqualTo(fixtureCount("demopack/design-decisions.json")
+                        + beaconAgentCount(a -> true)
+                        + beaconAgentCount(status -> !"shadow".equals(status)));
+    }
+
+    /** Beacon fixture agents whose seed stream matches a status predicate (§15 vectors). */
+    private long beaconAgentCount(java.util.function.Predicate<String> statusFilter)
+            throws Exception {
+        com.fasterxml.jackson.databind.JsonNode pack = objectMapper.readTree(
+                new org.springframework.core.io.ClassPathResource(
+                        "demopack/beacon-agents.json").getInputStream());
+        long count = 0;
+        for (com.fasterxml.jackson.databind.JsonNode sub : pack.get("subsidiaries")) {
+            for (com.fasterxml.jackson.databind.JsonNode agent : sub.get("agents")) {
+                if (statusFilter.test(agent.get("status").asText())) {
+                    count++;
+                }
+            }
+        }
+        return count;
     }
 
     @Test

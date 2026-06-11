@@ -23,5 +23,25 @@ public enum DecisionType {
      * layout pinned by {@code CanonicalJsonHashVectorTest} hashes
      * {@code name()} per row and is layout-stable under new enum values).
      */
-    CONTRACT_ACCOUNTABILITY
+    CONTRACT_ACCOUNTABILITY,
+
+    /**
+     * Substrate addition (recorded deviation, same posture as
+     * {@link #CONTRACT_ACCOUNTABILITY}): ADR-003 D14 agent governance anchors
+     * mirrored by {@code engine.agent}'s {@code AgentGovernanceChainMirror} —
+     * bounded to exactly three event classes (engine-spec agents.md §11):
+     * DEPLOYED (canonical JSON includes {@code criteria_digest} — mandate
+     * creation is tamper-evident), PROMOTED (production entry), and
+     * RETIRED/KILLED (termination, carrying {@code retired_reason}; both land
+     * as {@link #AGENT_RETIRED}). The shared mirror mechanism is
+     * {@code DecisionLogService.appendDecision} + its pinned canonical-JSON
+     * layout in {@code engine.decision} — never forked (ADR-003 D14
+     * coordination rule); the anchor field layout is frozen by
+     * {@code AgentMirrorHashVectorTest} BEFORE enabling (port-map trap #3).
+     */
+    AGENT_DEPLOYED,
+    /** See {@link #AGENT_DEPLOYED} — ADR-003 D14 agent promotion anchor. */
+    AGENT_PROMOTED,
+    /** See {@link #AGENT_DEPLOYED} — ADR-003 D14 agent termination anchor (kill AND orderly retire). */
+    AGENT_RETIRED
 }

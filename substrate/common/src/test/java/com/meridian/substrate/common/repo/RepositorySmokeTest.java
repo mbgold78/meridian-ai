@@ -1,5 +1,9 @@
 package com.meridian.substrate.common.repo;
 
+import com.meridian.substrate.common.domain.AgentCriteriaGate;
+import com.meridian.substrate.common.domain.AgentOversightLink;
+import com.meridian.substrate.common.domain.AgentRegistration;
+import com.meridian.substrate.common.domain.AgentStatusEvent;
 import com.meridian.substrate.common.domain.Capability;
 import com.meridian.substrate.common.domain.Cascade;
 import com.meridian.substrate.common.domain.CascadeLevel;
@@ -12,6 +16,16 @@ import com.meridian.substrate.common.domain.ContractPartyResponse;
 import com.meridian.substrate.common.domain.Domain;
 import com.meridian.substrate.common.domain.Evidence;
 import com.meridian.substrate.common.domain.PhaseState;
+import com.meridian.substrate.common.domain.enums.AgentEventType;
+import com.meridian.substrate.common.domain.enums.AgentExecutionLocus;
+import com.meridian.substrate.common.domain.enums.AgentGateRuleType;
+import com.meridian.substrate.common.domain.enums.AgentInterventionStatus;
+import com.meridian.substrate.common.domain.enums.AgentNotificationType;
+import com.meridian.substrate.common.domain.enums.AgentOperationalMode;
+import com.meridian.substrate.common.domain.enums.AgentReviewDecision;
+import com.meridian.substrate.common.domain.enums.AgentReviewKind;
+import com.meridian.substrate.common.domain.enums.AgentSightingChannel;
+import com.meridian.substrate.common.domain.enums.AgentSupervisoryModel;
 import com.meridian.substrate.common.domain.enums.BrandingConfigStatus;
 import com.meridian.substrate.common.domain.enums.BreachStatus;
 import com.meridian.substrate.common.domain.enums.CommitmentComplianceState;
@@ -115,6 +129,17 @@ class RepositorySmokeTest {
     @Autowired private ContractBreachRepository contractBreachRepository;
     @Autowired private ContractEventRepository contractEventRepository;
     @Autowired private ContractEnforcementDecisionRepository contractEnforcementDecisionRepository;
+    @Autowired private AgentRegistrationRepository agentRegistrationRepository;
+    @Autowired private AgentOversightLinkRepository agentOversightLinkRepository;
+    @Autowired private AgentStatusEventRepository agentStatusEventRepository;
+    @Autowired private AgentInterventionRepository agentInterventionRepository;
+    @Autowired private AgentComplianceReviewRepository agentComplianceReviewRepository;
+    @Autowired private AgentCriteriaGateRepository agentCriteriaGateRepository;
+    @Autowired private AgentMetricSampleRepository agentMetricSampleRepository;
+    @Autowired private AgentThrottleBudgetRepository agentThrottleBudgetRepository;
+    @Autowired private AgentRateCounterRepository agentRateCounterRepository;
+    @Autowired private AgentSightingRepository agentSightingRepository;
+    @Autowired private AgentNotificationRepository agentNotificationRepository;
 
     @Test
     void allDerivedAndJpqlQueriesParseAndExecute() {
@@ -268,6 +293,174 @@ class RepositorySmokeTest {
                 id, GatewayDecision.WOULD_DENY)).isEmpty();
         assertThat(contractEnforcementDecisionRepository.findByDomainIdAndDecisionAndDecidedAtAfter(
                 id, GatewayDecision.DENY, Instant.EPOCH)).isEmpty();
+    }
+
+    /**
+     * Agent registry repositories (engine-spec agents.md §2; phase 6a part 1):
+     * every derived/JPQL method invoked once on the empty H2 slice so property
+     * paths and the JPQL (incl. the PESSIMISTIC_WRITE {@code findByIdForUpdate}
+     * and the atomic-increment {@code @Modifying} counter UPDATE) parse and
+     * execute. H2-green is never the Postgres acceptance gate —
+     * PostgresAgentPersistenceIT in CI is.
+     */
+    @Test
+    void agentQueriesParseAndExecute() {
+        UUID id = UUID.randomUUID();
+
+        assertThat(agentRegistrationRepository.findByDomainId(id)).isEmpty();
+        assertThat(agentRegistrationRepository.findByDomainIdAndOperationalMode(
+                id, AgentOperationalMode.LIVE)).isEmpty();
+        assertThat(agentRegistrationRepository.findByDomainIdAndOperationalModeNot(
+                id, AgentOperationalMode.RETIRED)).isEmpty();
+        assertThat(agentRegistrationRepository.findByDomainIdAndAgentKey(id, "no-such-key")).isEmpty();
+        assertThat(agentRegistrationRepository.findByAgentKey("no-such-key")).isEmpty();
+        assertThat(agentRegistrationRepository.findByMcpPrincipalId("no-such-principal")).isEmpty();
+        assertThat(agentRegistrationRepository.findByIdForUpdate(id)).isEmpty();
+
+        assertThat(agentOversightLinkRepository.findByAgentRegistrationIdOrderByPositionAsc(id)).isEmpty();
+
+        assertThat(agentStatusEventRepository.findById(id)).isEmpty();
+        assertThat(agentStatusEventRepository.findByAgentRegistrationIdOrderByEventSeqAsc(id)).isEmpty();
+        assertThat(agentStatusEventRepository.findByAgentRegistrationIdAndIdempotencyKey(
+                id, "no-such-key")).isEmpty();
+        assertThat(agentStatusEventRepository.findFirstByAgentRegistrationIdOrderByEventSeqDesc(id)).isEmpty();
+        assertThat(agentStatusEventRepository.countByAgentRegistrationId(id)).isZero();
+
+        assertThat(agentInterventionRepository.findByAgentRegistrationIdOrderByOpenedAtDesc(id)).isEmpty();
+        assertThat(agentInterventionRepository.findByAgentRegistrationIdAndStatus(
+                id, AgentInterventionStatus.OPEN)).isEmpty();
+        assertThat(agentInterventionRepository.findByDomainIdAndStatus(
+                id, AgentInterventionStatus.OPEN)).isEmpty();
+        assertThat(agentInterventionRepository.findFirstByAgentRegistrationIdAndSourceKeyAndStatus(
+                id, "active-while-paused", AgentInterventionStatus.OPEN)).isEmpty();
+        assertThat(agentInterventionRepository.countByAgentRegistrationIdAndStatus(
+                id, AgentInterventionStatus.OPEN)).isZero();
+
+        assertThat(agentComplianceReviewRepository.findByAgentRegistrationIdOrderByRequestedAtDesc(id)).isEmpty();
+        assertThat(agentComplianceReviewRepository.findByAgentRegistrationIdAndReviewKind(
+                id, AgentReviewKind.PROMOTION)).isEmpty();
+        assertThat(agentComplianceReviewRepository
+                .findFirstByAgentRegistrationIdAndReviewKindAndDecisionAndConsumedByEventIdIsNullAndDecidedAtGreaterThanEqualOrderByDecidedAtDesc(
+                        id, AgentReviewKind.PROMOTION, AgentReviewDecision.APPROVED, Instant.EPOCH)).isEmpty();
+
+        assertThat(agentCriteriaGateRepository.findByAgentRegistrationIdOrderBySequenceOrderAsc(id)).isEmpty();
+
+        assertThat(agentMetricSampleRepository.findByAgentRegistrationIdAndMetricKeyAndPeriodKey(
+                id, "adherence", "2026-05")).isEmpty();
+        assertThat(agentMetricSampleRepository.findByAgentRegistrationIdAndMetricKeyOrderByReportedAtDesc(
+                id, "adherence")).isEmpty();
+        assertThat(agentMetricSampleRepository.findByAgentRegistrationIdAndReportedAtAfterOrderByReportedAtDesc(
+                id, Instant.EPOCH)).isEmpty();
+        assertThat(agentMetricSampleRepository.findFirstByAgentRegistrationIdAndMetricKeyOrderByReportedAtDesc(
+                id, "adherence")).isEmpty();
+
+        assertThat(agentThrottleBudgetRepository.findByAgentRegistrationIdAndActiveTrue(id)).isEmpty();
+        assertThat(agentThrottleBudgetRepository.findByAgentRegistrationIdAndBudgetKindAndActiveTrue(
+                id, "ACTIONS_PER_WINDOW")).isEmpty();
+
+        assertThat(agentRateCounterRepository.findByAgentRegistrationIdAndWindowStart(
+                id, Instant.EPOCH)).isEmpty();
+        // atomic in-DB increment (S12 lesson) — zero rows on the empty slice
+        assertThat(agentRateCounterRepository.incrementWindow(id, Instant.EPOCH)).isZero();
+
+        assertThat(agentSightingRepository.findByAgentRegistrationIdOrderBySeenAtDesc(id)).isEmpty();
+        assertThat(agentSightingRepository.findByAgentRegistrationIdAndSeenAtAfterOrderBySeenAtDesc(
+                id, Instant.EPOCH)).isEmpty();
+        assertThat(agentSightingRepository.findFirstByAgentRegistrationIdOrderBySeenAtDesc(id)).isEmpty();
+        assertThat(agentSightingRepository
+                .findFirstByAgentRegistrationIdAndDetailIsNotNullOrderBySeenAtDesc(id)).isEmpty();
+        assertThat(agentSightingRepository.existsByAgentRegistrationIdAndChannelAndBucketKey(
+                id, AgentSightingChannel.HEARTBEAT, "2026-06-11T10")).isFalse();
+
+        assertThat(agentNotificationRepository
+                .findByRecipientMemberIdAndReadAtIsNullOrderByCreatedAtDesc(id)).isEmpty();
+        assertThat(agentNotificationRepository.findByRecipientMemberIdOrderByCreatedAtDesc(id)).isEmpty();
+        assertThat(agentNotificationRepository.findByAgentRegistrationIdOrderByCreatedAtAsc(id)).isEmpty();
+        assertThat(agentNotificationRepository.findByAgentRegistrationIdAndNotificationType(
+                id, AgentNotificationType.AGENT_DEPLOYED)).isEmpty();
+        assertThat(agentNotificationRepository.existsByDedupeKey("no-such-dedupe-key")).isFalse();
+    }
+
+    /**
+     * Agent aggregate + ordered oversight chain + frozen criteria gate +
+     * append-only DEPLOYED event round-trip on the H2 slice: column defaults
+     * (readOnly true, standing UNEVALUATED, counts zero) hold and the
+     * insert-only event surface (extends {@code Repository}, agents.md §5.5)
+     * saves and reads back without exposing any update/delete methods.
+     */
+    @Test
+    void agentRepositoriesRoundTrip() {
+        UUID domainId = UUID.randomUUID();
+
+        AgentRegistration reg = new AgentRegistration();
+        reg.setDomainId(domainId);
+        reg.setAgentKey("smoke-agent");
+        reg.setName("Smoke Agent");
+        reg.setRoleDescription("Smokes the repository layer");
+        reg.setExecutionLocus(AgentExecutionLocus.CUSTOMER_SYSTEM);
+        reg.setDeployedByLabel("Smoke Team");
+        reg.setDeployedAt(Instant.parse("2026-06-01T00:00:00Z"));
+        reg.setDeploymentCriteria("Smoke the persistence layer, target 100% green");
+        reg.setCriteriaDigest("0".repeat(64));
+        reg.setSupervisoryModel(AgentSupervisoryModel.HUMAN_IN_LOOP);
+        reg.setOperationalMode(AgentOperationalMode.SHADOW);
+        reg.setShadowEnteredAt(Instant.parse("2026-06-01T00:00:00Z"));
+        reg.setEventSeq(1);
+        reg = agentRegistrationRepository.save(reg);
+
+        AgentOversightLink link = new AgentOversightLink();
+        link.setAgentRegistrationId(reg.getId());
+        link.setPosition(1);
+        link.setLabel("Smoke Lead");
+        agentOversightLinkRepository.save(link);
+
+        AgentCriteriaGate gate = new AgentCriteriaGate();
+        gate.setAgentRegistrationId(reg.getId());
+        gate.setSequenceOrder(0);
+        gate.setGateText("target 100% green");
+        gate.setRuleType(AgentGateRuleType.UNSTRUCTURED);
+        agentCriteriaGateRepository.save(gate);
+
+        AgentStatusEvent deployed = new AgentStatusEvent();
+        deployed.setAgentRegistrationId(reg.getId());
+        deployed.setDomainId(domainId);
+        deployed.setEventSeq(1);
+        deployed.setEventType(AgentEventType.DEPLOYED);
+        deployed.setActorType(ContractActorType.HUMAN);
+        deployed.setActorLabel("Smoke Operator");
+        deployed.setIdempotencyKey("smoke-deploy-1");
+        deployed.setOccurredAt(Instant.parse("2026-06-01T00:00:00Z"));
+        agentStatusEventRepository.save(deployed);
+
+        assertThat(agentRegistrationRepository.findByDomainIdAndAgentKey(domainId, "smoke-agent"))
+                .isPresent()
+                .get()
+                .satisfies(a -> {
+                    assertThat(a.getOperationalMode()).isEqualTo(AgentOperationalMode.SHADOW);
+                    assertThat(a.isReadOnly()).as("P11 read-only default").isTrue();
+                    assertThat(a.getOpenInterventionCount()).isZero();
+                });
+        assertThat(agentRegistrationRepository.findByDomainIdAndOperationalModeNot(
+                domainId, AgentOperationalMode.RETIRED)).hasSize(1);
+        assertThat(agentRegistrationRepository.findByIdForUpdate(reg.getId())).isPresent();
+
+        assertThat(agentOversightLinkRepository.findByAgentRegistrationIdOrderByPositionAsc(reg.getId()))
+                .extracting(AgentOversightLink::getLabel)
+                .containsExactly("Smoke Lead");
+
+        assertThat(agentCriteriaGateRepository.findByAgentRegistrationIdOrderBySequenceOrderAsc(reg.getId()))
+                .singleElement()
+                .satisfies(g -> {
+                    assertThat(g.getStanding().wireValue()).isEqualTo("unevaluated");
+                    assertThat(g.getPredicate()).as("predicate NULL iff UNSTRUCTURED").isNull();
+                });
+
+        assertThat(agentStatusEventRepository.findByAgentRegistrationIdOrderByEventSeqAsc(reg.getId()))
+                .extracting(AgentStatusEvent::getEventType)
+                .containsExactly(AgentEventType.DEPLOYED);
+        assertThat(agentStatusEventRepository.findByAgentRegistrationIdAndIdempotencyKey(
+                reg.getId(), "smoke-deploy-1")).isPresent();
+        assertThat(agentStatusEventRepository.countByAgentRegistrationId(reg.getId())).isEqualTo(1);
     }
 
     /**

@@ -1,6 +1,7 @@
 package com.meridian.substrate.app.architecture;
 
 import com.meridian.substrate.common.governance.UngovernedModule;
+import com.meridian.substrate.common.repo.AgentStatusEventRepository;
 import com.meridian.substrate.common.repo.ContractEnforcementDecisionRepository;
 import com.meridian.substrate.common.repo.ContractEventRepository;
 import com.meridian.substrate.common.repo.ContractMonitorRunRepository;
@@ -114,12 +115,17 @@ class GovernedArchitectureTest {
             "com.meridian.substrate.engine..",
     };
 
-    /** §10.9 append-only repositories (no update/delete code path may exist). */
+    /**
+     * §10.9 append-only repositories (no update/delete code path may exist) +
+     * the agent audit log (engine-spec agents.md §5.5 / invariant I4; test
+     * plan #6 ArchUnit half).
+     */
     static final Class<?>[] APPEND_ONLY_REPOSITORIES = {
             ContractEventRepository.class,
             ContractMonitorRunRepository.class,
             ContractPartyResponseRepository.class,
             ContractEnforcementDecisionRepository.class,
+            AgentStatusEventRepository.class,
     };
 
     // ------------------------------------------------- 1. governed coverage

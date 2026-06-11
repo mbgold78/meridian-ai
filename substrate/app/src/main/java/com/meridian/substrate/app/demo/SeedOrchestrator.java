@@ -123,8 +123,17 @@ public class SeedOrchestrator {
     }
 
     private void runIdempotentForExistingDemoDomains(List<Seeder> ordered) {
+        // Beacon SATELLITE domains (one per fixture subsidiary, created by
+        // AgentDemoSeeder — engine-spec agents.md §15: a Beacon subsidiary IS
+        // a Domain) are excluded from the per-domain sample iteration: the
+        // Phase-1 sample seeders and the cascade fixtures belong to the
+        // PRIMARY demo domain only; re-seeding them into 22 satellites would
+        // multiply fixture data. AgentDemoSeeder re-converges the satellite
+        // fleet itself when invoked for the primary domain.
         List<Domain> demoDomains = domainRepository.findAll().stream()
                 .filter(Domain::isDemo)
+                .filter(d -> d.getMetadata() == null
+                        || !d.getMetadata().path("beaconSubsidiary").asBoolean(false))
                 .toList();
         if (demoDomains.isEmpty()) {
             log.info("[seed] Existing domain(s) but none marked isDemo — DemoPack "

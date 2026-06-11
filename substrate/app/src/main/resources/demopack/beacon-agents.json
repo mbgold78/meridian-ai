@@ -1,0 +1,1088 @@
+{
+  "_source": "meridian-homepoc/frontend/src/demo/beacon/subsidiaries/*.ts (fixture truth; substrate copies verified byte-identical) via scripts/extract-beacon-agents.ts",
+  "_copiedAt": "2026-06-11",
+  "subsidiaries": [
+    {
+      "slug": "curasync-clinical",
+      "name": "Curasync Clinical Systems",
+      "description": "Clinical workflow and EHR-adjacent platform serving 4,200 ambulatory practices across the US.",
+      "agents": [
+        {
+          "id": "a-pre-visit",
+          "name": "Pre-Visit Intake Assistant",
+          "role": "Pre-fills intake forms from prior visits",
+          "status": "live",
+          "recentActivity": "14,212 forms pre-filled this week",
+          "adherence": 96,
+          "capabilityId": "eng-intake",
+          "deployedBy": "Curasync RCM team",
+          "deployedAt": "2025-09-14",
+          "deploymentCriteria": "Pre-fill intake forms from prior-visit data, target 90% pre-fill accuracy",
+          "oversightChain": [
+            "Curasync RCM Lead",
+            "Curasync COO"
+          ]
+        },
+        {
+          "id": "a-eligibility",
+          "name": "Eligibility Verifier",
+          "role": "Calls payer APIs to confirm coverage",
+          "status": "live",
+          "recentActivity": "3,840 eligibility checks today",
+          "adherence": 98,
+          "capabilityId": "eng-intake",
+          "deployedBy": "Curasync Front Office",
+          "deployedAt": "2025-11-02",
+          "deploymentCriteria": "Verify payer eligibility for upcoming appointments, escalate denials within 4 hours",
+          "oversightChain": [
+            "Curasync Front Office Manager",
+            "Curasync RCM Lead"
+          ]
+        },
+        {
+          "id": "a-coding",
+          "name": "Coding Suggestion Agent",
+          "role": "Suggests ICD-10 + CPT from note text",
+          "status": "shadow",
+          "recentActivity": "Shadow-mode 2 weeks; 87% provider acceptance",
+          "adherence": 87,
+          "capabilityId": "rev-code",
+          "deployedBy": "Curasync HIM team",
+          "deployedAt": "2026-02-18",
+          "deploymentCriteria": "Suggest ICD-10 and CPT codes from clinical notes; shadow-mode review for 12 weeks before promotion",
+          "oversightChain": [
+            "Curasync HIM Director",
+            "Curasync Compliance Officer",
+            "Curasync COO"
+          ]
+        },
+        {
+          "id": "a-noshow",
+          "name": "No-Show Predictor",
+          "role": "Flags high-risk appointments for outreach",
+          "status": "intervention-required",
+          "recentActivity": "Drift detected — false-positive rate up 9 pts",
+          "adherence": 71,
+          "capabilityId": "eng-sch",
+          "deployedBy": "Curasync Operations team",
+          "deployedAt": "2025-07-21",
+          "deploymentCriteria": "Flag appointments with elevated no-show probability 48 hours in advance to enable outreach intervention; calibrate against actual no-show rate quarterly",
+          "oversightChain": [
+            "Curasync Operations Lead",
+            "Curasync RCM Lead",
+            "Curasync COO"
+          ]
+        },
+        {
+          "id": "a-msg-router",
+          "name": "Patient Message Router",
+          "role": "Routes inbound patient messages to clinical vs front-office queues",
+          "status": "paused",
+          "recentActivity": "Paused 2026-04-19 pending Compliance review of PHI-routing change",
+          "adherence": 0,
+          "capabilityId": "eng-msg",
+          "deployedBy": "Curasync Front Office",
+          "deployedAt": "2025-12-08",
+          "deploymentCriteria": "Route inbound patient messages to clinical or front-office queues with target 95% routing accuracy and zero PHI leakage to non-clinical staff",
+          "oversightChain": [
+            "Curasync Front Office Manager",
+            "Curasync Compliance Officer",
+            "Curasync COO"
+          ]
+        }
+      ]
+    },
+    {
+      "slug": "revsync-health",
+      "name": "RevSync Health Financial",
+      "description": "Revenue cycle management platform for community and regional hospitals; processes $42B in claims annually.",
+      "agents": [
+        {
+          "id": "a-denial-class",
+          "name": "Denial Classifier",
+          "role": "Categorizes denials into structured root-cause taxonomy",
+          "status": "live",
+          "recentActivity": "92,400 denials classified this month",
+          "adherence": 94,
+          "capabilityId": "claim-den",
+          "deployedBy": null,
+          "deployedAt": null,
+          "deploymentCriteria": null,
+          "oversightChain": null
+        },
+        {
+          "id": "a-stmt-bot",
+          "name": "Patient Statement Q&A Bot",
+          "role": "Answers patient billing questions",
+          "status": "live",
+          "recentActivity": "11,200 conversations resolved without handoff",
+          "adherence": 91,
+          "capabilityId": null,
+          "deployedBy": null,
+          "deployedAt": null,
+          "deploymentCriteria": null,
+          "oversightChain": null
+        },
+        {
+          "id": "a-cdi-drafter",
+          "name": "CDI Query Drafter",
+          "role": "Drafts physician queries from chart context",
+          "status": "live",
+          "recentActivity": "4,800 queries drafted; 81% sent without edit",
+          "adherence": 89,
+          "capabilityId": "cdi-quer",
+          "deployedBy": null,
+          "deployedAt": null,
+          "deploymentCriteria": null,
+          "oversightChain": null
+        },
+        {
+          "id": "a-elig-reverify",
+          "name": "Eligibility Re-Verifier",
+          "role": "Re-checks coverage at admission",
+          "status": "shadow",
+          "recentActivity": "Shadow run flagged 6.4% mid-stay coverage changes",
+          "adherence": 95,
+          "capabilityId": null,
+          "deployedBy": null,
+          "deployedAt": null,
+          "deploymentCriteria": null,
+          "oversightChain": null
+        },
+        {
+          "id": "a-payer-rule",
+          "name": "Payer Rule Updater",
+          "role": "Monitors payer bulletins and updates internal rules",
+          "status": "live",
+          "recentActivity": "Pushed 38 rule updates this week",
+          "adherence": 97,
+          "capabilityId": null,
+          "deployedBy": null,
+          "deployedAt": null,
+          "deploymentCriteria": null,
+          "oversightChain": null
+        },
+        {
+          "id": "a-self-pay",
+          "name": "Self-Pay Propensity Scorer",
+          "role": "Predicts likelihood of patient payment",
+          "status": "intervention-required",
+          "recentActivity": "Calibration drift on Q1 cohort",
+          "adherence": 68,
+          "capabilityId": null,
+          "deployedBy": null,
+          "deployedAt": null,
+          "deploymentCriteria": null,
+          "oversightChain": null
+        }
+      ]
+    },
+    {
+      "slug": "sentari-lab",
+      "name": "Sentari Lab Informatics",
+      "description": "LIMS platform for clinical reference labs; runs in 320 lab sites across North America and EMEA.",
+      "agents": [
+        {
+          "id": "a-crit-notify",
+          "name": "Critical Value Notifier",
+          "role": "Pages physicians on critical results",
+          "status": "live",
+          "recentActivity": "180 critical values delivered today",
+          "adherence": 99,
+          "capabilityId": null,
+          "deployedBy": null,
+          "deployedAt": null,
+          "deploymentCriteria": null,
+          "oversightChain": null
+        },
+        {
+          "id": "a-result-qa",
+          "name": "Result QA Pre-Reviewer",
+          "role": "Pre-screens results for delta-checks",
+          "status": "shadow",
+          "recentActivity": "Shadow run 3 weeks; 23 catches missed by techs",
+          "adherence": 88,
+          "capabilityId": null,
+          "deployedBy": null,
+          "deployedAt": null,
+          "deploymentCriteria": null,
+          "oversightChain": null
+        },
+        {
+          "id": "a-backlog",
+          "name": "Backlog Forecaster",
+          "role": "Predicts daily backlog by bench",
+          "status": "paused",
+          "recentActivity": "Paused pending data quality fix",
+          "adherence": 0,
+          "capabilityId": null,
+          "deployedBy": null,
+          "deployedAt": null,
+          "deploymentCriteria": null,
+          "oversightChain": null
+        }
+      ]
+    },
+    {
+      "slug": "pulsewell-tele",
+      "name": "Pulsewell Telehealth",
+      "description": "Telehealth platform serving 180 behavioral health networks; 1.4M virtual visits per year.",
+      "agents": [
+        {
+          "id": "a-visit-rem",
+          "name": "Visit Reminder Bot",
+          "role": "SMS + email reminders before sessions",
+          "status": "live",
+          "recentActivity": "24,800 reminders sent this week",
+          "adherence": 95,
+          "capabilityId": null,
+          "deployedBy": null,
+          "deployedAt": null,
+          "deploymentCriteria": null,
+          "oversightChain": null
+        },
+        {
+          "id": "a-crisis",
+          "name": "Crisis-Keyword Triage",
+          "role": "Scans homework + messages for crisis language",
+          "status": "intervention-required",
+          "recentActivity": "False-positive rate spiked after model update",
+          "adherence": 64,
+          "capabilityId": null,
+          "deployedBy": null,
+          "deployedAt": null,
+          "deploymentCriteria": null,
+          "oversightChain": null
+        }
+      ]
+    },
+    {
+      "slug": "constructledger",
+      "name": "ConstructLedger",
+      "description": "Project management and compliance platform for federal contractors; serves 1,800 prime and sub contractors.",
+      "agents": [
+        {
+          "id": "a-opp-fit",
+          "name": "Opportunity Fit Scorer",
+          "role": "Scores SAM.gov opportunities for bid/no-bid",
+          "status": "live",
+          "recentActivity": "380 opportunities scored this week",
+          "adherence": 92,
+          "capabilityId": null,
+          "deployedBy": null,
+          "deployedAt": null,
+          "deploymentCriteria": null,
+          "oversightChain": null
+        },
+        {
+          "id": "a-pp-write",
+          "name": "Past-Performance Writer",
+          "role": "Drafts past-performance narratives",
+          "status": "shadow",
+          "recentActivity": "32 drafts; 78% accepted with light edit",
+          "adherence": 78,
+          "capabilityId": null,
+          "deployedBy": null,
+          "deployedAt": null,
+          "deploymentCriteria": null,
+          "oversightChain": null
+        },
+        {
+          "id": "a-comp-gap",
+          "name": "Compliance Gap Detector",
+          "role": "Scans projects for missing FAR artifacts",
+          "status": "live",
+          "recentActivity": "14 gaps surfaced this week",
+          "adherence": 91,
+          "capabilityId": null,
+          "deployedBy": null,
+          "deployedAt": null,
+          "deploymentCriteria": null,
+          "oversightChain": null
+        }
+      ]
+    },
+    {
+      "slug": "atlas-gis",
+      "name": "AtlasGIS Public",
+      "description": "GIS platform for municipal and county governments; powers public works, permitting, and CAD/911 integration in 1,200 jurisdictions.",
+      "agents": [
+        {
+          "id": "a-addr-bcast",
+          "name": "Address Change Broadcaster",
+          "role": "Pushes address authority diffs to subscribers",
+          "status": "intervention-required",
+          "recentActivity": "Webhook timeouts on 3 customer endpoints",
+          "adherence": 73,
+          "capabilityId": null,
+          "deployedBy": null,
+          "deployedAt": null,
+          "deploymentCriteria": null,
+          "oversightChain": null
+        },
+        {
+          "id": "a-perm-rebuild",
+          "name": "Permit Map Rebuilder",
+          "role": "Rebuilds permit overlays nightly",
+          "status": "live",
+          "recentActivity": "1,180 jurisdictions rebuilt last night",
+          "adherence": 99,
+          "capabilityId": null,
+          "deployedBy": null,
+          "deployedAt": null,
+          "deploymentCriteria": null,
+          "oversightChain": null
+        }
+      ]
+    },
+    {
+      "slug": "civicore",
+      "name": "Civicore",
+      "description": "Citizen services portal and case management for state and local agencies; deployed in 88 government bodies.",
+      "agents": [
+        {
+          "id": "a-req-class",
+          "name": "Service Request Classifier",
+          "role": "Maps free-text intake to request types",
+          "status": "shadow",
+          "recentActivity": "Shadow run since 2026-04-01; 84% match",
+          "adherence": 84,
+          "capabilityId": null,
+          "deployedBy": null,
+          "deployedAt": null,
+          "deploymentCriteria": null,
+          "oversightChain": null
+        }
+      ]
+    },
+    {
+      "slug": "brokerline",
+      "name": "Brokerline Agency Cloud",
+      "description": "Agency management system for independent P&C and benefits brokers; serves 14,000 agencies across the US and Canada.",
+      "agents": [
+        {
+          "id": "a-end-extract",
+          "name": "Email Endorsement Extractor",
+          "role": "Pulls structured endorsements from email + attachments",
+          "status": "shadow",
+          "recentActivity": "4,200 emails processed; 81% extraction accuracy",
+          "adherence": 81,
+          "capabilityId": null,
+          "deployedBy": null,
+          "deployedAt": null,
+          "deploymentCriteria": null,
+          "oversightChain": null
+        },
+        {
+          "id": "a-app-match",
+          "name": "Carrier Appetite Matcher",
+          "role": "Matches risks to carrier appetites",
+          "status": "live",
+          "recentActivity": "12,400 matches this week",
+          "adherence": 93,
+          "capabilityId": null,
+          "deployedBy": null,
+          "deployedAt": null,
+          "deploymentCriteria": null,
+          "oversightChain": null
+        },
+        {
+          "id": "a-comm-match",
+          "name": "Commission Match Agent",
+          "role": "Reconciles direct-bill statements to policies",
+          "status": "live",
+          "recentActivity": "88% auto-match rate",
+          "adherence": 88,
+          "capabilityId": null,
+          "deployedBy": null,
+          "deployedAt": null,
+          "deploymentCriteria": null,
+          "oversightChain": null
+        }
+      ]
+    },
+    {
+      "slug": "polestar-life",
+      "name": "Polestar Life Admin",
+      "description": "Life policy administration platform for mid-market and regional carriers; administers 18M in-force policies.",
+      "agents": [
+        {
+          "id": "a-app-check",
+          "name": "Application Completeness Checker",
+          "role": "Validates e-app submissions before UW",
+          "status": "live",
+          "recentActivity": "8,400 apps validated this week; 22% saved a callback",
+          "adherence": 96,
+          "capabilityId": null,
+          "deployedBy": null,
+          "deployedAt": null,
+          "deploymentCriteria": null,
+          "oversightChain": null
+        },
+        {
+          "id": "a-mib-summ",
+          "name": "MIB Summary Drafter",
+          "role": "Summarizes MIB results for underwriters",
+          "status": "live",
+          "recentActivity": "5,200 summaries; 91% accepted",
+          "adherence": 91,
+          "capabilityId": null,
+          "deployedBy": null,
+          "deployedAt": null,
+          "deploymentCriteria": null,
+          "oversightChain": null
+        },
+        {
+          "id": "a-lapse-score",
+          "name": "Lapse Propensity Scorer",
+          "role": "Predicts likelihood of lapse for outreach",
+          "status": "live",
+          "recentActivity": "Saved 1,840 policies retained QTD",
+          "adherence": 87,
+          "capabilityId": null,
+          "deployedBy": null,
+          "deployedAt": null,
+          "deploymentCriteria": null,
+          "oversightChain": null
+        },
+        {
+          "id": "a-dc-validate",
+          "name": "Death Claim Packet Validator",
+          "role": "Validates required artifacts before adjudication",
+          "status": "intervention-required",
+          "recentActivity": "New jurisdiction rules dropped — needs retraining",
+          "adherence": 62,
+          "capabilityId": null,
+          "deployedBy": null,
+          "deployedAt": null,
+          "deploymentCriteria": null,
+          "oversightChain": null
+        },
+        {
+          "id": "a-comp-qa",
+          "name": "Producer Compensation Q&A",
+          "role": "Answers producer compensation questions",
+          "status": "live",
+          "recentActivity": "2,100 questions resolved",
+          "adherence": 89,
+          "capabilityId": null,
+          "deployedBy": null,
+          "deployedAt": null,
+          "deploymentCriteria": null,
+          "oversightChain": null
+        }
+      ]
+    },
+    {
+      "slug": "claimriver",
+      "name": "ClaimRiver",
+      "description": "P&C claims platform for regional carriers and MGAs; processes 4.2M claims per year.",
+      "agents": [
+        {
+          "id": "a-fnol-summ",
+          "name": "FNOL Transcript Summarizer",
+          "role": "Structures phone FNOLs into claim attributes",
+          "status": "live",
+          "recentActivity": "11,800 calls structured this month",
+          "adherence": 94,
+          "capabilityId": null,
+          "deployedBy": null,
+          "deployedAt": null,
+          "deploymentCriteria": null,
+          "oversightChain": null
+        },
+        {
+          "id": "a-sev-score",
+          "name": "Severity Scorer",
+          "role": "Scores severity at FNOL",
+          "status": "live",
+          "recentActivity": "88% AUC over 90 days",
+          "adherence": 88,
+          "capabilityId": null,
+          "deployedBy": null,
+          "deployedAt": null,
+          "deploymentCriteria": null,
+          "oversightChain": null
+        },
+        {
+          "id": "a-photo-est",
+          "name": "Photo Pre-Estimator",
+          "role": "Generates pre-estimates from photos",
+          "status": "shadow",
+          "recentActivity": "Shadow vs adjuster: ±9% on average",
+          "adherence": 86,
+          "capabilityId": null,
+          "deployedBy": null,
+          "deployedAt": null,
+          "deploymentCriteria": null,
+          "oversightChain": null
+        },
+        {
+          "id": "a-subro",
+          "name": "Subrogation Lead Detector",
+          "role": "Identifies subrogation potential at intake",
+          "status": "live",
+          "recentActivity": "$840k recovered QTD attributed",
+          "adherence": 90,
+          "capabilityId": null,
+          "deployedBy": null,
+          "deployedAt": null,
+          "deploymentCriteria": null,
+          "oversightChain": null
+        }
+      ]
+    },
+    {
+      "slug": "cardient-medical",
+      "name": "Cardient Medical",
+      "description": "Single-use endoscopic devices for ambulatory surgery centers; FDA Class II portfolio across 6 product families.",
+      "agents": [
+        {
+          "id": "a-comp-class",
+          "name": "Complaint Classifier",
+          "role": "Categorizes complaints by code & severity",
+          "status": "live",
+          "recentActivity": "3,800 complaints classified",
+          "adherence": 94,
+          "capabilityId": null,
+          "deployedBy": null,
+          "deployedAt": null,
+          "deploymentCriteria": null,
+          "oversightChain": null
+        },
+        {
+          "id": "a-qms-draft",
+          "name": "QMS Deviation Drafter",
+          "role": "Drafts deviation records",
+          "status": "live",
+          "recentActivity": "420 deviations drafted",
+          "adherence": 89,
+          "capabilityId": null,
+          "deployedBy": null,
+          "deployedAt": null,
+          "deploymentCriteria": null,
+          "oversightChain": null
+        },
+        {
+          "id": "a-demand",
+          "name": "Demand Forecaster",
+          "role": "Forecasts SKU demand monthly",
+          "status": "live",
+          "recentActivity": "MAPE 8.2% trailing 90d",
+          "adherence": 92,
+          "capabilityId": null,
+          "deployedBy": null,
+          "deployedAt": null,
+          "deploymentCriteria": null,
+          "oversightChain": null
+        },
+        {
+          "id": "a-rfq",
+          "name": "Procurement RFQ Assistant",
+          "role": "Drafts and sends RFQs",
+          "status": "live",
+          "recentActivity": "180 RFQs sent",
+          "adherence": 95,
+          "capabilityId": null,
+          "deployedBy": null,
+          "deployedAt": null,
+          "deploymentCriteria": null,
+          "oversightChain": null
+        },
+        {
+          "id": "a-sales-coach",
+          "name": "Sales Coaching Agent",
+          "role": "Reviews call transcripts; surfaces coaching moments",
+          "status": "shadow",
+          "recentActivity": "Pilot with 12 reps; mixed feedback",
+          "adherence": 76,
+          "capabilityId": null,
+          "deployedBy": null,
+          "deployedAt": null,
+          "deploymentCriteria": null,
+          "oversightChain": null
+        },
+        {
+          "id": "a-mdr-file",
+          "name": "MDR Filing Assistant",
+          "role": "Pre-fills MDR forms from complaint data",
+          "status": "live",
+          "recentActivity": "38 MDRs assisted; 0 missed deadlines",
+          "adherence": 98,
+          "capabilityId": null,
+          "deployedBy": null,
+          "deployedAt": null,
+          "deploymentCriteria": null,
+          "oversightChain": null
+        },
+        {
+          "id": "a-fs-sched",
+          "name": "Field Service Scheduler",
+          "role": "Routes service techs to ASCs",
+          "status": "intervention-required",
+          "recentActivity": "Optimization regressed after route change",
+          "adherence": 67,
+          "capabilityId": null,
+          "deployedBy": null,
+          "deployedAt": null,
+          "deploymentCriteria": null,
+          "oversightChain": null
+        }
+      ]
+    },
+    {
+      "slug": "tellix-sensors",
+      "name": "Tellix Industrial Sensors",
+      "description": "Process sensors for chemical, energy, and industrial gas customers; serves 3,400 plants worldwide.",
+      "agents": [
+        {
+          "id": "a-quote-sanity",
+          "name": "Quote Sanity Checker",
+          "role": "Reviews CPQ outputs for engineering feasibility",
+          "status": "shadow",
+          "recentActivity": "Shadow run flagged 14% of quotes for review",
+          "adherence": 80,
+          "capabilityId": null,
+          "deployedBy": null,
+          "deployedAt": null,
+          "deploymentCriteria": null,
+          "oversightChain": null
+        }
+      ]
+    },
+    {
+      "slug": "riveridge-utility",
+      "name": "Riveridge Utility Technologies",
+      "description": "Water meters and Advanced Metering Infrastructure (AMI) for municipal utilities; 14M endpoints deployed across the Americas.",
+      "agents": [
+        {
+          "id": "a-survey-qa",
+          "name": "Survey Quality Scorer",
+          "role": "Scores radio surveys before crews deploy",
+          "status": "live",
+          "recentActivity": "420 surveys scored this week",
+          "adherence": 95,
+          "capabilityId": null,
+          "deployedBy": null,
+          "deployedAt": null,
+          "deploymentCriteria": null,
+          "oversightChain": null
+        },
+        {
+          "id": "a-act-prio",
+          "name": "Activation Queue Prioritizer",
+          "role": "Orders endpoint activations by signal strength",
+          "status": "live",
+          "recentActivity": "12,400 activations sequenced",
+          "adherence": 96,
+          "capabilityId": null,
+          "deployedBy": null,
+          "deployedAt": null,
+          "deploymentCriteria": null,
+          "oversightChain": null
+        },
+        {
+          "id": "a-leak-tri",
+          "name": "Leak-Alarm Triager",
+          "role": "Suppresses noisy alarms; routes real ones",
+          "status": "intervention-required",
+          "recentActivity": "Alarm storm event 2026-04-19",
+          "adherence": 71,
+          "capabilityId": null,
+          "deployedBy": null,
+          "deployedAt": null,
+          "deploymentCriteria": null,
+          "oversightChain": null
+        },
+        {
+          "id": "a-net-anom",
+          "name": "Network Anomaly Detector",
+          "role": "Flags tower performance anomalies",
+          "status": "live",
+          "recentActivity": "38 anomalies confirmed this month",
+          "adherence": 91,
+          "capabilityId": null,
+          "deployedBy": null,
+          "deployedAt": null,
+          "deploymentCriteria": null,
+          "oversightChain": null
+        },
+        {
+          "id": "a-csr-know",
+          "name": "CSR Knowledge Agent",
+          "role": "Answers utility CSR questions in real-time",
+          "status": "live",
+          "recentActivity": "8,400 conversations resolved",
+          "adherence": 92,
+          "capabilityId": null,
+          "deployedBy": null,
+          "deployedAt": null,
+          "deploymentCriteria": null,
+          "oversightChain": null
+        },
+        {
+          "id": "a-bill-recon",
+          "name": "Billing Read Reconciler",
+          "role": "Reconciles read sign-off variances",
+          "status": "live",
+          "recentActivity": "99.4% match rate sustained",
+          "adherence": 99,
+          "capabilityId": null,
+          "deployedBy": null,
+          "deployedAt": null,
+          "deploymentCriteria": null,
+          "oversightChain": null
+        }
+      ]
+    },
+    {
+      "slug": "stratafold",
+      "name": "Stratafold Planning",
+      "description": "Corporate planning and EPM platform for mid-market and Fortune 1000 companies; serves 920 customers across the Americas and EMEA.",
+      "agents": [
+        {
+          "id": "a-var-comm",
+          "name": "Variance Commentary Drafter",
+          "role": "Drafts MD&A-style commentary on variances",
+          "status": "live",
+          "recentActivity": "320 narratives drafted this cycle",
+          "adherence": 92,
+          "capabilityId": null,
+          "deployedBy": null,
+          "deployedAt": null,
+          "deploymentCriteria": null,
+          "oversightChain": null
+        },
+        {
+          "id": "a-src-map",
+          "name": "Source Mapping Suggester",
+          "role": "Suggests field mappings from source schemas",
+          "status": "shadow",
+          "recentActivity": "Pilot at 12 customers; 78% suggestions accepted",
+          "adherence": 78,
+          "capabilityId": null,
+          "deployedBy": null,
+          "deployedAt": null,
+          "deploymentCriteria": null,
+          "oversightChain": null
+        }
+      ]
+    },
+    {
+      "slug": "treasura",
+      "name": "Treasura",
+      "description": "Treasury management system for corporate treasurers; serves 380 mid-market and large-cap corporates.",
+      "agents": [
+        {
+          "id": "a-pay-sanity",
+          "name": "Payment Sanity Checker",
+          "role": "Pre-validates payment files for fraud signatures",
+          "status": "live",
+          "recentActivity": "94k payments screened this month",
+          "adherence": 99,
+          "capabilityId": null,
+          "deployedBy": null,
+          "deployedAt": null,
+          "deploymentCriteria": null,
+          "oversightChain": null
+        }
+      ]
+    },
+    {
+      "slug": "casebridge",
+      "name": "Casebridge",
+      "description": "Practice management for mid-market law firms (50-300 attorneys); 1,400 firm customers across the US.",
+      "agents": [
+        {
+          "id": "a-time-sug",
+          "name": "Time Entry Suggester",
+          "role": "Suggests time entries from calendar + email",
+          "status": "live",
+          "recentActivity": "24,800 entries suggested this week",
+          "adherence": 94,
+          "capabilityId": null,
+          "deployedBy": null,
+          "deployedAt": null,
+          "deploymentCriteria": null,
+          "oversightChain": null
+        },
+        {
+          "id": "a-utbms",
+          "name": "UTBMS Coder",
+          "role": "Auto-codes time narratives to UTBMS",
+          "status": "shadow",
+          "recentActivity": "Pilot at 14 firms; 86% partner acceptance",
+          "adherence": 86,
+          "capabilityId": null,
+          "deployedBy": null,
+          "deployedAt": null,
+          "deploymentCriteria": null,
+          "oversightChain": null
+        },
+        {
+          "id": "a-conflict",
+          "name": "Conflict-Check Researcher",
+          "role": "Runs conflict scans on new intake",
+          "status": "live",
+          "recentActivity": "420 conflicts surfaced this month",
+          "adherence": 96,
+          "capabilityId": null,
+          "deployedBy": null,
+          "deployedAt": null,
+          "deploymentCriteria": null,
+          "oversightChain": null
+        }
+      ]
+    },
+    {
+      "slug": "docvault-legal",
+      "name": "DocVault Legal",
+      "description": "Document management and assembly platform for legal teams; deployed at 740 firms and corporate legal departments.",
+      "agents": [
+        {
+          "id": "a-clause-sim",
+          "name": "Clause Similarity Detector",
+          "role": "Detects near-duplicate clauses",
+          "status": "shadow",
+          "recentActivity": "Pilot at 6 customers; surfaced 880 duplicates",
+          "adherence": 89,
+          "capabilityId": null,
+          "deployedBy": null,
+          "deployedAt": null,
+          "deploymentCriteria": null,
+          "oversightChain": null
+        }
+      ]
+    },
+    {
+      "slug": "lanechain",
+      "name": "Lanechain Freight Match",
+      "description": "Digital freight matching platform connecting shippers and carriers; 1.6M loads matched annually.",
+      "agents": [
+        {
+          "id": "a-quote-pricer",
+          "name": "Quote Pricer",
+          "role": "Generates dynamic spot quotes",
+          "status": "live",
+          "recentActivity": "38k quotes priced this week",
+          "adherence": 95,
+          "capabilityId": null,
+          "deployedBy": null,
+          "deployedAt": null,
+          "deploymentCriteria": null,
+          "oversightChain": null
+        },
+        {
+          "id": "a-match-score",
+          "name": "Match Scorer",
+          "role": "Scores carrier-load fit in real time",
+          "status": "live",
+          "recentActivity": "180k matches scored",
+          "adherence": 93,
+          "capabilityId": null,
+          "deployedBy": null,
+          "deployedAt": null,
+          "deploymentCriteria": null,
+          "oversightChain": null
+        },
+        {
+          "id": "a-dwell-tri",
+          "name": "Dwell-Time Triager",
+          "role": "Triages dwell exceptions to ops",
+          "status": "intervention-required",
+          "recentActivity": "Routing rules drift after onboarding new shipper",
+          "adherence": 69,
+          "capabilityId": null,
+          "deployedBy": null,
+          "deployedAt": null,
+          "deploymentCriteria": null,
+          "oversightChain": null
+        },
+        {
+          "id": "a-pod-val",
+          "name": "POD Validator",
+          "role": "Validates POD completeness for auto-invoice",
+          "status": "live",
+          "recentActivity": "24k PODs validated",
+          "adherence": 97,
+          "capabilityId": null,
+          "deployedBy": null,
+          "deployedAt": null,
+          "deploymentCriteria": null,
+          "oversightChain": null
+        }
+      ]
+    },
+    {
+      "slug": "wheelops",
+      "name": "WheelOps Fleet",
+      "description": "Fleet management telematics SaaS for trucking and last-mile fleets; 380,000 vehicles connected.",
+      "agents": [
+        {
+          "id": "a-driver-coach",
+          "name": "Driver Coaching Agent",
+          "role": "Surfaces coaching moments from event data",
+          "status": "live",
+          "recentActivity": "14k coaching nudges sent",
+          "adherence": 91,
+          "capabilityId": null,
+          "deployedBy": null,
+          "deployedAt": null,
+          "deploymentCriteria": null,
+          "oversightChain": null
+        },
+        {
+          "id": "a-fault-tri",
+          "name": "Fault Code Triager",
+          "role": "Triages fault codes by urgency",
+          "status": "shadow",
+          "recentActivity": "Pilot at 3 fleets; 79% concordance with maintenance",
+          "adherence": 79,
+          "capabilityId": null,
+          "deployedBy": null,
+          "deployedAt": null,
+          "deploymentCriteria": null,
+          "oversightChain": null
+        }
+      ]
+    },
+    {
+      "slug": "bursar-campus",
+      "name": "Bursar Campus Operations",
+      "description": "Auxiliary services platform for higher education: campus IDs, dining, housing, account funding. Deployed at 410 colleges and universities.",
+      "agents": [
+        {
+          "id": "a-refund",
+          "name": "Refund Eligibility Checker",
+          "role": "Pre-validates refund requests against policy",
+          "status": "shadow",
+          "recentActivity": "Pilot at 4 campuses; 91% policy match",
+          "adherence": 91,
+          "capabilityId": null,
+          "deployedBy": null,
+          "deployedAt": null,
+          "deploymentCriteria": null,
+          "oversightChain": null
+        }
+      ]
+    },
+    {
+      "slug": "scholarpath-sis",
+      "name": "ScholarPath SIS",
+      "description": "Student information system for higher education; manages records, financial aid, admissions for 540 institutions.",
+      "agents": [
+        {
+          "id": "a-fafsa",
+          "name": "FAFSA Verification Assistant",
+          "role": "Pre-validates FAFSA documentation",
+          "status": "live",
+          "recentActivity": "18k applications reviewed this cycle",
+          "adherence": 93,
+          "capabilityId": null,
+          "deployedBy": null,
+          "deployedAt": null,
+          "deploymentCriteria": null,
+          "oversightChain": null
+        },
+        {
+          "id": "a-app-read",
+          "name": "Application Reader",
+          "role": "Pre-reads applications for committee",
+          "status": "shadow",
+          "recentActivity": "Pilot at 9 institutions; 82% reader concordance",
+          "adherence": 82,
+          "capabilityId": null,
+          "deployedBy": null,
+          "deployedAt": null,
+          "deploymentCriteria": null,
+          "oversightChain": null
+        },
+        {
+          "id": "a-awd-whatif",
+          "name": "Awarding What-If",
+          "role": "Models awarding scenarios for advisors",
+          "status": "live",
+          "recentActivity": "4,200 scenarios run this term",
+          "adherence": 95,
+          "capabilityId": null,
+          "deployedBy": null,
+          "deployedAt": null,
+          "deploymentCriteria": null,
+          "oversightChain": null
+        }
+      ]
+    },
+    {
+      "slug": "lumenchroma",
+      "name": "Lumenchroma",
+      "description": "Color grading and VFX pipeline software for boutique post-production studios; powers 130 finishing facilities worldwide.",
+      "agents": [
+        {
+          "id": "a-dailies-prep",
+          "name": "Dailies Prep Automation",
+          "role": "Preps + renders dailies overnight",
+          "status": "live",
+          "recentActivity": "Automated 100% of trailing 30-day dailies",
+          "adherence": 99,
+          "capabilityId": null,
+          "deployedBy": null,
+          "deployedAt": null,
+          "deploymentCriteria": null,
+          "oversightChain": null
+        },
+        {
+          "id": "a-note-attr",
+          "name": "Note Attribution Agent",
+          "role": "Attributes review notes to shots/timecodes",
+          "status": "live",
+          "recentActivity": "8,400 notes attributed this month",
+          "adherence": 96,
+          "capabilityId": null,
+          "deployedBy": null,
+          "deployedAt": null,
+          "deploymentCriteria": null,
+          "oversightChain": null
+        },
+        {
+          "id": "a-shot-rec",
+          "name": "Shot-Version Reconciler",
+          "role": "Reconciles versions across editorial and finishing",
+          "status": "live",
+          "recentActivity": "14k versions reconciled",
+          "adherence": 98,
+          "capabilityId": null,
+          "deployedBy": null,
+          "deployedAt": null,
+          "deploymentCriteria": null,
+          "oversightChain": null
+        },
+        {
+          "id": "a-deliv-watch",
+          "name": "Deliverable Spec Watcher",
+          "role": "Watches platform spec docs; flags deltas",
+          "status": "live",
+          "recentActivity": "Caught 6 platform spec changes this month",
+          "adherence": 95,
+          "capabilityId": null,
+          "deployedBy": null,
+          "deployedAt": null,
+          "deploymentCriteria": null,
+          "oversightChain": null
+        },
+        {
+          "id": "a-render-tune",
+          "name": "Render Farm Queue Tuner",
+          "role": "Tunes render queue priority by deadline",
+          "status": "live",
+          "recentActivity": "Cut median render wait 38%",
+          "adherence": 94,
+          "capabilityId": null,
+          "deployedBy": null,
+          "deployedAt": null,
+          "deploymentCriteria": null,
+          "oversightChain": null
+        }
+      ]
+    }
+  ]
+}

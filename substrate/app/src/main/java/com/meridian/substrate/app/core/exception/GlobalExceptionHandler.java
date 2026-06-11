@@ -5,6 +5,10 @@ import com.meridian.substrate.app.api.v1.response.ApiMeta;
 import com.meridian.substrate.app.api.v1.response.ApiResponse;
 import com.meridian.substrate.common.ai.LlmRateLimitException;
 import com.meridian.substrate.common.ai.LlmUnavailableException;
+import com.meridian.substrate.engine.agent.exception.AgentConflictException;
+import com.meridian.substrate.engine.agent.exception.AgentDeployValidationException;
+import com.meridian.substrate.engine.agent.exception.AgentForbiddenException;
+import com.meridian.substrate.engine.agent.read.AgentDetail;
 import com.meridian.substrate.engine.cascade.CascadeQueryService;
 import com.meridian.substrate.engine.cascade.exception.CascadeConflictException;
 import com.meridian.substrate.engine.cascade.exception.CascadeForbiddenException;
@@ -179,18 +183,20 @@ public class GlobalExceptionHandler {
 
     /**
      * Enforcement-gateway denial (engine-spec contracts.md §4.5; ADR-002
-     * D1/D4): HTTP <b>409</b>, code {@code CONTRACT_DENIAL}, message = the
-     * gateway's human summary citing contract key + clause descriptions +
-     * decisionId. A governance outcome, never a 5xx — and never decline
-     * vocabulary (decline returns 200; port-map trap #8). The business
-     * transaction has already rolled back; the DENY decision row survives via
-     * REQUIRES_NEW (§10.4, ADR D17).
+     * D1/D4): HTTP <b>409</b>, code {@code CONTRACT_DENIAL} — or
+     * {@code AGENT_GATE_DENIAL} when the agent registry gate denied
+     * (agents.md §8.5; the {@code code()} discriminator on the exception) —
+     * message = the gateway's human summary citing contract key + clause
+     * descriptions + decisionId. A governance outcome, never a 5xx — and
+     * never decline vocabulary (decline returns 200; port-map trap #8). The
+     * business transaction has already rolled back; the DENY decision row
+     * survives via REQUIRES_NEW (§10.4, ADR D17).
      */
     @ExceptionHandler(ContractDeniedException.class)
     public ResponseEntity<ApiResponse<Void>> handleContractDenied(ContractDeniedException ex) {
-        log.warn("Contract denial [reason={}, decisionId={}]: {}",
-                ex.getDeny().reason(), ex.getDecisionId(), ex.getMessage());
-        return buildErrorResponse(HttpStatus.CONFLICT, ContractDeniedException.CODE, ex.getMessage());
+        log.warn("Gateway denial [code={}, reason={}, decisionId={}]: {}",
+                ex.code(), ex.getDeny().reason(), ex.getDecisionId(), ex.getMessage());
+        return buildErrorResponse(HttpStatus.CONFLICT, ex.code(), ex.getMessage());
     }
 
     /**
@@ -206,6 +212,63 @@ public class GlobalExceptionHandler {
             com.meridian.substrate.engine.contract.exception.WaiverHumanOnlyException ex) {
         log.warn("Waiver denied for non-human actor: {}", ex.getMessage());
         return buildErrorResponse(HttpStatus.FORBIDDEN, "WAIVER_HUMAN_ONLY", ex.getMessage());
+    }
+
+    /**
+     * Agent {@code {idOrKey}} resolution miss (engine-spec agents.md §7.2):
+     * 404 with the spec code {@code AGENT_NOT_FOUND}.
+     */
+    @ExceptionHandler(com.meridian.substrate.engine.agent.exception.AgentNotFoundException.class)
+    public ResponseEntity<ApiResponse<Void>> handleAgentNotFound(
+            com.meridian.substrate.engine.agent.exception.AgentNotFoundException ex) {
+        log.warn("Agent not found: {}", ex.getMessage());
+        return buildErrorResponse(HttpStatus.NOT_FOUND, "AGENT_NOT_FOUND", ex.getMessage());
+    }
+
+    /**
+     * Agent deploy-gate rejection (engine-spec agents.md §5.4): per-field 400
+     * with the STRUCTURED code (e.g. {@code AGENT_PROVENANCE_MISSING_OVERSIGHT})
+     * and the offending field in {@code errors[].field} — provenance is
+     * REQUIRED at deploy; scripted operators branch on the exact gap.
+     */
+    @ExceptionHandler(AgentDeployValidationException.class)
+    public ResponseEntity<ApiResponse<Void>> handleAgentDeployValidation(
+            AgentDeployValidationException ex) {
+        log.warn("Agent deploy gate rejected [{}, field={}]: {}",
+                ex.getCode(), ex.getField(), ex.getMessage());
+        ApiMeta meta = ApiMeta.now(MDC.get("requestId"), null);
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(ApiResponse.error(
+                        List.of(new ApiError(ex.getCode().name(), ex.getMessage(), ex.getField())), meta));
+    }
+
+    /**
+     * Agent command conflicts (engine-spec agents.md §7.2): 409 with the spec
+     * code ({@code AGENT_KEY_CONFLICT} / {@code AGENT_STALE_STATE} /
+     * {@code AGENT_ILLEGAL_TRANSITION} / {@code AGENT_TERMINAL} /
+     * {@code PROMOTION_REVIEW_REQUIRED}) and the CURRENT {@link AgentDetail}
+     * in the envelope {@code data} — the client refreshes, never renders a
+     * generic failure. None of these is pause/kill/retire vocabulary: those
+     * verbs return 200 ALWAYS (spec non-negotiable #2).
+     */
+    @ExceptionHandler(AgentConflictException.class)
+    public ResponseEntity<ApiResponse<AgentDetail>> handleAgentConflict(AgentConflictException ex) {
+        log.warn("Agent conflict [{}]: {}", ex.getCode(), ex.getMessage());
+        ApiMeta meta = ApiMeta.now(MDC.get("requestId"), null);
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(new ApiResponse<>(ex.getCurrentDetail(), meta,
+                        List.of(ApiError.of(ex.getCode().name(), ex.getMessage()))));
+    }
+
+    /**
+     * Agent lifecycle actor guard (engine-spec agents.md §7.2; invariant I11):
+     * 403 — lifecycle verbs are REST-only/human-only; agents never
+     * self-administer (ADR-003 D16).
+     */
+    @ExceptionHandler(AgentForbiddenException.class)
+    public ResponseEntity<ApiResponse<Void>> handleAgentForbidden(AgentForbiddenException ex) {
+        log.warn("Agent forbidden [{}]: {}", ex.getCode(), ex.getMessage());
+        return buildErrorResponse(HttpStatus.FORBIDDEN, ex.getCode().name(), ex.getMessage());
     }
 
     @ExceptionHandler(Exception.class)

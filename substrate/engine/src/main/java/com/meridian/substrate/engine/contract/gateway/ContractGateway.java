@@ -95,6 +95,16 @@ public class ContractGateway {
     public static final String REASON_DENY_GUARD_MATCHED = "DENY_GUARD_MATCHED";
     /** Flag-note prefix for §4.4 unevaluable predicates (never silent). */
     public static final String FLAG_UNEVALUABLE_PREDICATE = "UNEVALUABLE_PREDICATE_SKIPPED";
+    /**
+     * agents.md §8.4 built-in, non-removable lifecycle guard reason: agents
+     * never operate lifecycle, including their own — defense in depth atop
+     * the REST-only/human-only verb surface (invariant I11).
+     */
+    public static final String REASON_AGENT_LIFECYCLE_HUMAN_ONLY = "AGENT_LIFECYCLE_HUMAN_ONLY";
+
+    /** agents.md §8.4: governed lifecycle actions carrying the built-in AGENT deny. */
+    private static final Set<String> AGENT_LIFECYCLE_ACTIONS =
+            Set.of(GovernedActions.AGENT_DEPLOY, GovernedActions.AGENT_PROMOTE);
 
     private static final String LEVEL_ALL = "all";
 
@@ -107,6 +117,7 @@ public class ContractGateway {
     private final EnforcementDecisionWriter decisionWriter;
     private final ContractProperties properties;
     private final ObjectMapper objectMapper;
+    private final AgentRegistryGate agentRegistryGate;
 
     public ContractGateway(GuardCache guardCache,
                            ContractRepository contractRepository,
@@ -114,7 +125,8 @@ public class ContractGateway {
                            ContractMetricLeafResolver metricLeafResolver,
                            EnforcementDecisionWriter decisionWriter,
                            ContractProperties properties,
-                           ObjectMapper objectMapper) {
+                           ObjectMapper objectMapper,
+                           AgentRegistryGate agentRegistryGate) {
         this.guardCache = guardCache;
         this.contractRepository = contractRepository;
         this.attestationGate = attestationGate;
@@ -122,6 +134,7 @@ public class ContractGateway {
         this.decisionWriter = decisionWriter;
         this.properties = properties;
         this.objectMapper = objectMapper;
+        this.agentRegistryGate = agentRegistryGate;
     }
 
     /**
@@ -162,11 +175,47 @@ public class ContractGateway {
                             + " never waive)");
         }
 
+        // agents.md §8 — the AGENT-principal lane, BEFORE clause-guard
+        // evaluation; both checks are built-in and non-removable (D16 idiom).
+        List<String> gateFlags = List.of();
+        if (action.principal().type() == PrincipalType.AGENT) {
+            // §8.4: agents never operate lifecycle, including their own.
+            if (AGENT_LIFECYCLE_ACTIONS.contains(action.actionType())) {
+                return agentGateDenyOutcome(action, mode, started,
+                        REASON_AGENT_LIFECYCLE_HUMAN_ONLY,
+                        "Action '" + action.actionType() + "' denied for AGENT principal '"
+                                + action.principal().id() + "': agent lifecycle is REST-only and"
+                                + " human-only (agents.md §8.4 built-in non-removable guard;"
+                                + " invariant I11 — agents never self-administer)");
+            }
+            // §8.1/§8.2: registry-first → contract-party carve-out →
+            // unregistered policy. A gate fault propagates to the ADR-002 D5
+            // fail posture (AGENT = fail-closed).
+            switch (agentRegistryGate.evaluate(action, mode)) {
+                case AgentRegistryGate.Verdict.Deny deny -> {
+                    return agentGateDenyOutcome(action, mode, started, deny.reason(),
+                            "Action '" + action.actionType() + "' denied for AGENT principal '"
+                                    + action.principal().id() + "' (reason " + deny.reason()
+                                    + "): " + deny.detail());
+                }
+                case AgentRegistryGate.Verdict.Allow allow -> gateFlags = allow.flagNotes();
+            }
+        }
+
         List<GuardView> guards = guardCache.activeGuards(action.domainId(), action.actionType())
                 .stream()
                 .filter(g -> matchesEntityType(g, action.target()))
                 .toList();
         if (guards.isEmpty()) {
+            if (!gateFlags.isEmpty()) {
+                // Registry-gate flags are ALWAYS rowed (ALLOW_WITH_FLAG, ADR
+                // D17) even with an empty guard set — "unknown agent
+                // knocking" / in-intervention telemetry is never silent.
+                String flagReason = String.join("; ", gateFlags);
+                decisionWriter.row(action, GatewayDecision.ALLOW_WITH_FLAG, List.of(),
+                        List.of(), flagReason, mode, latencyMs(started));
+                return new Decision.Allow(true, List.of(), flagReason);
+            }
             decisionWriter.countAllowNoGuard();
             if (rowEverything()) {
                 decisionWriter.row(action, GatewayDecision.ALLOW, List.of(), List.of(),
@@ -198,7 +247,7 @@ public class ContractGateway {
 
         List<GuardView> denying = new ArrayList<>();
         String denyReason = null;
-        List<String> flagNotes = new ArrayList<>();
+        List<String> flagNotes = new ArrayList<>(gateFlags);   // §8.3 gate flags cited first
         for (GuardView guard : matched) {
             switch (guard.effect()) {
                 case DENY -> {
@@ -280,6 +329,31 @@ public class ContractGateway {
         }
         throw new ContractDeniedException(
                 new Decision.Deny(clauseIds, contractKeys, reason, decisionId),
+                humanSummary + " [decisionId " + decisionId + "]");
+    }
+
+    /**
+     * The agents.md §8.5 deny tail: identical mechanics to
+     * {@link #denyOutcome} (row in REQUIRES_NEW, shadow proceeds flagged,
+     * enforce throws) but raising {@link AgentGateDeniedException} so the
+     * wire code is {@code AGENT_GATE_DENIAL} — same 409/isError shapes,
+     * additive code (no guard citations: the registry gate is built-in, not
+     * a clause).
+     */
+    private Decision agentGateDenyOutcome(GovernedAction action, EnforcementMode mode,
+                                          long started, String reason, String humanSummary) {
+        GatewayDecision rowed = mode == EnforcementMode.ENFORCE
+                ? GatewayDecision.DENY : GatewayDecision.WOULD_DENY;
+        UUID decisionId = decisionWriter.row(action, rowed, List.of(), List.of(),
+                reason, mode, latencyMs(started));
+        if (mode == EnforcementMode.SHADOW) {
+            log.info("WOULD_DENY (agent gate, shadow, proceeding) [action={}, principal={},"
+                            + " reason={}, decisionId={}]", action.actionType(),
+                    action.principal().id(), reason, decisionId);
+            return new Decision.Allow(true, List.of(), reason);
+        }
+        throw new AgentGateDeniedException(
+                new Decision.Deny(List.of(), List.of(), reason, decisionId),
                 humanSummary + " [decisionId " + decisionId + "]");
     }
 

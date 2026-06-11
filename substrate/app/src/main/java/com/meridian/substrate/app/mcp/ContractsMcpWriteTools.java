@@ -370,7 +370,7 @@ public class ContractsMcpWriteTools {
     private McpSchema.CallToolResult denialError(ContractDeniedException denial) {
         Decision.Deny deny = denial.getDeny();
         Map<String, Object> structured = new LinkedHashMap<>();
-        structured.put("code", ContractDeniedException.CODE);
+        structured.put("code", denial.code());   // CONTRACT_DENIAL | AGENT_GATE_DENIAL (§8.5)
         structured.put("contractKeys", deny.contractKeys());
         structured.put("clauseIds",
                 deny.clauseIds().stream().map(UUID::toString).toList());
@@ -382,7 +382,7 @@ public class ContractsMcpWriteTools {
         try {
             text = objectMapper.writeValueAsString(structured);
         } catch (Exception e) {
-            text = ContractDeniedException.CODE + ": " + denial.getMessage();
+            text = denial.code() + ": " + denial.getMessage();
         }
         return McpSchema.CallToolResult.builder()
                 .isError(true)

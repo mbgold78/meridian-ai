@@ -83,7 +83,8 @@ class ContractGatewayTest {
                 new GuardCache(guardRepo, clock), contractRepo,
                 new RequireAttestationGate(commitmentRepo, attestationRepo, properties, clock),
                 new ContractMetricLeafResolver(metricRepo, properties, clock),
-                writer, properties, json);
+                writer, properties, json,
+                new NoopAgentRegistryGate());   // 6c: the contracts-owned default gate
 
         Contract contract = new Contract();
         contract.setId(contractId);
@@ -100,7 +101,8 @@ class ContractGatewayTest {
         ContractClauseGuard g = new ContractClauseGuard();
         g.setId(UUID.randomUUID());
         g.setContractId(contractId);
-        g.setActionType("agent.promote");
+        g.setActionType("cascade.issue");   // generic guarded action (agent.promote now
+                                            // carries the 6c §8.4 built-in AGENT deny)
         g.setEntityType(entityType);
         g.setEffect(effect);
         g.setActive(true);
@@ -118,7 +120,7 @@ class ContractGatewayTest {
     }
 
     private GovernedAction action(PrincipalType principalType) {
-        return action("agent.promote", principalType);
+        return action("cascade.issue", principalType);
     }
 
     private GovernedAction action(String actionType, PrincipalType principalType) {
@@ -306,7 +308,7 @@ class ContractGatewayTest {
         activeGuards(guard(GuardEffect.DENY, null,
                 "{\"all\":[{\"field\":\"payload.scope\",\"eq\":\"hipaa-attestation-forms\"},"
                         + "{\"field\":\"payload.formCount\",\"lte\":40}]}"));
-        GovernedAction matching = new GovernedAction("agent.promote",
+        GovernedAction matching = new GovernedAction("cascade.issue",
                 Principal.agent("a-1"), domainId, null,
                 json.createObjectNode().put("scope", "hipaa-attestation-forms").put("formCount", 38));
 
@@ -322,12 +324,12 @@ class ContractGatewayTest {
         activeGuards(guard(GuardEffect.DENY, "PROCESS", null));
 
         // Different target entity type: guard does not apply.
-        Decision other = gateway.evaluate(new GovernedAction("agent.promote",
+        Decision other = gateway.evaluate(new GovernedAction("cascade.issue",
                 Principal.agent("a-1"), domainId, new TargetRef("SYSTEM", "s-1"), null));
         assertThat(((Decision.Allow) other).flagged()).isFalse();
 
         // Matching target entity type: denied.
-        assertThatThrownBy(() -> gateway.evaluate(new GovernedAction("agent.promote",
+        assertThatThrownBy(() -> gateway.evaluate(new GovernedAction("cascade.issue",
                 Principal.agent("a-1"), domainId, new TargetRef("PROCESS", "p-1"), null)))
                 .isInstanceOf(ContractDeniedException.class);
     }
@@ -360,7 +362,7 @@ class ContractGatewayTest {
         long before = writer.allowUnrowedCount();
 
         Decision.Allow allow = (Decision.Allow) gateway.evaluate(new GovernedAction(
-                "agent.promote", Principal.agent("a-1"), domainId, null,
+                "cascade.issue", Principal.agent("a-1"), domainId, null,
                 json.createObjectNode().put("scope", "this")));
 
         assertThat(allow.flagged()).isFalse();
@@ -374,7 +376,7 @@ class ContractGatewayTest {
         level("all");
         activeGuards(guard(GuardEffect.DENY, null, "{\"field\":\"payload.scope\",\"eq\":\"other\"}"));
 
-        gateway.evaluate(new GovernedAction("agent.promote", Principal.agent("a-1"),
+        gateway.evaluate(new GovernedAction("cascade.issue", Principal.agent("a-1"),
                 domainId, null, json.createObjectNode().put("scope", "this")));
 
         assertThat(onlyRow().getDecision()).isEqualTo(GatewayDecision.ALLOW);
@@ -461,6 +463,159 @@ class ContractGatewayTest {
                 action(ContractGateway.ACTION_WAIVE_BREACH, PrincipalType.SERVICE))).flagged())
                 .isFalse();
         assertThat(rows).isEmpty();                          // no guards ⇒ counters only
+    }
+
+    // --------------------------- agents.md §8 — registry gate + built-in guards
+
+    /** Stub-gate gateway builder for the §8.1 SPI verdicts. */
+    private ContractGateway gatewayWith(AgentRegistryGate stubGate) {
+        Clock clock = Clock.fixed(NOW, ZoneOffset.UTC);
+        return new ContractGateway(
+                new GuardCache(guardRepo, clock), contractRepo,
+                new RequireAttestationGate(commitmentRepo, attestationRepo, properties, clock),
+                new ContractMetricLeafResolver(metricRepo, properties, clock),
+                writer, properties, json, stubGate);
+    }
+
+    private static AgentRegistryGate verdictGate(AgentRegistryGate.Verdict verdict) {
+        return new AgentRegistryGate() {
+            @Override
+            public boolean enforcesRegistry() {
+                return true;
+            }
+
+            @Override
+            public AgentRegistryGate.Verdict evaluate(GovernedAction action,
+                                                      EnforcementMode mode) {
+                return verdict;
+            }
+        };
+    }
+
+    @Test
+    void builtInLifecycleGuard_agentEnforce_agentGateDenialWithoutTouchingGuardStore() {
+        mode("enforce");
+        assertThatThrownBy(() -> gateway.evaluate(action("agent.promote", PrincipalType.AGENT)))
+                .isInstanceOf(AgentGateDeniedException.class)
+                .satisfies(thrown -> {
+                    AgentGateDeniedException denial = (AgentGateDeniedException) thrown;
+                    assertThat(denial.code()).isEqualTo(AgentGateDeniedException.AGENT_GATE_CODE);
+                    assertThat(denial.getDeny().reason())
+                            .isEqualTo(ContractGateway.REASON_AGENT_LIFECYCLE_HUMAN_ONLY);
+                });
+        assertThat(onlyRow().getDecision()).isEqualTo(GatewayDecision.DENY);
+        verifyNoInteractions(guardRepo);                     // built-in, non-removable (§8.4)
+    }
+
+    @Test
+    void builtInLifecycleGuard_coversDeployToo_andShadowRowsWouldDeny() {
+        mode("shadow");
+        Decision.Allow allow = (Decision.Allow) gateway.evaluate(
+                action("agent.deploy", PrincipalType.AGENT));
+        assertThat(allow.flagged()).isTrue();                // shadow never blocks (ADR D4)
+        assertThat(onlyRow().getDecision()).isEqualTo(GatewayDecision.WOULD_DENY);
+        assertThat(onlyRow().getReason())
+                .isEqualTo(ContractGateway.REASON_AGENT_LIFECYCLE_HUMAN_ONLY);
+    }
+
+    @Test
+    void builtInLifecycleGuard_humanLifecycleActionsPassToTheGuardSet() {
+        mode("enforce");
+        assertThat(((Decision.Allow) gateway.evaluate(
+                action("agent.promote", PrincipalType.HUMAN))).flagged()).isFalse();
+        assertThat(rows).isEmpty();                          // no guards: counter only
+    }
+
+    @Test
+    void registryGateDeny_enforce_throwsAgentGateDenial_rowedFirst() {
+        mode("enforce");
+        ContractGateway gated = gatewayWith(verdictGate(new AgentRegistryGate.Verdict.Deny(
+                AgentRegistryGate.REASON_CONTROL_SUSPENDED, "agent is paused")));
+
+        assertThatThrownBy(() -> gated.evaluate(action(PrincipalType.AGENT)))
+                .isInstanceOf(AgentGateDeniedException.class)
+                .satisfies(thrown -> {
+                    AgentGateDeniedException denial = (AgentGateDeniedException) thrown;
+                    assertThat(denial.getDeny().reason())
+                            .isEqualTo(AgentRegistryGate.REASON_CONTROL_SUSPENDED);
+                    // §10.4: rowed BEFORE the throw, decisionId cited (§8.5)
+                    assertThat(denial.getDecisionId()).isEqualTo(onlyRow().getId());
+                });
+        assertThat(onlyRow().getDecision()).isEqualTo(GatewayDecision.DENY);
+        assertThat(onlyRow().getReason()).isEqualTo(AgentRegistryGate.REASON_CONTROL_SUSPENDED);
+    }
+
+    @Test
+    void registryGateDeny_shadow_rowsWouldDenyAndProceeds() {
+        mode("shadow");
+        ContractGateway gated = gatewayWith(verdictGate(new AgentRegistryGate.Verdict.Deny(
+                AgentRegistryGate.REASON_SHADOW_SCOPE, "observation scope only")));
+
+        Decision.Allow allow = (Decision.Allow) gated.evaluate(action(PrincipalType.AGENT));
+
+        assertThat(allow.flagged()).isTrue();
+        assertThat(onlyRow().getDecision()).isEqualTo(GatewayDecision.WOULD_DENY);
+        assertThat(onlyRow().getReason()).isEqualTo(AgentRegistryGate.REASON_SHADOW_SCOPE);
+    }
+
+    @Test
+    void registryGateFlags_rowedAllowWithFlag_evenWithEmptyGuardSet() {
+        mode("shadow");
+        ContractGateway gated = gatewayWith(verdictGate(new AgentRegistryGate.Verdict.Allow(
+                List.of(AgentRegistryGate.REASON_UNREGISTERED + ": unknown agent knocking"))));
+
+        Decision.Allow allow = (Decision.Allow) gated.evaluate(action(PrincipalType.AGENT));
+
+        assertThat(allow.flagged()).isTrue();                // never silent (§8.2)
+        assertThat(onlyRow().getDecision()).isEqualTo(GatewayDecision.ALLOW_WITH_FLAG);
+        assertThat(onlyRow().getReason())
+                .contains(AgentRegistryGate.REASON_UNREGISTERED);
+    }
+
+    @Test
+    void registryGateFailure_inheritsAdrD5FailClosedForAgents() {
+        mode("enforce");
+        ContractGateway gated = gatewayWith(new AgentRegistryGate() {
+            @Override
+            public boolean enforcesRegistry() {
+                return true;
+            }
+
+            @Override
+            public AgentRegistryGate.Verdict evaluate(GovernedAction action,
+                                                      EnforcementMode mode) {
+                throw new IllegalStateException("registry unreachable");
+            }
+        });
+
+        assertThatThrownBy(() -> gated.evaluate(action(PrincipalType.AGENT)))
+                .isInstanceOf(ContractDeniedException.class)
+                .satisfies(thrown -> assertThat(((ContractDeniedException) thrown)
+                        .getDeny().reason())
+                        .isEqualTo(ContractGateway.REASON_GATEWAY_ERROR));
+        assertThat(onlyRow().getDecision()).isEqualTo(GatewayDecision.DENY);
+    }
+
+    @Test
+    void registryGate_neverInvokedForHumanOrServicePrincipals() {
+        mode("enforce");
+        ContractGateway gated = gatewayWith(new AgentRegistryGate() {
+            @Override
+            public boolean enforcesRegistry() {
+                return true;
+            }
+
+            @Override
+            public AgentRegistryGate.Verdict evaluate(GovernedAction action,
+                                                      EnforcementMode mode) {
+                throw new AssertionError("gate must only see AGENT principals (§8.1)");
+            }
+        });
+
+        assertThat(((Decision.Allow) gated.evaluate(action(PrincipalType.HUMAN))).flagged())
+                .isFalse();
+        assertThat(((Decision.Allow) gated.evaluate(action(PrincipalType.SERVICE))).flagged())
+                .isFalse();
     }
 
     // ------------------------------------------------------------- row stamping

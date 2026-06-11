@@ -39,18 +39,21 @@ class FlywayMigrationTest {
 
         assertThat(history)
                 .extracting(row -> String.valueOf(row.get("version")))
-                .contains("1", "2", "4", "5");
+                .contains("1", "2", "4", "5", "6");
         assertThat(history)
                 .allSatisfy(row -> assertThat(row.get("success"))
                         .as("migration V%s succeeded", row.get("version"))
                         .isEqualTo(Boolean.TRUE));
         // Vendor split: db/migration/postgresql/V2_1 (partial index), V4_1
-        // (cascade_level_actions append-only trigger) and V5_1 (open-breach
-        // partial unique index) must not run on the H2 dev profile — H2 stays
-        // service-enforced (ADR-001 D9 / ADR-002 D13).
+        // (cascade_level_actions append-only trigger), V5_1 (open-breach
+        // partial unique index), V6_1 (agent_status_events append-only
+        // trigger + agent partial uniques) and V6_2 (the §11 chain-mirror
+        // decision_log_hash write-back carve-out on that trigger) must not run
+        // on the H2 dev profile — H2 stays service-enforced (ADR-001 D9 /
+        // ADR-002 D13 / ADR-003 D1).
         assertThat(history)
                 .extracting(row -> String.valueOf(row.get("version")))
-                .doesNotContain("2.1", "4.1", "5.1");
+                .doesNotContain("2.1", "4.1", "5.1", "6.1", "6.2");
     }
 
     @Test
@@ -77,7 +80,14 @@ class FlywayMigrationTest {
                 "contract_monitors", "contract_monitor_runs",
                 "contract_attestations", "contract_metric_samples",
                 "contract_breaches", "contract_events",
-                "contract_enforcement_decisions", "shedlock");
+                "contract_enforcement_decisions", "shedlock",
+                // V6 agent registry (engine-spec agents.md §4 — all 11 tables)
+                "agent_registrations", "agent_oversight_links",
+                "agent_status_events", "agent_interventions",
+                "agent_compliance_reviews", "agent_criteria_gates",
+                "agent_metric_samples", "agent_throttle_budgets",
+                "agent_rate_counters", "agent_sightings",
+                "agent_notifications");
 
         List<String> actual = jdbcTemplate.queryForList(
                 "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'",

@@ -1,0 +1,63 @@
+
+================ 1. Deploy a SUBSTRATE_MCP-locus agent bound to principal acceptance-6c-agent-a-acc (domain of the guards lever) ================
+deployed: a-acc
+
+================ 2. Pause it ==> 200, enforcement.effect=recorded-intent + the honest SHADOW-ladder disclosure (shadow rows would-deny, never blocks — gateway-block is claimed only in enforce) ================
+HTTP        : HTTP 200
+enforcement : {'effect': 'recorded-intent', 'confirmationState': 'pending', 'disclosure': "registry flip recorded; the shared enforcement ladder (substrate.contracts.enforcement.mode) is in SHADOW: this agent's governed calls are rowed would-deny and zombie activity is signaled, not blocked — enforce mode makes this a hard gateway block"}
+
+================ 3. SHADOW: MCP agent_heartbeat as the PAUSED agent ==> proceeds (shadow never blocks) ================
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"recorded\":true,\"sighting\":{\"id\":\"d73f92cf-dfec-4e10-85b4-c43cdad4d0dc\",\"seenAt\":\"2026-06-11T11:32:27.123252800Z\",\"channel\":\"heartbeat\",\"detail\":\"overnight batch still polling\"}}"
+    }
+  ],
+  "isError": false,
+  "structuredContent": {
+    "recorded": true,
+    "sighting": {
+      "id": "d73f92cf-dfec-4e10-85b4-c43cdad4d0dc",
+      "seenAt": "2026-06-11T11:32:27.123252800Z",
+      "channel": "heartbeat",
+      "detail": "overnight batch still polling"
+    }
+  }
+}
+
+================ 4. The touch was SIGHTED + WOULD_DENY rowed + ACTIVE_WHILE_PAUSED in signals (zombie flow, §6.4) ================
+{'channel': 'gateway-action', 'detail': "governed action 'agent.heartbeat' attempted at the gateway", 'seenAt': '2026-06-11T11:32:27.123253Z'}
+{'channel': 'heartbeat', 'detail': 'overnight batch still polling', 'seenAt': '2026-06-11T11:32:27.123253Z'}
+controlViolations : [{'agentKey': 'a-acc', 'kind': 'ACTIVE_WHILE_PAUSED', 'lastSeenAt': '2026-06-11T11:32:27.123253Z'}]
+budgetsExhausted  : []
+gateCoverage      : {'structured': 1, 'unstructured': 0, 'unevaluated': 1}
+
+================ 5. get_my_registration ==> the caller's VERBATIM mandate + gates + standing ================
+deploymentCriteria: Operate within the governed gateway scope, target 90% pre-fill accuracy
+status            : paused
+gates             : [('target 90% pre-fill accuracy', 'unevaluated')]
+oversightChain    : ['Curasync RCM Lead', 'Curasync COO']
+
+================ 6. Party-bound principal (demo-agent) keeps party-scoped contract verbs (P19 carve-out) ================
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"id\":\"00d09e7f-5efb-4af8-b4ff-947c81c81d08\",\"contractId\":\"711d8da3-39a7-4dc7-8dfe-23bf268d823a\",\"partyId\":\"788e150e-8593-45d2-84a3-ad0d1067f398\",\"metricKey\":\"utilization_share\",\"metricValue\":0.61,\"periodKey\":\"2026-Q1\",\"reportedBy\":\"demo-agent\",\"reportedAt\":\"2026-06-11T11:32:27.486269600Z\"}"
+    }
+  ],
+  "isError": false,
+  "structuredContent": {
+    "id": "00d09e7f-5efb-4af8-b4ff-947c81c81d08",
+    "contractId": "711d8da3-39a7-4dc7-8dfe-23bf268d823a",
+    "partyId": "788e150e-8593-45d2-84a3-ad0d1067f398",
+    "metricKey": "utilization_share",
+    "metricValue": 0.61,
+    "periodKey": "2026-Q1",
+    "reportedBy": "demo-agent",
+    "reportedAt": "2026-06-11T11:32:27.486269600Z"
+  }
+}
+
+================ PHASE A (shadow) DONE — reboot with --substrate.contracts.enforcement.mode=enforce ================

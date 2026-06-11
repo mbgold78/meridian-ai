@@ -75,10 +75,14 @@ class DemoSeedScopeTest {
         long readers = readerRegistrationRepository.count();
         long brandings = brandingConfigRepository.count();
 
-        assertThat(domains).as("bulk seed ran at boot").isEqualTo(1);
+        // 1 primary demo domain + 22 Beacon satellite domains (Phase 6a:
+        // AgentDemoSeeder — a Beacon subsidiary IS a Domain, agents.md §15).
+        assertThat(domains).as("bulk seed ran at boot").isEqualTo(23);
 
         // Second run: domains exist, so the orchestrator takes the idempotent
-        // per-demo-domain sample path. Nothing may duplicate.
+        // per-demo-domain sample path (Beacon satellites are SKIPPED — the
+        // sample seeders belong to the primary domain only). Nothing may
+        // duplicate — including agent satellite domains/registrations.
         orchestrator.run();
 
         assertThat(domainRepository.count()).isEqualTo(domains);

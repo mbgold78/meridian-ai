@@ -37,6 +37,16 @@ public class ContractDeniedException extends RuntimeException {
         this.deny = deny;
     }
 
+    /**
+     * The envelope/MCP {@code code} discriminator (§4.5):
+     * {@value #CODE} here; {@code AGENT_GATE_DENIAL} on the
+     * {@link AgentGateDeniedException} subtype (agents.md §8.5) — adapters
+     * translate via this method, never by instanceof chains.
+     */
+    public String code() {
+        return CODE;
+    }
+
     public Decision.Deny getDeny() {
         return deny;
     }
