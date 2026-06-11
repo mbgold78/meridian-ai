@@ -2,6 +2,7 @@ package com.meridian.substrate.app.architecture;
 
 import com.meridian.substrate.common.governance.UngovernedModule;
 import com.meridian.substrate.common.repo.AgentStatusEventRepository;
+import com.meridian.substrate.common.repo.AiCurationEventRepository;
 import com.meridian.substrate.common.repo.ContractEnforcementDecisionRepository;
 import com.meridian.substrate.common.repo.ContractEventRepository;
 import com.meridian.substrate.common.repo.ContractMonitorRunRepository;
@@ -118,7 +119,9 @@ class GovernedArchitectureTest {
     /**
      * §10.9 append-only repositories (no update/delete code path may exist) +
      * the agent audit log (engine-spec agents.md §5.5 / invariant I4; test
-     * plan #6 ArchUnit half).
+     * plan #6 ArchUnit half) + the diagnostic curation audit (engine-spec
+     * diagnostic.md §3.2 / test plan #15: "repositories expose no
+     * update/delete methods for AiCurationEvent; ArchUnit pins this").
      */
     static final Class<?>[] APPEND_ONLY_REPOSITORIES = {
             ContractEventRepository.class,
@@ -126,6 +129,7 @@ class GovernedArchitectureTest {
             ContractPartyResponseRepository.class,
             ContractEnforcementDecisionRepository.class,
             AgentStatusEventRepository.class,
+            AiCurationEventRepository.class,
     };
 
     // ------------------------------------------------- 1. governed coverage

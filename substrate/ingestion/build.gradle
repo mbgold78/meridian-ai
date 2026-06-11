@@ -37,6 +37,19 @@ dependencies {
     // Test
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
     testRuntimeOnly 'com.h2database:h2'
+
+    // Diagnostic e2e gate (engine-spec diagnostic.md §11.3): the single-JVM
+    // ingest→diagnose pipeline IT needs the diagnostic engine on the TEST
+    // classpath only. Ingestion MAIN still depends solely on :common — the
+    // §14.6 ArchUnit module rule ("ingestion never imports engine or app")
+    // imports ingestion's compiled MAIN classes and stays binding.
+    testImplementation project(':engine')
+
+    // Testcontainers-Postgres lane (suite self-disables without Docker;
+    // CI on ubuntu-latest is the real gate — H2-green is never acceptance).
+    testImplementation 'org.springframework.boot:spring-boot-testcontainers'
+    testImplementation 'org.testcontainers:junit-jupiter'
+    testImplementation 'org.testcontainers:postgresql'
 }
 
 // Chunk I1 decision (port-map §2.4 datasource note): the ingestion CLI SHARES the

@@ -1,0 +1,29 @@
+[
+  {
+    "id": "diag-gen-001-extra-reasoning-field-dropped",
+    "mode": "generative",
+    "input": "Generative allowlist: an extra 'reasoning' field is silently dropped; allowlisted fields survive into proposedFields.",
+    "entityType": "capability",
+    "seedEvidence": 1,
+    "candidatePayload": "[{\"name\":\"Customer Onboarding\",\"description\":\"Proposed from workflow notes.\",\"reasoning\":\"This field is NOT on the allowlist and must be dropped.\",\"evidenceIds\":[\"{{evidence:0}}\"]}]",
+    "expectedOutcomes": ["KEPT"],
+    "expectedPattern": "proposedFields=\\[description, name\\],dropped=\\[reasoning\\]"
+  },
+  {
+    "id": "diag-gen-002-no-allowlisted-fields-filtered",
+    "mode": "generative",
+    "input": "Generative allowlist: a grounded proposal carrying ONLY non-allowlisted fields is filtered.",
+    "entityType": "capability",
+    "seedEvidence": 1,
+    "candidatePayload": "[{\"reasoning\":\"Nothing here is on the capability allowlist.\",\"category\":\"ops\",\"evidenceIds\":[\"{{evidence:0}}\"]}]",
+    "expectedOutcomes": ["NO_ALLOWLISTED_FIELDS"]
+  },
+  {
+    "id": "diag-gen-003-ungrounded-proposal-filtered",
+    "mode": "generative",
+    "input": "Generative grounding (P6): a proposal citing no resolvable in-domain evidence is filtered, never presented.",
+    "entityType": "capability",
+    "candidatePayload": "[{\"name\":\"Ungrounded Capability\",\"description\":\"Cites a nonexistent evidence id.\",\"evidenceIds\":[\"33333333-3333-3333-3333-333333333333\"]}]",
+    "expectedOutcomes": ["UNGROUNDED"]
+  }
+]

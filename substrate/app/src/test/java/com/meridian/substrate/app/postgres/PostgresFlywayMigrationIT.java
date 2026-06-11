@@ -52,11 +52,12 @@ class PostgresFlywayMigrationIT {
                 "SELECT version, success FROM flyway_schema_history WHERE version IS NOT NULL ORDER BY installed_rank");
 
         // Vendor-split resolution (§4.2): {vendor} → postgresql, so the
-        // dot-versioned V2.1 partial index MUST apply here (it must NOT on H2 —
-        // pinned by the dev-profile FlywayMigrationTest).
+        // dot-versioned vendor migrations MUST apply here (they must NOT on
+        // H2 — pinned by the dev-profile FlywayMigrationTest). V7/V7.1 =
+        // diagnostic engine (engine-spec diagnostic.md §3.1/§3.2).
         assertThat(history)
                 .extracting(row -> String.valueOf(row.get("version")))
-                .contains("1", "2", "2.1", "3");
+                .contains("1", "2", "2.1", "3", "7", "7.1");
         assertThat(history)
                 .allSatisfy(row -> assertThat(row.get("success"))
                         .as("migration V%s succeeded", row.get("version"))
@@ -74,7 +75,9 @@ class PostgresFlywayMigrationIT {
                 "document_registry", "evidence", "assertions", "system_uploads",
                 "capabilities", "capability_name_history", "capability_process_links",
                 "capability_system_links", "phase_states", "reader_registrations",
-                "branding_configs", "ingest_runs");
+                "branding_configs", "ingest_runs",
+                // V7 diagnostic engine (engine-spec diagnostic.md §3.1)
+                "ai_curation_events", "diagnostic_run_batches");
 
         List<String> actual = jdbcTemplate.queryForList(
                 "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'",

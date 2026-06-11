@@ -271,6 +271,41 @@ public class GlobalExceptionHandler {
         return buildErrorResponse(HttpStatus.FORBIDDEN, ex.getCode().name(), ex.getMessage());
     }
 
+    /**
+     * Diagnostic-engine command conflicts (engine-spec diagnostic.md
+     * §4.2/§5.3/§9/§10.1; ADR-004 D9/D11): 409 with the spec code —
+     * {@code DIAGNOSTIC_RUN_ACTIVE} (one active diagnostic run per domain),
+     * {@code DRAFT_GROUNDING_LOST} (a draft's cited evidence no longer fully
+     * resolves at materialization time — never silently materialized), or
+     * {@code CURATION_CONFLICT} (curation verb against an illegal state /
+     * idempotency key replayed with a different action). NOT
+     * cancel/reject vocabulary: cancel and a well-formed REJECT return 200
+     * always (spec non-negotiable #3).
+     */
+    @ExceptionHandler(com.meridian.substrate.engine.diagnostic.exception.DiagnosticConflictException.class)
+    public ResponseEntity<ApiResponse<Void>> handleDiagnosticConflict(
+            com.meridian.substrate.engine.diagnostic.exception.DiagnosticConflictException ex) {
+        log.warn("Diagnostic conflict [{}]: {}", ex.getCode(), ex.getMessage());
+        return buildErrorResponse(HttpStatus.CONFLICT, ex.getCode().name(), ex.getMessage());
+    }
+
+    /**
+     * REJECT without a rationale (engine-spec diagnostic.md §9/§5.3): 400
+     * with the spec code {@code RATIONALE_REQUIRED} and the offending field —
+     * service-enforced (NOT bean validation) so the rule holds for every
+     * caller of the curation services, not just this REST surface.
+     */
+    @ExceptionHandler(com.meridian.substrate.engine.diagnostic.exception.RationaleRequiredException.class)
+    public ResponseEntity<ApiResponse<Void>> handleRationaleRequired(
+            com.meridian.substrate.engine.diagnostic.exception.RationaleRequiredException ex) {
+        log.warn("Rationale required: {}", ex.getMessage());
+        ApiMeta meta = ApiMeta.now(MDC.get("requestId"), null);
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(ApiResponse.error(
+                        List.of(new ApiError("RATIONALE_REQUIRED", ex.getMessage(), "rationale")),
+                        meta));
+    }
+
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ApiResponse<Void>> handleAll(Exception ex) {
         log.error("Unhandled exception", ex);

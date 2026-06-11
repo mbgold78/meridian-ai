@@ -28,6 +28,8 @@ import type { CascadeAttentionSignalWire } from '@/api/endpoints';
 import { cn } from '@/lib/utils';
 import { attentionOrder, useBeaconCascades } from './cascadeData';
 import type { CascadeGridRow } from './cascadeData';
+import { useBeaconPortfolioStats } from './portfolioData';
+import type { PortfolioStripStats } from './portfolioData';
 import { portfolioPaths } from './paths';
 
 /**
@@ -168,6 +170,10 @@ export function CorporateOperatingPartnerView() {
   // Cascade read-model swap (engine-spec §11): live API rows when the
   // backend answers, deterministic fixture fallback when it doesn't.
   const { rows: cascadeRows } = useBeaconCascades();
+  // D5 stats swap (engine-spec diagnostic.md §12/§14 step 9 — fixture seam
+  // S6): the strip's stamped constants become engine-computed numbers
+  // whenever GET /api/v1/portfolio answers; fixture fallback otherwise.
+  const stripStats = useBeaconPortfolioStats();
 
   const interventionAgents = useMemo(
     () =>
@@ -220,12 +226,9 @@ export function CorporateOperatingPartnerView() {
       <div className="space-y-12 px-8 py-8">
         <CoordinationSignalStrip
           crossOppCount={CROSS_PORTFOLIO_OPPORTUNITIES.length}
-          interventionCount={interventionAgents}
-          totalAgents={totalAgents}
-          lifecycleStallCount={BEACON_PORTFOLIO.lifecycleStallCount}
-          coordinationPatternsThisWeek={
-            BEACON_PORTFOLIO.coordinationPatternsThisWeek
-          }
+          fixtureInterventionCount={interventionAgents}
+          fixtureTotalAgents={totalAgents}
+          stats={stripStats}
         />
 
         <LifecyclePhaseDistribution subsByPhase={subsByPhase} />
@@ -291,22 +294,52 @@ function PortfolioHeader({
 
 interface CoordinationSignalStripProps {
   crossOppCount: number;
-  interventionCount: number;
-  totalAgents: number;
-  lifecycleStallCount: number;
-  coordinationPatternsThisWeek: number;
+  /** Fixture-derived fallbacks for the agent card (fixture mode only). */
+  fixtureInterventionCount: number;
+  fixtureTotalAgents: number;
+  /** D5 stats seam (portfolioData) — live engine numbers or fixture constants. */
+  stats: PortfolioStripStats;
 }
 
+/**
+ * Zone 2 — the S6 stats strip. Live mode renders the §12 engine-computed
+ * numbers with the binding absent-vs-zero distinctions: an ABSENT agent
+ * registry renders an em-dash + "registry unavailable" (never 0), and the
+ * separate `unphased` count rides the stall card's description (never folded
+ * into the stall figure — §12.1).
+ */
 function CoordinationSignalStrip({
   crossOppCount,
-  interventionCount,
-  totalAgents,
-  lifecycleStallCount,
-  coordinationPatternsThisWeek,
+  fixtureInterventionCount,
+  fixtureTotalAgents,
+  stats,
 }: CoordinationSignalStripProps) {
+  const live = stats.source === 'live';
+
+  // Agents card: fixture vocabulary in fixture mode; in live mode an absent
+  // registry is rendered DISTINCTLY (em-dash), never as a fabricated zero.
+  const agentsAbsent = live && stats.agentsAvailable === false;
+  const interventionValue = live
+    ? agentsAbsent
+      ? '—'
+      : stats.agentsInIntervention ?? '—'
+    : fixtureInterventionCount;
+  const interventionDescription = live
+    ? agentsAbsent
+      ? 'Agent registry unavailable — counts withheld, not zero'
+      : `Of ${stats.agentsTotal ?? 0} registered across portfolio`
+    : `Of ${fixtureTotalAgents} active across portfolio`;
+
+  // Stall card: the separate unphased count is surfaced, never folded in.
+  const stallDescription =
+    live && stats.unphased !== null && stats.unphased > 0
+      ? `90+ days in current phase · ${stats.unphased} unphased (no lifecycle data)`
+      : 'Subsidiaries 90+ days in current phase';
+
   return (
     <section
       aria-label="Coordination signals"
+      data-stats-source={stats.source}
       className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4"
     >
       <CoordinationSignalCard
@@ -319,21 +352,21 @@ function CoordinationSignalStrip({
       <CoordinationSignalCard
         icon={<Warning size={24} aria-hidden weight="regular" />}
         label="Agents in intervention"
-        value={interventionCount}
-        description={`Of ${totalAgents} active across portfolio`}
+        value={interventionValue}
+        description={interventionDescription}
         active
       />
       <CoordinationSignalCard
         icon={<Clock size={24} aria-hidden weight="regular" />}
         label="Lifecycle stalls"
-        value={lifecycleStallCount}
-        description="Subsidiaries 90+ days in current phase"
+        value={stats.lifecycleStallCount}
+        description={stallDescription}
         active
       />
       <CoordinationSignalCard
         icon={<Broadcast size={24} aria-hidden weight="regular" />}
         label="Coordination signals"
-        value={coordinationPatternsThisWeek}
+        value={stats.coordinationPatternsThisWeek}
         description="Cross-sub patterns AI surfaced this week"
         active
       />
@@ -344,7 +377,7 @@ function CoordinationSignalStrip({
 interface CoordinationSignalCardProps {
   icon: React.ReactNode;
   label: string;
-  value: number;
+  value: number | string;
   description: string;
   active: boolean;
 }

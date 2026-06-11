@@ -1,11 +1,23 @@
 # Dev profile — zero external dependencies (no Docker on this machine,
-# port-map §4). FILE-based H2 (unlike the app's in-memory dev DB) so commits
-# persist across CLI invocations: that's what makes the idempotent re-commit
-# acceptance check user-runnable (run commit twice, compare counts).
-# Reset: delete ./data (relative to substrate/ingestion when using bootRun).
+# port-map §4). FILE-based H2 so commits persist across CLI invocations.
+#
+# REALIGNED for the diagnostic-engine E2E (engine-spec diagnostic.md §11.1;
+# ADR-004 D14 — BREAKING dev-only change, flagged at slice close): the old
+# ./data/ingestion-dev database is RETIRED; ingestion's dev profile now shares
+# the app `dev-shared` profile's engagement database so the documented
+# ingest-CLI → diagnostic-run → curl E2E hits ONE database across processes.
+# AUTO_SERVER lets both JVMs open the file concurrently. The URL string is
+# identical to app/application-dev-shared.yml, and "../data" (module working
+# dirs are substrate/ingestion vs substrate/app) makes it the identical
+# physical file: substrate/data/engagement-dev.*. Reset by deleting
+# substrate/data (stale pre-realignment runs: substrate/ingestion/data may
+# also be deleted).
+#
+# H2 AUTO_SERVER is acceptance convenience ONLY — Testcontainers-Postgres in
+# CI remains the acceptance gate; H2-green is never acceptance.
 spring:
   datasource:
-    url: jdbc:h2:file:./data/ingestion-dev;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH
+    url: jdbc:h2:file:../data/engagement-dev;AUTO_SERVER=TRUE;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH
     driver-class-name: org.h2.Driver
     username: sa
     password: ""

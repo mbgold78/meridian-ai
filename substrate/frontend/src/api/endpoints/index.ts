@@ -19,6 +19,7 @@ export * from './evidence';
 export * from './findings';
 export * from './intelligence';
 export * from './organization';
+export * from './portfolio';
 export * from './processes';
 export * from './sources';
 export * from './systems';

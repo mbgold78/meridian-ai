@@ -80,6 +80,15 @@ substrate:
   decision-log:
     # Boot-time hash-chain re-verification (C4). Code default is true; key is documentation.
     verify-on-boot: true
+  stats:
+    # D5 computed statistics (engine-spec diagnostic.md §2/§12; ADR-004 D13).
+    # stall-threshold-days: §12.1 lifecycle-stall dwell threshold — the fixture's
+    # "90+ days" one-liner as a config knob; first-engagement calibration item.
+    stall-threshold-days: 90
+    # pattern-window-days DOCUMENTS the §12.2 trailing window, which is DELEGATED
+    # to contracts §11.2 (ContractSignalService.COORDINATION_WINDOW owns it —
+    # "the window stays theirs"); never wired into a portfolio-side computation.
+    pattern-window-days: 7
   # substrate.eval.enabled / substrate.eval.run (C3) default false in code — no entry needed.
   # Eval harness run: gradlew :app:bootRun --args="--substrate.eval.enabled=true --substrate.eval.run=true --substrate.llm.provider=mock"
   # substrate.engine.tools.dispatch-pool-size (C3) defaults to 8 in code; persona-access

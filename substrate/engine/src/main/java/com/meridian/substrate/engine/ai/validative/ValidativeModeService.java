@@ -3,29 +3,21 @@ package com.meridian.substrate.engine.ai.validative;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.meridian.substrate.engine.ai.assertion.AssertionService;
+import com.meridian.substrate.common.domain.enums.FindingType;
 import com.meridian.substrate.engine.ai.orchestration.AiMode;
 import com.meridian.substrate.engine.ai.orchestration.OrchestratorResult;
 import com.meridian.substrate.engine.ai.orchestration.SurfaceContext;
 import com.meridian.substrate.engine.ai.orchestration.ToolCallingOrchestrator;
 import com.meridian.substrate.engine.ai.persona.PersonaContext;
-import com.meridian.substrate.common.repo.EvidenceRepository;
-import com.meridian.substrate.common.domain.Assertion;
-import com.meridian.substrate.common.domain.Evidence;
-import com.meridian.substrate.common.domain.enums.ProducedBy;
+import com.meridian.substrate.engine.diagnostic.CandidateFilter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Set;
-import java.util.UUID;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
+import java.util.Map;
 
 /**
  * Validative AI mode: audit the existing model and produce structured
@@ -52,9 +44,20 @@ import java.util.stream.Stream;
  *       findings are accepted with or without evidence (model-state observations
  *       are self-justifying).</li>
  *   <li><b>Assertion provenance.</b> Each surviving candidate is persisted as an
- *       {@code Assertion} with {@link ProducedBy#AI_VALIDATIVE} so a future
+ *       {@code Assertion} with {@code ProducedBy.AI_VALIDATIVE} so a future
  *       audit can trace what the AI claimed at validation time.</li>
  * </ul>
+ *
+ * <p><b>Diagnostic-engine refactor (engine-spec diagnostic.md §7.2, build step
+ * 3):</b> the allowlist + differential-grounding + Assertion core above now
+ * lives in {@link CandidateFilter} (the single grounding chokepoint shared
+ * with the orchestrator-dispatched executor lane); this service delegates and
+ * its public contract is byte-identical — the pinned phase2a suites pass
+ * unmodified. The only candidate-contract change is §5.1-additive: candidates
+ * MAY carry optional {@code title} / {@code findingType} fields (raw
+ * passthrough; commit-step concern), and the prompt names the
+ * {@code find_evidence} tool (§7.1) so the model can discover citable
+ * evidence ids against freshly-ingested data.
  */
 @Service
 public class ValidativeModeService {
@@ -62,21 +65,33 @@ public class ValidativeModeService {
     private static final Logger log = LoggerFactory.getLogger(ValidativeModeService.class);
 
     private final ToolCallingOrchestrator orchestrator;
-    private final AssertionService assertionService;
-    private final EvidenceRepository evidenceRepository;
+    private final CandidateFilter candidateFilter;
     private final ObjectMapper mapper;
 
     public ValidativeModeService(ToolCallingOrchestrator orchestrator,
-                                 AssertionService assertionService,
-                                 EvidenceRepository evidenceRepository,
+                                 CandidateFilter candidateFilter,
                                  ObjectMapper mapper) {
         this.orchestrator = orchestrator;
-        this.assertionService = assertionService;
-        this.evidenceRepository = evidenceRepository;
+        this.candidateFilter = candidateFilter;
         this.mapper = mapper;
     }
 
     public ValidateResponse validate(ValidateRequest request, PersonaContext persona) {
+        return validateDetailed(request, persona).response();
+    }
+
+    /**
+     * The §8.1 ledger-accounting variant (engine-spec diagnostic.md §8.1,
+     * build step 4): same pipeline as {@link #validate} — which now delegates
+     * here, behavior byte-identical — additionally exposing what the batch
+     * ledger needs and the pinned {@link ValidateResponse} cannot carry: the
+     * raw parseable-candidate count, the per-reason
+     * {@link CandidateFilter.Outcome} histogram ({@code filter_histogram},
+     * spec §3.1), and the {@link OrchestratorResult} token/model/refusal data
+     * (run accounting, spec §4.5). ADDITIVE method only — the pinned phase2a
+     * public contract is untouched and its suites pass unmodified.
+     */
+    public DetailedValidation validateDetailed(ValidateRequest request, PersonaContext persona) {
         log.info("Validative request [domainId={}, surface={}, scope={}, targets={}]",
                 request.domainId(), request.surface(), request.scope(),
                 request.targetEntityIds() == null ? 0 : request.targetEntityIds().size());
@@ -90,26 +105,18 @@ public class ValidativeModeService {
         List<JsonNode> rawFindings = parseFindings(result.finalText());
         if (rawFindings.isEmpty()) {
             log.info("Validative produced no parseable findings");
-            return new ValidateResponse(List.of(), 0,
-                    "AI did not return any structured findings.");
+            return new DetailedValidation(
+                    new ValidateResponse(List.of(), 0,
+                            "AI did not return any structured findings."),
+                    0, Map.of(), result);
         }
 
-        Set<UUID> domainEvidenceIds = evidenceRepository.findByDomainId(request.domainId())
-                .stream()
-                .map(Evidence::getId)
-                .collect(Collectors.toSet());
+        CandidateFilter.Result filterResult = candidateFilter.filter(
+                rawFindings,
+                new CandidateFilter.Context(request.domainId(), request.surface(), request.scope()));
 
-        List<FindingCandidate> kept = new ArrayList<>();
-        int filtered = 0;
-
-        for (JsonNode raw : rawFindings) {
-            FindingCandidate candidate = validateAndBuild(raw, domainEvidenceIds, request);
-            if (candidate == null) {
-                filtered++;
-                continue;
-            }
-            kept.add(candidate);
-        }
+        List<FindingCandidate> kept = filterResult.kept();
+        int filtered = filterResult.filteredCount();
 
         log.info("Validative produced [findings={}, filtered={}]", kept.size(), filtered);
 
@@ -119,152 +126,24 @@ public class ValidativeModeService {
                         rawFindings.size())
                 : null;
 
-        return new ValidateResponse(kept, filtered, explanation);
+        return new DetailedValidation(
+                new ValidateResponse(kept, filtered, explanation),
+                rawFindings.size(), filterResult.histogram(), result);
     }
 
     /**
-     * Validate every required field, enforce both allowlists and the
-     * differential grounding rule, then persist an Assertion and return the
-     * candidate. Returns {@code null} if any check fails — the caller increments
-     * the filtered count.
+     * {@link #validateDetailed} result: the pinned {@link ValidateResponse}
+     * plus the diagnostic batch ledger's accounting data (spec §3.1/§4.5).
+     * Zero parseable candidates ⇒ {@code rawCandidateCount=0} with an empty
+     * histogram — the §10.2 NO_CANDIDATES lane stays structurally
+     * distinguishable from all-filtered.
      */
-    private FindingCandidate validateAndBuild(JsonNode raw,
-                                              Set<UUID> domainEvidenceIds,
-                                              ValidateRequest request) {
-        FindingCandidateType type = parseType(raw);
-        if (type == null) {
-            log.debug("Filtered finding: invalid or missing 'type' (must be STRUCTURAL or CONTENT)");
-            return null;
-        }
-
-        FindingCandidateSeverity severity = parseSeverity(raw);
-        if (severity == null) {
-            log.debug("Filtered finding: invalid or missing 'severity' (must be one of {})",
-                    Arrays.toString(FindingCandidateSeverity.values()));
-            return null;
-        }
-
-        String description = textOrNull(raw, "description");
-        String suggestedAction = textOrNull(raw, "suggestedAction");
-        if (description == null || description.isBlank()
-                || suggestedAction == null || suggestedAction.isBlank()) {
-            log.debug("Filtered finding: missing required field (description or suggestedAction)");
-            return null;
-        }
-
-        String affectedEntityType = textOrNull(raw, "affectedEntityType");
-        UUID affectedEntityId = parseUuidOrNull(raw, "affectedEntityId");
-
-        List<UUID> claimedEvidence = extractEvidenceIds(raw);
-        List<UUID> grounded = claimedEvidence.stream()
-                .filter(domainEvidenceIds::contains)
-                .toList();
-
-        // Differential grounding rule: CONTENT requires ≥1 grounded evidence;
-        // STRUCTURAL accepts any (or none).
-        if (type == FindingCandidateType.CONTENT && grounded.isEmpty()) {
-            log.debug("Filtered CONTENT finding: claimed {} evidenceIds, {} grounded in domain",
-                    claimedEvidence.size(), grounded.size());
-            return null;
-        }
-
-        Assertion assertion = persistAssertion(
-                request, type, severity, affectedEntityType, affectedEntityId,
-                description, suggestedAction, grounded);
-
-        return new FindingCandidate(
-                type, severity, affectedEntityType, affectedEntityId,
-                description, suggestedAction, grounded, assertion.getId());
-    }
-
-    private Assertion persistAssertion(ValidateRequest request,
-                                       FindingCandidateType type,
-                                       FindingCandidateSeverity severity,
-                                       String affectedEntityType,
-                                       UUID affectedEntityId,
-                                       String description,
-                                       String suggestedAction,
-                                       List<UUID> grounded) {
-        ObjectNode object = mapper.createObjectNode();
-        object.put("severity", severity.name());
-        object.put("description", description);
-        object.put("suggestedAction", suggestedAction);
-        if (affectedEntityType != null) object.put("affectedEntityType", affectedEntityType);
-        if (affectedEntityId != null) object.put("affectedEntityId", affectedEntityId.toString());
-
-        String subject = affectedEntityType != null && affectedEntityId != null
-                ? affectedEntityType + ":" + affectedEntityId
-                : "domain:" + request.domainId();
-
-        ObjectNode producedByContext = mapper.createObjectNode();
-        producedByContext.put("mode", AiMode.VALIDATIVE.name());
-        producedByContext.put("surface", request.surface().name());
-        producedByContext.put("scope", request.scope());
-
-        return assertionService.record(
-                request.domainId(),
-                subject,
-                "validative_finding:" + type.name(),
-                object.toString(),
-                null,
-                grounded,
-                ProducedBy.AI_VALIDATIVE,
-                producedByContext);
-    }
-
-    private FindingCandidateType parseType(JsonNode raw) {
-        String value = textOrNull(raw, "type");
-        if (value == null) return null;
-        return Stream.of(FindingCandidateType.values())
-                .filter(t -> t.name().equals(value))
-                .findFirst()
-                .orElse(null);
-    }
-
-    private FindingCandidateSeverity parseSeverity(JsonNode raw) {
-        String value = textOrNull(raw, "severity");
-        if (value == null) return null;
-        return Stream.of(FindingCandidateSeverity.values())
-                .filter(s -> s.name().equals(value))
-                .findFirst()
-                .orElse(null);
-    }
-
-    private String textOrNull(JsonNode raw, String key) {
-        JsonNode node = raw.get(key);
-        return node != null && node.isTextual() ? node.asText() : null;
-    }
-
-    private UUID parseUuidOrNull(JsonNode raw, String key) {
-        String text = textOrNull(raw, key);
-        if (text == null) return null;
-        try {
-            return UUID.fromString(text);
-        } catch (IllegalArgumentException e) {
-            return null;
-        }
-    }
-
-    private List<UUID> extractEvidenceIds(JsonNode raw) {
-        JsonNode arr = raw.get("evidenceIds");
-        if (arr == null || !arr.isArray()) {
-            return List.of();
-        }
-        Set<UUID> seen = new HashSet<>();
-        List<UUID> out = new ArrayList<>();
-        for (JsonNode node : arr) {
-            if (!node.isTextual()) continue;
-            try {
-                UUID id = UUID.fromString(node.asText());
-                if (seen.add(id)) {
-                    out.add(id);
-                }
-            } catch (IllegalArgumentException ignored) {
-                // skip non-UUID strings
-            }
-        }
-        return out;
-    }
+    public record DetailedValidation(
+            ValidateResponse response,
+            int rawCandidateCount,
+            Map<CandidateFilter.Outcome, Integer> filterHistogram,
+            OrchestratorResult orchestratorResult
+    ) {}
 
     private List<JsonNode> parseFindings(String finalText) {
         if (finalText == null || finalText.isBlank()) {
@@ -301,8 +180,12 @@ public class ValidativeModeService {
         sb.append("  - severity: one of ").append(Arrays.toString(FindingCandidateSeverity.values())).append("\n");
         sb.append("  - description: what is wrong\n");
         sb.append("  - suggestedAction: what to do about it\n");
-        sb.append("Optional: affectedEntityType, affectedEntityId (UUID).\n");
-        sb.append("evidenceIds: array of UUID strings — REQUIRED for CONTENT findings, optional for STRUCTURAL.\n\n");
+        sb.append("Optional: title (short, max 200 characters); findingType: one of ")
+                .append(Arrays.toString(FindingType.values())).append("; ");
+        sb.append("affectedEntityType, affectedEntityId (UUID).\n");
+        sb.append("evidenceIds: array of UUID strings — REQUIRED for CONTENT findings, optional for STRUCTURAL. ");
+        sb.append("Use the find_evidence tool to discover citable evidence ids in this domain; ");
+        sb.append("CONTENT findings citing evidence ids you did not retrieve will be filtered.\n\n");
         sb.append("Findings will be filtered if: type or severity is outside the allowed set; ");
         sb.append("description or suggestedAction is missing; or a CONTENT finding lacks grounding evidence in this domain. ");
         sb.append("Do not include prose around the JSON array.");

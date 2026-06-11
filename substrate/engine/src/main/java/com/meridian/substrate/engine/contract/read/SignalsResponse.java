@@ -23,8 +23,25 @@ public record SignalsResponse(
         List<NeedsInputItem> needsInput,
         MonitorCoverage monitorCoverage,
         long coordinationPatternsThisWeek,
-        List<ReviewBoundaryDueItem> reviewBoundariesDue
+        List<ReviewBoundaryDueItem> reviewBoundariesDue,
+        CoordinationBreakdown coordinationBreakdown
 ) {
+
+    /**
+     * Compatibility constructor (pre-D5 arity): callers/tests written before
+     * the additive {@code coordinationBreakdown} component compile UNMODIFIED;
+     * the breakdown defaults to null (absent — never fabricated zeros).
+     */
+    public SignalsResponse(long pendingFederationInvitations,
+                           OpenBreaches openBreaches,
+                           List<DeclineEligibleItem> declineEligible,
+                           List<NeedsInputItem> needsInput,
+                           MonitorCoverage monitorCoverage,
+                           long coordinationPatternsThisWeek,
+                           List<ReviewBoundaryDueItem> reviewBoundariesDue) {
+        this(pendingFederationInvitations, openBreaches, declineEligible, needsInput,
+                monitorCoverage, coordinationPatternsThisWeek, reviewBoundariesDue, null);
+    }
 
     /** Open-breach count + severity histogram across the domain's contracts. */
     public record OpenBreaches(long total, Map<String, Long> bySeverity) {
@@ -54,5 +71,16 @@ public record SignalsResponse(
      * DemoPack vectors seed {@code review_boundary = null} by design.
      */
     public record ReviewBoundaryDueItem(String contractKey) {
+    }
+
+    /**
+     * Per-source sub-counts of {@code coordinationPatternsThisWeek}
+     * (engine-spec diagnostic.md §12.2; ADR-004 D13): the sub-terms this
+     * computation ALREADY owns, exposed so the D5 portfolio surface can show
+     * that pre-D2-3b the contract term contributes 0 <em>visibly</em> — one
+     * computation, two surfaces, zero drift. Always satisfies
+     * {@code contractEvents + cascadeActions == coordinationPatternsThisWeek}.
+     */
+    public record CoordinationBreakdown(long contractEvents, long cascadeActions) {
     }
 }

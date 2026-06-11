@@ -1,12 +1,16 @@
 package com.meridian.substrate.app.config;
 
 import com.meridian.substrate.app.api.v1.request.ReaderRegistrationCreateRequest;
+import com.meridian.substrate.app.api.v1.request.TransformationPlanCreateRequest;
 import com.meridian.substrate.app.core.service.PhaseStateService;
 import com.meridian.substrate.app.core.service.ProcessStepService;
 import com.meridian.substrate.app.core.service.ReaderRegistrationService;
+import com.meridian.substrate.app.core.service.TransformationService;
 import com.meridian.substrate.common.repo.ProcessRepository;
 import com.meridian.substrate.common.repo.ProcessStepRepository;
 import com.meridian.substrate.common.repo.ReaderRegistrationRepository;
+import com.meridian.substrate.common.repo.TransformationInitiativeRepository;
+import com.meridian.substrate.common.repo.TransformationPlanRepository;
 import com.meridian.substrate.engine.contract.gateway.GovernedContextResolver;
 import com.meridian.substrate.engine.contract.gateway.GovernedContextResolver.GovernedContext;
 import com.meridian.substrate.engine.contract.gateway.TargetRef;
@@ -31,6 +35,8 @@ public class AppGovernedResolvers {
     public static final String TARGET_PROCESS = "PROCESS";
     public static final String TARGET_PROCESS_STEP = "PROCESS_STEP";
     public static final String TARGET_READER_REGISTRATION = "READER_REGISTRATION";
+    public static final String TARGET_TRANSFORMATION_PLAN = "TRANSFORMATION_PLAN";
+    public static final String TARGET_INITIATIVE = "TRANSFORMATION_INITIATIVE";
 
     @Bean
     public GovernedContextResolver phaseStateGovernedResolver() {
@@ -59,6 +65,45 @@ public class AppGovernedResolvers {
                                 .flatMap(step -> processes.findById(step.getProcessId()))
                                 .map(process -> new GovernedContext(process.getDomainId(),
                                         new TargetRef(TARGET_PROCESS_STEP, stepId.toString()), null))
+                                .orElseGet(GovernedContext::unresolved);
+                    }
+                    default -> GovernedContext.unresolved();
+                });
+    }
+
+    /**
+     * D5 thin-slice transformation verbs (engine-spec diagnostic.md §10.1;
+     * ADR-004 D12/D13; test plan #15). Domain resolution follows the entity
+     * chain each verb walks: createPlan leads with the request's domainId;
+     * addInitiative resolves plan → domain; updateProgress resolves
+     * initiative → plan → domain (soft refs, app-enforced).
+     */
+    @Bean
+    public GovernedContextResolver transformationGovernedResolver(
+            TransformationPlanRepository plans, TransformationInitiativeRepository initiatives) {
+        return GovernedContextResolver.of(TransformationService.class,
+                (actionType, method, args) -> switch (method.getName()) {
+                    case "createPlan" -> args.length > 0
+                            && args[0] instanceof TransformationPlanCreateRequest req
+                            ? new GovernedContext(req.domainId(), null, null)
+                            : GovernedContext.unresolved();
+                    case "addInitiative" -> {
+                        if (!(args.length > 0 && args[0] instanceof UUID planId)) {
+                            yield GovernedContext.unresolved();
+                        }
+                        yield plans.findById(planId)
+                                .map(plan -> new GovernedContext(plan.getDomainId(),
+                                        new TargetRef(TARGET_TRANSFORMATION_PLAN, planId.toString()), null))
+                                .orElseGet(GovernedContext::unresolved);
+                    }
+                    case "updateProgress" -> {
+                        if (!(args.length > 0 && args[0] instanceof UUID initiativeId)) {
+                            yield GovernedContext.unresolved();
+                        }
+                        yield initiatives.findById(initiativeId)
+                                .flatMap(i -> plans.findById(i.getPlanId()))
+                                .map(plan -> new GovernedContext(plan.getDomainId(),
+                                        new TargetRef(TARGET_INITIATIVE, initiativeId.toString()), null))
                                 .orElseGet(GovernedContext::unresolved);
                     }
                     default -> GovernedContext.unresolved();

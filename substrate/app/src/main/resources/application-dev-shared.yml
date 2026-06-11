@@ -1,0 +1,35 @@
+# dev-shared profile (engine-spec diagnostic.md §11.1; ADR-004 D14) — the
+# local TWO-PROCESS acceptance convenience on the Docker-less dev machine:
+# the app and the ingestion CLI share ONE file-based H2 engagement database,
+# so the documented ingest-CLI → diagnostic-run → curl E2E actually runs
+# cross-process. AUTO_SERVER lets both JVMs open the file concurrently.
+#
+# Path note (deviation from the spec's literal "./data/engagement-dev",
+# flagged at slice close): Gradle bootRun working directories are the MODULE
+# dirs (substrate/app vs substrate/ingestion), so a "./data" URL would resolve
+# to two DIFFERENT files and silently defeat the profile's whole purpose.
+# "../data/engagement-dev" is the identical URL string in both modules AND the
+# identical physical file: substrate/data/engagement-dev.*. Reset by deleting
+# substrate/data.
+#
+# H2 AUTO_SERVER is acceptance convenience ONLY — NEVER the gate.
+# Testcontainers-Postgres in CI is the acceptance gate (spec non-negotiable
+# #7); H2-green is never acceptance.
+spring:
+  datasource:
+    url: jdbc:h2:file:../data/engagement-dev;AUTO_SERVER=TRUE;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: ""
+  h2:
+    console:
+      enabled: true
+      path: /h2-console
+
+substrate:
+  auth:
+    # Anonymous-allowed mode until real OIDC wiring (production plan §4) —
+    # same posture as the dev profile.
+    mode: anonymous
+  blob-store:
+    provider: local

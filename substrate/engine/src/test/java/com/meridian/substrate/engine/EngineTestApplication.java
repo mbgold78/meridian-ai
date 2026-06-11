@@ -27,7 +27,12 @@ import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
 @SpringBootApplication(scanBasePackages = {
         "com.meridian.substrate.common",
         "com.meridian.substrate.engine.ai",
-        "com.meridian.substrate.engine.dna"
+        "com.meridian.substrate.engine.dna",
+        // engine.diagnostic carries CandidateFilter — the grounding chokepoint
+        // ValidativeModeService delegates to since the diagnostic.md §7.2
+        // extraction (additive scan entry; the package has no test-slice
+        // @SpringBootConfiguration to double-register).
+        "com.meridian.substrate.engine.diagnostic"
 })
 @EntityScan(basePackages = "com.meridian.substrate.common.domain")
 @EnableJpaRepositories(basePackages = "com.meridian.substrate.common.repo")

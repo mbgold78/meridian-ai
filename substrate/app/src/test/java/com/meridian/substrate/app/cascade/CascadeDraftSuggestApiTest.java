@@ -50,7 +50,14 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * <p>The disabled half (suggest route absent → 404, everything else green)
  * lives in {@code CascadeDraftApiTest} on the default flag.
  */
-@SpringBootTest(properties = "substrate.orchestrator.enabled=true")
+// substrate.diagnostic.executor=in-process keeps the diagnostic engine's
+// OrchestratorDiagnosticExecutor (engine-spec diagnostic.md §8.2, conditional
+// on the SAME orchestrator flag) structurally absent here — this suite
+// exercises the cascade suggest lane only and stubs only the cascade seam.
+@SpringBootTest(properties = {
+        "substrate.orchestrator.enabled=true",
+        "substrate.diagnostic.executor=in-process"
+})
 @AutoConfigureMockMvc
 @ActiveProfiles("dev")
 @Transactional

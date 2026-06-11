@@ -49,7 +49,15 @@ import java.util.stream.Collectors;
 @Service
 public class ContractSignalService {
 
-    private static final Duration COORDINATION_WINDOW = Duration.ofDays(7);
+    /**
+     * Trailing window of the §11.2 coordination-pattern computation. Public
+     * so the D5 portfolio surface (engine-spec diagnostic.md §12.2) can
+     * REPORT the window it delegates to in its {@code computedFrom} block —
+     * the window itself stays owned HERE ({@code substrate.stats.pattern-
+     * window-days} is documentation of this value, never a portfolio-side
+     * fork; a drift between the two is pinned by test).
+     */
+    public static final Duration COORDINATION_WINDOW = Duration.ofDays(7);
 
     private static final Set<BreachStatus> OPEN_BREACH_STATUSES = EnumSet.allOf(BreachStatus.class)
             .stream().filter(BreachStatus::isOpen)
@@ -151,10 +159,12 @@ public class ContractSignalService {
 
         // coordinationPatternsThisWeek: contract_events + cascade events,
         // trailing 7 days — computed, never stamped (§11.2; fixture seam S6).
+        // Sub-counts ride along (diagnostic.md §12.2): pre-D2-3b the contract
+        // term contributes 0 VISIBLY on the D5 portfolio surface.
         Instant since = clock.instant().minus(COORDINATION_WINDOW);
-        long coordinationPatterns =
-                eventRepository.countByDomainIdAndOccurredAtAfter(domainId, since)
-                        + cascadeQueryService.stats(domainId).actionsLast7Days();
+        long contractEvents = eventRepository.countByDomainIdAndOccurredAtAfter(domainId, since);
+        long cascadeActions = cascadeQueryService.stats(domainId).actionsLast7Days();
+        long coordinationPatterns = contractEvents + cascadeActions;
 
         return new SignalsResponse(
                 pendingFederationInvitations,
@@ -166,7 +176,8 @@ public class ContractSignalService {
                 // EXTENSION POINT (spec §15 #1): review-boundary window
                 // arithmetic (§6.2) lands with the 3c gateway; until then
                 // computed empty — both DemoPack vectors seed null boundaries.
-                List.of());
+                List.of(),
+                new SignalsResponse.CoordinationBreakdown(contractEvents, cascadeActions));
     }
 
     private boolean hasUnrespondedRequiredParty(UUID contractId) {

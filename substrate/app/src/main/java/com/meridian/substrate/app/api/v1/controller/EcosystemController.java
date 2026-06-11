@@ -6,6 +6,7 @@ import com.meridian.substrate.app.core.service.ProcessService;
 import com.meridian.substrate.app.core.service.SystemService;
 import com.meridian.substrate.common.domain.*;
 import com.meridian.substrate.common.domain.Process;
+import com.meridian.substrate.common.domain.enums.CurationStatus;
 import com.meridian.substrate.common.repo.CanonicalEntityRepository;
 import com.meridian.substrate.common.repo.EntityOverlapRepository;
 import com.meridian.substrate.common.repo.IntegrationRepository;
@@ -68,9 +69,29 @@ public class EcosystemController {
             List<Process> processes
     ) {}
 
+    /**
+     * Findings list with the §9 curation filters (engine-spec diagnostic.md
+     * §9/§10.1; ADR-004 D10) — additive params, changed DEFAULT:
+     * {@code curation_status NOT IN (REJECTED, SUPERSEDED) OR NULL}. NULL =
+     * not subject to curation (DiagnosticSeeder fixture rows stay NULL —
+     * demo parity pinned, test plan #7); {@code includeRejected=true}
+     * restores the excluded rows; an explicit {@code curationStatus=} value
+     * overrides the default (asking for REJECTED shows REJECTED).
+     *
+     * <p>Frontend grep-audit (the spec's named implementation step,
+     * endpoints-barrel-omission precedent): the sole consumer is
+     * {@code frontend/src/api/endpoints/findings.ts#getFindings} (used by
+     * {@code LivingCanvas.tsx}), which passes no curation params — it now
+     * gets the default view (REJECTED/SUPERSEDED hidden; fixture rows
+     * unchanged), which is the intended product behavior.
+     */
     @GetMapping("/findings")
-    public List<Finding> getFindingsByDomain(@RequestParam UUID domainId) {
-        return findingService.getFindingsByDomain(domainId);
+    public List<Finding> getFindingsByDomain(
+            @RequestParam UUID domainId,
+            @RequestParam(name = "curationStatus", required = false) CurationStatus curationStatus,
+            @RequestParam(name = "includeRejected", defaultValue = "false") boolean includeRejected,
+            @RequestParam(name = "aiGenerated", required = false) Boolean aiGenerated) {
+        return findingService.getFindingsByDomain(domainId, curationStatus, includeRejected, aiGenerated);
     }
 
     @GetMapping("/overlaps")

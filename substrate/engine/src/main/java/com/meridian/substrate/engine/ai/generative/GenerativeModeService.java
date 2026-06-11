@@ -98,6 +98,19 @@ public class GenerativeModeService {
             // types ship through the generative path. Unknown types are rejected.
     );
 
+    /**
+     * Read-only view of the proposed-field allowlist for an entity type, or
+     * {@code null} when the type has no allowlist (and {@link #generate}
+     * would reject it). ADDITIVE accessor only (engine-spec diagnostic.md
+     * §13): the eval harness asserts generative filter outcomes against THIS
+     * allowlist instead of re-deriving its own copy — the allowlist semantics
+     * themselves are phase2a-pinned and unchanged.
+     */
+    public static Set<String> allowedFieldsForEntityType(String entityType) {
+        Set<String> allowed = ALLOWED_FIELDS_BY_ENTITY_TYPE.get(entityType);
+        return allowed == null ? null : Set.copyOf(allowed);
+    }
+
     private final ToolCallingOrchestrator orchestrator;
     private final AssertionService assertionService;
     private final EvidenceRepository evidenceRepository;
@@ -216,6 +229,8 @@ public class GenerativeModeService {
         sb.append("Optional metadata: confidence (0.0–1.0).\n\n");
         sb.append("Any field outside the allowed-attributes list will be silently dropped. ");
         sb.append("Do not propose entities without supporting evidence — they will be filtered out. ");
+        sb.append("Use the find_evidence tool to discover citable evidence ids in this domain; ");
+        sb.append("proposals citing evidence ids you did not retrieve will be filtered. ");
         sb.append("Do not include prose around the JSON array.");
         return sb.toString();
     }

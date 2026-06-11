@@ -39,7 +39,7 @@ class FlywayMigrationTest {
 
         assertThat(history)
                 .extracting(row -> String.valueOf(row.get("version")))
-                .contains("1", "2", "4", "5", "6");
+                .contains("1", "2", "4", "5", "6", "7", "8");
         assertThat(history)
                 .allSatisfy(row -> assertThat(row.get("success"))
                         .as("migration V%s succeeded", row.get("version"))
@@ -47,13 +47,14 @@ class FlywayMigrationTest {
         // Vendor split: db/migration/postgresql/V2_1 (partial index), V4_1
         // (cascade_level_actions append-only trigger), V5_1 (open-breach
         // partial unique index), V6_1 (agent_status_events append-only
-        // trigger + agent partial uniques) and V6_2 (the §11 chain-mirror
-        // decision_log_hash write-back carve-out on that trigger) must not run
-        // on the H2 dev profile — H2 stays service-enforced (ADR-001 D9 /
-        // ADR-002 D13 / ADR-003 D1).
+        // trigger + agent partial uniques), V6_2 (the §11 chain-mirror
+        // decision_log_hash write-back carve-out on that trigger) and V7_1
+        // (ai_curation_events append-only trigger + one-active-diagnostic-run
+        // partial unique index) must not run on the H2 dev profile — H2 stays
+        // service-enforced (ADR-001 D9 / ADR-002 D13 / ADR-003 D1 / ADR-004 D4).
         assertThat(history)
                 .extracting(row -> String.valueOf(row.get("version")))
-                .doesNotContain("2.1", "4.1", "5.1", "6.1", "6.2");
+                .doesNotContain("2.1", "4.1", "5.1", "6.1", "6.2", "7.1");
     }
 
     @Test
@@ -87,7 +88,11 @@ class FlywayMigrationTest {
                 "agent_compliance_reviews", "agent_criteria_gates",
                 "agent_metric_samples", "agent_throttle_budgets",
                 "agent_rate_counters", "agent_sightings",
-                "agent_notifications");
+                "agent_notifications",
+                // V7 diagnostic engine (engine-spec diagnostic.md §3.1)
+                "ai_curation_events", "diagnostic_run_batches",
+                // V8 D5 thin slice (engine-spec diagnostic.md §3.3 — declared S4 deviation)
+                "transformation_plans", "transformation_initiatives");
 
         List<String> actual = jdbcTemplate.queryForList(
                 "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'",

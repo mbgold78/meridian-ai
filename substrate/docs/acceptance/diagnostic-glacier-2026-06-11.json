@@ -1,0 +1,367 @@
+{
+  "artifact": "engine-spec diagnostic.md \u00a711.2 Tester-runnable Glacier E2E \u2014 run-detail preservation",
+  "date": "2026-06-11",
+  "provider": "mock (substrate.llm.mock.diagnostic-script=grounded-content) \u2014 the deterministic lane; the real-LLM lane needs ANTHROPIC_API_KEY and was not run in this session",
+  "profile": "dev-shared (two-process: ingestion CLI + app on jdbc:h2:file:../data/engagement-dev AUTO_SERVER). H2 is acceptance convenience; Testcontainers-Postgres in CI is the gate.",
+  "sequence": {
+    "step1_convert": "INGEST_EVENT convert_complete filesProcessed=4 entitiesExtracted=37, exit 0",
+    "step2_commit": "INGEST_EVENT commit_complete entitiesCommitted=42 entityCounts={systems:6,processes:7,canonical-entities:5,process-system-links:9,process-roles:10,organization-members:5}, domain Glacier",
+    "step7_findings": "rows aiGenerated=true, synthesisRunId set, evidence[].sourceFile=glacier-systems.csv",
+    "step8_provenance": "chainComplete=true, groundingMode=EXISTENCE_ONLY, evidence extractor=ingestion, registry sha256=e6326c4639783a3150b705ec4c6a070a207c5dd4e28d46968e867496c4e446ca, processedByConverterRunId=034c7410-41f1-4809-9ef4-a2b6067ba7ed",
+    "step9_curation_supersession": "accept+reject 200; run2 superseded the 2 remaining PENDING of run1 (ACCEPTED/REJECTED untouched); run3 pending set stable at 4; totals SUPERSEDED:6 PENDING_REVIEW:4 ACCEPTED:1 REJECTED:1",
+    "step10_verify": "total=12 chainComplete=12 brokenChains=[] fixtureGrounded=[] groundingModes={EXISTENCE_ONLY:12}",
+    "negative_proof": "EmptyGlacier domain + requiredMinFindings=1 -> ZERO_YIELD reason=ALL_FILTERED, DIAG_EVENT kind=zero_yield, DiagnosticRunner cli_exit exit=3 (JVM exit 3)"
+  },
+  "run1_detail": {
+    "runId": "fe24f82e-afb2-4177-9bf4-0689620d9e3a",
+    "domainId": "9df2bf03-be77-4e79-8512-05d730c82fa0",
+    "status": "COMPLETED",
+    "reason": null,
+    "explanation": null,
+    "startedAt": "2026-06-11T14:24:11.358680Z",
+    "completedAt": "2026-06-11T14:24:11.481924Z",
+    "model": "claude-opus-4-8",
+    "executor": "in-process",
+    "requiredMinFindings": 1,
+    "candidatesReturned": 12,
+    "candidatesFiltered": 8,
+    "findingsCommitted": 4,
+    "totalInputTokens": 320,
+    "totalOutputTokens": 160,
+    "totalCostEstimate": 0.016800000000000002,
+    "refusalDetected": null,
+    "filterHistogram": {
+      "badSeverity": 4,
+      "ungrounded": 4
+    },
+    "executorMix": {
+      "in-process": 4
+    },
+    "batchCounts": {
+      "COMPLETED": 4
+    },
+    "batches": [
+      {
+        "id": "58810a0b-cecb-48cf-9f50-f112afb9e529",
+        "batchNo": 1,
+        "scope": "systems",
+        "status": "COMPLETED",
+        "attempt": 1,
+        "executor": "in-process",
+        "candidatesReturned": 3,
+        "candidatesFiltered": 2,
+        "findingsCommitted": 1,
+        "filterHistogram": {
+          "badSeverity": 1,
+          "ungrounded": 1
+        },
+        "error": null,
+        "dispatchTaskId": null,
+        "targetCount": 6,
+        "claimedAt": "2026-06-11T14:24:11.391512Z",
+        "startedAt": "2026-06-11T14:24:11.391512Z",
+        "finishedAt": "2026-06-11T14:24:11.425741Z"
+      },
+      {
+        "id": "db45124b-4e19-46bd-8dc1-cfb35104c1cb",
+        "batchNo": 2,
+        "scope": "processes",
+        "status": "COMPLETED",
+        "attempt": 1,
+        "executor": "in-process",
+        "candidatesReturned": 3,
+        "candidatesFiltered": 2,
+        "findingsCommitted": 1,
+        "filterHistogram": {
+          "badSeverity": 1,
+          "ungrounded": 1
+        },
+        "error": null,
+        "dispatchTaskId": null,
+        "targetCount": 7,
+        "claimedAt": "2026-06-11T14:24:11.431740Z",
+        "startedAt": "2026-06-11T14:24:11.431740Z",
+        "finishedAt": "2026-06-11T14:24:11.443917Z"
+      },
+      {
+        "id": "6962bd1b-ae60-449b-bc1a-2eabd136cd3e",
+        "batchNo": 3,
+        "scope": "canonical-entities",
+        "status": "COMPLETED",
+        "attempt": 1,
+        "executor": "in-process",
+        "candidatesReturned": 3,
+        "candidatesFiltered": 2,
+        "findingsCommitted": 1,
+        "filterHistogram": {
+          "badSeverity": 1,
+          "ungrounded": 1
+        },
+        "error": null,
+        "dispatchTaskId": null,
+        "targetCount": 5,
+        "claimedAt": "2026-06-11T14:24:11.447917Z",
+        "startedAt": "2026-06-11T14:24:11.447917Z",
+        "finishedAt": "2026-06-11T14:24:11.458917Z"
+      },
+      {
+        "id": "60fcbdf4-13d9-45eb-965a-42ff6447d9bc",
+        "batchNo": 4,
+        "scope": "domain",
+        "status": "COMPLETED",
+        "attempt": 1,
+        "executor": "in-process",
+        "candidatesReturned": 3,
+        "candidatesFiltered": 2,
+        "findingsCommitted": 1,
+        "filterHistogram": {
+          "badSeverity": 1,
+          "ungrounded": 1
+        },
+        "error": null,
+        "dispatchTaskId": null,
+        "targetCount": 0,
+        "claimedAt": "2026-06-11T14:24:11.461917Z",
+        "startedAt": "2026-06-11T14:24:11.461917Z",
+        "finishedAt": "2026-06-11T14:24:11.471917Z"
+      }
+    ],
+    "events": [],
+    "dispatchProvenance": null
+  },
+  "run2_detail": {
+    "runId": "1738a3e6-d64a-444a-8018-7d208a0da341",
+    "domainId": "9df2bf03-be77-4e79-8512-05d730c82fa0",
+    "status": "COMPLETED",
+    "reason": null,
+    "explanation": null,
+    "startedAt": "2026-06-11T14:25:22.403890Z",
+    "completedAt": "2026-06-11T14:25:22.458242Z",
+    "model": "claude-opus-4-8",
+    "executor": "in-process",
+    "requiredMinFindings": 1,
+    "candidatesReturned": 12,
+    "candidatesFiltered": 8,
+    "findingsCommitted": 4,
+    "totalInputTokens": 320,
+    "totalOutputTokens": 160,
+    "totalCostEstimate": 0.016800000000000002,
+    "refusalDetected": null,
+    "filterHistogram": {
+      "badSeverity": 4,
+      "ungrounded": 4
+    },
+    "executorMix": {
+      "in-process": 4
+    },
+    "batchCounts": {
+      "COMPLETED": 4
+    },
+    "batches": [
+      {
+        "id": "6e39de4a-6b8c-4eae-bbc2-014ce5a7872a",
+        "batchNo": 1,
+        "scope": "systems",
+        "status": "COMPLETED",
+        "attempt": 1,
+        "executor": "in-process",
+        "candidatesReturned": 3,
+        "candidatesFiltered": 2,
+        "findingsCommitted": 1,
+        "filterHistogram": {
+          "badSeverity": 1,
+          "ungrounded": 1
+        },
+        "error": null,
+        "dispatchTaskId": null,
+        "targetCount": 6,
+        "claimedAt": "2026-06-11T14:25:22.411248Z",
+        "startedAt": "2026-06-11T14:25:22.411248Z",
+        "finishedAt": "2026-06-11T14:25:22.418953Z"
+      },
+      {
+        "id": "f2302fb3-be9d-466d-a2de-74978ec65b07",
+        "batchNo": 2,
+        "scope": "processes",
+        "status": "COMPLETED",
+        "attempt": 1,
+        "executor": "in-process",
+        "candidatesReturned": 3,
+        "candidatesFiltered": 2,
+        "findingsCommitted": 1,
+        "filterHistogram": {
+          "badSeverity": 1,
+          "ungrounded": 1
+        },
+        "error": null,
+        "dispatchTaskId": null,
+        "targetCount": 7,
+        "claimedAt": "2026-06-11T14:25:22.421968Z",
+        "startedAt": "2026-06-11T14:25:22.421968Z",
+        "finishedAt": "2026-06-11T14:25:22.428472Z"
+      },
+      {
+        "id": "a50061ad-f9aa-4d6d-9468-f845ec2e6827",
+        "batchNo": 3,
+        "scope": "canonical-entities",
+        "status": "COMPLETED",
+        "attempt": 1,
+        "executor": "in-process",
+        "candidatesReturned": 3,
+        "candidatesFiltered": 2,
+        "findingsCommitted": 1,
+        "filterHistogram": {
+          "badSeverity": 1,
+          "ungrounded": 1
+        },
+        "error": null,
+        "dispatchTaskId": null,
+        "targetCount": 5,
+        "claimedAt": "2026-06-11T14:25:22.431897Z",
+        "startedAt": "2026-06-11T14:25:22.431897Z",
+        "finishedAt": "2026-06-11T14:25:22.439803Z"
+      },
+      {
+        "id": "663c41ae-b7de-4d7f-b7ef-ad79a77a85a3",
+        "batchNo": 4,
+        "scope": "domain",
+        "status": "COMPLETED",
+        "attempt": 1,
+        "executor": "in-process",
+        "candidatesReturned": 3,
+        "candidatesFiltered": 2,
+        "findingsCommitted": 1,
+        "filterHistogram": {
+          "badSeverity": 1,
+          "ungrounded": 1
+        },
+        "error": null,
+        "dispatchTaskId": null,
+        "targetCount": 0,
+        "claimedAt": "2026-06-11T14:25:22.443230Z",
+        "startedAt": "2026-06-11T14:25:22.443230Z",
+        "finishedAt": "2026-06-11T14:25:22.450733Z"
+      }
+    ],
+    "events": [],
+    "dispatchProvenance": null
+  },
+  "verify_sweep": {
+    "domainId": "9df2bf03-be77-4e79-8512-05d730c82fa0",
+    "total": 12,
+    "chainComplete": 12,
+    "brokenChains": [],
+    "fixtureGrounded": [],
+    "groundingModes": {
+      "EXISTENCE_ONLY": 12
+    }
+  },
+  "sample_provenance_walk": {
+    "finding": {
+      "id": "52c63933-29f0-4aae-9675-4d5238f0bf9f",
+      "domainId": "9df2bf03-be77-4e79-8512-05d730c82fa0",
+      "title": "Scripted grounded content claim",
+      "description": "Deterministic mock CONTENT claim grounded in evidence discovered via find_evidence.",
+      "findingType": "DATA_QUALITY",
+      "severity": "HIGH",
+      "status": "OPEN",
+      "recommendation": "Verify the cited evidence semantically and curate.",
+      "aiGenerated": true,
+      "synthesisRunId": "fe24f82e-afb2-4177-9bf4-0689620d9e3a",
+      "assertionId": "b79ae7ac-4b4f-4491-95e3-2d5a0afd162b",
+      "curationStatus": "PENDING_REVIEW",
+      "curatedAt": null,
+      "curatedByLabel": null,
+      "evidenceSnapshot": [
+        {
+          "evidenceId": "cc006511-78eb-42c5-a5e5-ce2b76a5a0ec",
+          "label": "Committed from glacier-systems.csv",
+          "sourceFile": "glacier-systems.csv",
+          "documentRegistryId": "f4ca18c7-1710-4483-af9c-3e23802e437b",
+          "confidence": 1.0
+        },
+        {
+          "evidenceId": "234cc7d9-a3e6-4cec-a8c9-5aa441fba1c3",
+          "label": "Committed from glacier-systems.csv",
+          "sourceFile": "glacier-systems.csv",
+          "documentRegistryId": "f4ca18c7-1710-4483-af9c-3e23802e437b",
+          "confidence": 1.0
+        }
+      ],
+      "metadata": {
+        "assertionId": "b79ae7ac-4b4f-4491-95e3-2d5a0afd162b",
+        "candidateType": "CONTENT",
+        "groundingMode": "EXISTENCE_ONLY",
+        "batchNo": 1,
+        "executor": "in-process",
+        "model": "claude-opus-4-8"
+      },
+      "createdAt": "2026-06-11T14:24:11.426740Z"
+    },
+    "assertion": {
+      "id": "b79ae7ac-4b4f-4491-95e3-2d5a0afd162b",
+      "subject": "domain:9df2bf03-be77-4e79-8512-05d730c82fa0",
+      "predicate": "validative_finding:CONTENT",
+      "object": "{\"severity\":\"HIGH\",\"description\":\"Deterministic mock CONTENT claim grounded in evidence discovered via find_evidence.\",\"suggestedAction\":\"Verify the cited evidence semantically and curate.\"}",
+      "confidence": null,
+      "producedBy": "AI_VALIDATIVE",
+      "producedByContext": {
+        "mode": "VALIDATIVE",
+        "surface": "ANALYST_QUERY",
+        "scope": "systems"
+      },
+      "evidenceIds": [
+        "cc006511-78eb-42c5-a5e5-ce2b76a5a0ec",
+        "234cc7d9-a3e6-4cec-a8c9-5aa441fba1c3"
+      ]
+    },
+    "evidence": [
+      {
+        "id": "cc006511-78eb-42c5-a5e5-ce2b76a5a0ec",
+        "entityId": "cd79377a-e8c4-48a0-af7f-3ef47cf67287",
+        "entityType": "system",
+        "label": "Committed from glacier-systems.csv",
+        "confidence": 1.0,
+        "sourceFile": "glacier-systems.csv",
+        "extractor": "ingestion",
+        "documentRegistryId": "f4ca18c7-1710-4483-af9c-3e23802e437b"
+      },
+      {
+        "id": "234cc7d9-a3e6-4cec-a8c9-5aa441fba1c3",
+        "entityId": "4ac18e02-cbdd-4977-acb0-9346127c63a9",
+        "entityType": "system",
+        "label": "Committed from glacier-systems.csv",
+        "confidence": 1.0,
+        "sourceFile": "glacier-systems.csv",
+        "extractor": "ingestion",
+        "documentRegistryId": "f4ca18c7-1710-4483-af9c-3e23802e437b"
+      }
+    ],
+    "documentRegistry": [
+      {
+        "id": "f4ca18c7-1710-4483-af9c-3e23802e437b",
+        "sourceFile": "glacier-systems.csv",
+        "sha256": "e6326c4639783a3150b705ec4c6a070a207c5dd4e28d46968e867496c4e446ca",
+        "ingestionStatus": "LOCAL_ONLY",
+        "processedByConverterRunId": "034c7410-41f1-4809-9ef4-a2b6067ba7ed"
+      }
+    ],
+    "ingestRuns": [
+      {
+        "id": "034c7410-41f1-4809-9ef4-a2b6067ba7ed",
+        "domainId": "9df2bf03-be77-4e79-8512-05d730c82fa0",
+        "command": "commit",
+        "status": "SUCCEEDED",
+        "startedAt": "2026-06-11T14:18:25.994936Z",
+        "finishedAt": "2026-06-11T14:18:26.239178Z"
+      }
+    ],
+    "readerRegistrations": [],
+    "curationEvents": [],
+    "chainComplete": true,
+    "missingHops": [],
+    "groundingMode": "EXISTENCE_ONLY",
+    "fixtureGrounded": false,
+    "evidenceSource": "ASSERTION"
+  }
+}

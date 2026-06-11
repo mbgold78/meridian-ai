@@ -18,6 +18,15 @@ import java.util.UUID;
  * <p>{@code affectedEntityId} and {@code affectedEntityType} are nullable —
  * domain-wide findings ("the capability tree has no L1 nodes") apply to no
  * single entity.
+ *
+ * <p>{@code title} and {@code findingType} are the engine-spec diagnostic.md
+ * §5.1 additive trailing components (nullable, optional in the candidate JSON
+ * contract). {@code findingType} carries the RAW string as the LLM emitted it
+ * — validation against the canonical {@code FindingType} enum (and the
+ * differential defaulting for invalid/absent values) is the COMMIT step's job
+ * (spec §5.2), never the filter's: an invalid LLM-supplied type must never
+ * discard an otherwise-grounded candidate. The compatibility constructor
+ * preserves the original Phase-2A arity so pinned callers compile unchanged.
  */
 public record FindingCandidate(
         FindingCandidateType type,
@@ -27,5 +36,25 @@ public record FindingCandidate(
         String description,
         String suggestedAction,
         List<UUID> evidenceIds,
-        UUID assertionId
-) {}
+        UUID assertionId,
+        String title,
+        String findingType
+) {
+
+    /**
+     * Compatibility constructor preserving the original Phase-2A arity
+     * (spec §5.1): delegates {@code title} and {@code findingType} as null.
+     */
+    public FindingCandidate(FindingCandidateType type,
+                            FindingCandidateSeverity severity,
+                            String affectedEntityType,
+                            UUID affectedEntityId,
+                            String description,
+                            String suggestedAction,
+                            List<UUID> evidenceIds,
+                            UUID assertionId) {
+        this(type, severity, affectedEntityType, affectedEntityId,
+                description, suggestedAction, evidenceIds, assertionId,
+                null, null);
+    }
+}

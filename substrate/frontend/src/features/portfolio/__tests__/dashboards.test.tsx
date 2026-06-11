@@ -40,6 +40,7 @@ const apiMocks = vi.hoisted(() => ({
   getCascadeById: vi.fn(),
   getCascadeActions: vi.fn(),
   getContractByKey: vi.fn(),
+  getPortfolio: vi.fn(),
 }));
 
 vi.mock('@/app/theme', () => ({
@@ -64,6 +65,7 @@ beforeEach(() => {
   apiMocks.getCascadeById.mockRejectedValue(new Error('backend absent'));
   apiMocks.getCascadeActions.mockRejectedValue(new Error('backend absent'));
   apiMocks.getContractByKey.mockRejectedValue(new Error('backend absent'));
+  apiMocks.getPortfolio.mockRejectedValue(new Error('backend absent'));
 });
 
 function createTestQueryClient() {

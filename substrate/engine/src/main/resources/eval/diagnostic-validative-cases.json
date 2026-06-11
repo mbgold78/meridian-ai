@@ -1,0 +1,71 @@
+[
+  {
+    "id": "diag-val-001-wellformed-structural-kept",
+    "mode": "validative",
+    "input": "Validative JSON contract: a well-formed STRUCTURAL candidate array survives the CandidateFilter.",
+    "candidatePayload": "[{\"type\":\"STRUCTURAL\",\"severity\":\"MEDIUM\",\"description\":\"Capability has no processes mapped.\",\"suggestedAction\":\"Map at least one process or retire the capability.\",\"evidenceIds\":[]}]",
+    "expectedOutcomes": ["KEPT"]
+  },
+  {
+    "id": "diag-val-002-prose-wrapped-array-parses",
+    "mode": "validative",
+    "input": "Structured parseability: the tolerant extractor must find the array inside surrounding prose.",
+    "candidatePayload": "Here are my findings as requested: [{\"type\":\"STRUCTURAL\",\"severity\":\"INFO\",\"description\":\"Domain has a single system of record.\",\"suggestedAction\":\"Confirm intentional consolidation.\",\"evidenceIds\":[]}] I hope this helps!",
+    "expectedOutcomes": ["KEPT"],
+    "expectedPattern": "parsed=1"
+  },
+  {
+    "id": "diag-val-003-hallucinated-severity-urgent-filtered",
+    "mode": "validative",
+    "input": "Severity allowlist: the hallucinated severity URGENT must be filtered as BAD_SEVERITY.",
+    "candidatePayload": "[{\"type\":\"STRUCTURAL\",\"severity\":\"URGENT\",\"description\":\"Severity outside the allowlist.\",\"suggestedAction\":\"Must be filtered.\",\"evidenceIds\":[]}]",
+    "expectedOutcomes": ["BAD_SEVERITY"]
+  },
+  {
+    "id": "diag-val-004-missing-suggested-action-filtered",
+    "mode": "validative",
+    "input": "Required fields: a candidate without suggestedAction must be filtered as MISSING_FIELD.",
+    "candidatePayload": "[{\"type\":\"STRUCTURAL\",\"severity\":\"HIGH\",\"description\":\"No suggested action provided.\",\"evidenceIds\":[]}]",
+    "expectedOutcomes": ["MISSING_FIELD"]
+  },
+  {
+    "id": "diag-val-005-content-fabricated-evidence-filtered",
+    "mode": "validative",
+    "input": "Differential grounding (P6): a CONTENT candidate citing fabricated evidence ids must be filtered as UNGROUNDED.",
+    "candidatePayload": "[{\"type\":\"CONTENT\",\"severity\":\"HIGH\",\"description\":\"Claim citing evidence ids that do not exist in the domain.\",\"suggestedAction\":\"Must be filtered.\",\"evidenceIds\":[\"11111111-1111-1111-1111-111111111111\",\"22222222-2222-2222-2222-222222222222\"]}]",
+    "expectedOutcomes": ["UNGROUNDED"]
+  },
+  {
+    "id": "diag-val-006-title-findingtype-roundtrip",
+    "mode": "validative",
+    "input": "Section 5.1 additive fields: optional title and a canonical findingType round-trip RAW through the filter.",
+    "candidatePayload": "[{\"type\":\"STRUCTURAL\",\"severity\":\"MEDIUM\",\"title\":\"Orphaned capability tree\",\"findingType\":\"COVERAGE_GAP\",\"description\":\"Capability tree has no linked processes.\",\"suggestedAction\":\"Review the capability tree.\",\"evidenceIds\":[]}]",
+    "expectedOutcomes": ["KEPT"],
+    "expectedPattern": "title=Orphaned capability tree.*findingType=COVERAGE_GAP"
+  },
+  {
+    "id": "diag-val-007-invalid-findingtype-kept-raw",
+    "mode": "validative",
+    "input": "An invalid findingType NEVER discards a grounded candidate: the filter keeps it and passes the raw value through; the commit step's differential default (pinned by FindingCommitServiceTest) applies downstream.",
+    "candidatePayload": "[{\"type\":\"STRUCTURAL\",\"severity\":\"MEDIUM\",\"findingType\":\"TOTALLY_BOGUS_TYPE\",\"description\":\"Vocabulary miss on findingType.\",\"suggestedAction\":\"Keep the candidate; default at commit.\",\"evidenceIds\":[]}]",
+    "expectedOutcomes": ["KEPT"],
+    "expectedPattern": "findingType=TOTALLY_BOGUS_TYPE"
+  },
+  {
+    "id": "diag-val-008-bad-type-filtered",
+    "mode": "validative",
+    "input": "Type allowlist: only STRUCTURAL and CONTENT are accepted.",
+    "candidatePayload": "[{\"type\":\"OPINION\",\"severity\":\"MEDIUM\",\"description\":\"Type outside the allowlist.\",\"suggestedAction\":\"Must be filtered.\",\"evidenceIds\":[]}]",
+    "expectedOutcomes": ["BAD_TYPE"]
+  },
+  {
+    "id": "diag-val-009-grounded-content-survives-via-find-evidence",
+    "mode": "validative",
+    "input": "Tool-grounding regression (ADR-004 D6): the scripted MockAnthropicClient issues a REAL find_evidence tool call, cites the returned ids, and the grounded CONTENT candidate survives the same filter that drops the ungrounded and invalid-severity siblings. Under a real provider this case exercises live tool-calling and may vary.",
+    "mockScript": "grounded-content",
+    "seedEvidence": 2,
+    "scope": "systems",
+    "expectedOutcomes": ["KEPT", "UNGROUNDED", "BAD_SEVERITY"],
+    "expectedPattern": "toolCalls=\\[.*find_evidence.*\\]"
+  }
+]
