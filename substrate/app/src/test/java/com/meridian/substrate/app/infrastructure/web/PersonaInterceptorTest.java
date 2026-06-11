@@ -17,7 +17,41 @@ class PersonaInterceptorTest {
 
     private static PersonaInterceptor anonymousInterceptor(PersonaContext context) {
         return new PersonaInterceptor(context, new SubstrateIdentityContext(),
-                new AnonymousIdentitySource());
+                new AnonymousIdentitySource(
+                        new com.meridian.substrate.app.infrastructure.auth.AuthProperties()));
+    }
+
+    @Test
+    void streamPath_fallsBackToPersonaLevelQueryParam_whenHeaderAbsent() {
+        // The SSE carve-out: EventSource cannot set headers, so the configured
+        // stream paths accept ?personaLevel= (mirror of the access_token
+        // carve-out). Everywhere else the param stays dead.
+        PersonaContext context = new PersonaContext();
+        PersonaInterceptor interceptor = anonymousInterceptor(context);
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.setRequestURI("/api/v1/chat/stream");
+        request.setParameter("personaLevel", "L1_EXECUTIVE");
+
+        assertThat(interceptor.preHandle(request, new MockHttpServletResponse(), new Object()))
+                .isTrue();
+        assertThat(context.getPersonaLevel()).isEqualTo("L1_EXECUTIVE");
+
+        // non-stream path: the query param is ignored, default applies
+        PersonaContext other = new PersonaContext();
+        MockHttpServletRequest nonStream = new MockHttpServletRequest();
+        nonStream.setRequestURI("/api/v1/chat");
+        nonStream.setParameter("personaLevel", "L1_EXECUTIVE");
+        anonymousInterceptor(other).preHandle(nonStream, new MockHttpServletResponse(), new Object());
+        assertThat(other.getPersonaLevel()).isEqualTo("L3_ANALYST");
+
+        // header still wins on stream paths when present
+        PersonaContext headerWins = new PersonaContext();
+        MockHttpServletRequest both = new MockHttpServletRequest();
+        both.setRequestURI("/api/v1/chat/stream");
+        both.addHeader("X-Persona-Level", "L2_DOMAIN_LEAD");
+        both.setParameter("personaLevel", "L1_EXECUTIVE");
+        anonymousInterceptor(headerWins).preHandle(both, new MockHttpServletResponse(), new Object());
+        assertThat(headerWins.getPersonaLevel()).isEqualTo("L2_DOMAIN_LEAD");
     }
 
     @Test

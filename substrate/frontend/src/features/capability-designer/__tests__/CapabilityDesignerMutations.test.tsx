@@ -255,6 +255,33 @@ describe('Stage D — Inline edit displayName', () => {
     expect(screen.getAllByText('Customer Acquisition').length).toBeGreaterThan(0);
   });
 
+  it('surfaces a failed PATCH (409-and-refresh) instead of silently swallowing it', async () => {
+    const existing: Capability[] = [cap(ROOT_ID, 'Customer Onboarding', null, 0)];
+    const qc = seedClient(existing);
+
+    // Simulate the optimistic-lock conflict envelope the backend maps to 409.
+    mockedEndpoints.updateCapability.mockRejectedValue(
+      Object.assign(new Error('Request failed with status code 409'), {
+        response: { status: 409 },
+      }),
+    );
+
+    renderDesigner(qc);
+    act(() => { useCapabilityDesignerStore.getState().select(ROOT_ID); });
+    const editButtons = await screen.findAllByRole('button', { name: /edit capability name/i });
+    fireEvent.click(editButtons[0]);
+    const input = await screen.findByLabelText(/^Capability name$/i);
+    fireEvent.change(input, { target: { value: 'Customer Acquisition' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    // The failure is surfaced to the user …
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent(/conflicted with a concurrent change/i),
+    );
+    // … and the cache was invalidated (refetch = snap back to server truth).
+    await waitFor(() => expect(mockedEndpoints.getCapabilities).toHaveBeenCalled());
+  });
+
   it('rejects an empty displayName with an inline error and does not call the API', async () => {
     const existing: Capability[] = [cap(ROOT_ID, 'Customer Onboarding', null, 0)];
     const qc = seedClient(existing);

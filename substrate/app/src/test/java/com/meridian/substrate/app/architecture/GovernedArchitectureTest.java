@@ -2,6 +2,7 @@ package com.meridian.substrate.app.architecture;
 
 import com.meridian.substrate.common.governance.UngovernedModule;
 import com.meridian.substrate.common.repo.AgentStatusEventRepository;
+import com.meridian.substrate.common.repo.CascadeLevelActionRepository;
 import com.meridian.substrate.common.repo.AiCurationEventRepository;
 import com.meridian.substrate.common.repo.ContractEnforcementDecisionRepository;
 import com.meridian.substrate.common.repo.ContractEventRepository;
@@ -118,12 +119,16 @@ class GovernedArchitectureTest {
 
     /**
      * §10.9 append-only repositories (no update/delete code path may exist) +
-     * the agent audit log (engine-spec agents.md §5.5 / invariant I4; test
-     * plan #6 ArchUnit half) + the diagnostic curation audit (engine-spec
-     * diagnostic.md §3.2 / test plan #15: "repositories expose no
-     * update/delete methods for AiCurationEvent; ArchUnit pins this").
+     * the cascade action log (engine-spec cascade.md §12 test #6 ArchUnit
+     * half — "assert via architecture test if ArchUnit is present"; D1 landed
+     * before this suite existed and the backfill was owed) + the agent audit
+     * log (engine-spec agents.md §5.5 / invariant I4; test plan #6 ArchUnit
+     * half) + the diagnostic curation audit (engine-spec diagnostic.md §3.2 /
+     * test plan #15: "repositories expose no update/delete methods for
+     * AiCurationEvent; ArchUnit pins this").
      */
     static final Class<?>[] APPEND_ONLY_REPOSITORIES = {
+            CascadeLevelActionRepository.class,
             ContractEventRepository.class,
             ContractMonitorRunRepository.class,
             ContractPartyResponseRepository.class,
@@ -207,9 +212,11 @@ class GovernedArchitectureTest {
     static final ArchRule append_only_repositories_declare_no_mutators = noMethods()
             .that().areDeclaredInClassesThat().belongToAnyOf(APPEND_ONLY_REPOSITORIES)
             .should().haveNameMatching("(delete|remove|update).*")
-            .because("contract_events / contract_monitor_runs / contract_party_responses /"
-                    + " contract_enforcement_decisions are append-only — no update/delete"
-                    + " repo method may exist (engine-spec contracts.md §2.2/§10.9)");
+            .because("cascade_level_actions / contract_events / contract_monitor_runs /"
+                    + " contract_party_responses / contract_enforcement_decisions /"
+                    + " agent_status_events / ai_curation_events are append-only — no"
+                    + " update/delete repo method may exist (engine-spec contracts.md"
+                    + " §2.2/§10.9; cascade.md test #6; agents.md I4; diagnostic.md §3.2)");
 
     @ArchTest
     static final ArchRule append_only_repositories_have_no_modifying_queries = noMethods()

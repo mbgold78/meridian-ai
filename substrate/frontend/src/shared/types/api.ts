@@ -149,7 +149,12 @@ export interface DesignDecision {
   title: string;
   description: string;
   rationale: string | null;
-  impactSummary: string | null;
+  /**
+   * JSON object on the wire (the entity field is a Jackson JsonNode —
+   * e.g. {fteSaved, annualSavings, note} in the pinned hash vectors), never
+   * a string. Rendering it as a string child would crash React.
+   */
+  impactSummary: Record<string, unknown> | null;
   affectedSystemIds: string[] | null;
   affectedProcessIds: string[] | null;
   previousHash: string | null;
@@ -184,7 +189,13 @@ export interface HashChainVerification {
   valid: boolean;
   totalDecisions: number;
   verifiedLinks: number;
-  firstBrokenAt: number | null;
+  /**
+   * Identifier of the FIRST decision with a broken link — the backend record
+   * field is a String (the decision's UUID, title fallback), never a
+   * number/index. Doctors only ever saw `null` (intact chains), which
+   * satisfied both types — hence the drift.
+   */
+  firstBrokenAt: string | null;
   message: string;
 }
 

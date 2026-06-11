@@ -1,5 +1,7 @@
 package com.meridian.substrate.engine.cascade;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -21,6 +23,8 @@ import java.time.Clock;
 @EnableScheduling
 public class CascadeEngineConfig {
 
+    private static final Logger log = LoggerFactory.getLogger(CascadeEngineConfig.class);
+
     /**
      * Every engine cascade service takes the Spring {@link Clock} bean
      * (engine-spec cascade.md §1: dev/prod = system clock; DemoPack and tests
@@ -33,10 +37,25 @@ public class CascadeEngineConfig {
         return Clock.systemUTC();
     }
 
-    /** No-op attestation seam default (ADR D15); a real hook bean replaces it. */
+    /**
+     * No-op attestation seam default (ADR D15); a real hook bean replaces it.
+     *
+     * <p>This bean method only runs when NO real hook bean exists — exactly
+     * the condition under which {@code substrate.cascade.attest-to-decision-log}
+     * is INERT (the flag is a reserved extension point read by nothing; the
+     * property value cannot change which bean is wired). A true flag with the
+     * no-op hook would otherwise silently fake a tamper-evidence posture, so
+     * it WARNs loudly here (the DemoFixedClockConfig idiom).
+     */
     @Bean
     @ConditionalOnMissingBean(CascadeAttestationHook.class)
-    public CascadeAttestationHook cascadeAttestationHook() {
+    public CascadeAttestationHook cascadeAttestationHook(CascadeProperties properties) {
+        if (properties.isAttestToDecisionLog()) {
+            log.warn("substrate.cascade.attest-to-decision-log=true but NO CascadeAttestationHook"
+                    + " bean is present — the flag is INERT (reserved extension point, ADR-001"
+                    + " D15): cascade resolutions are NOT being anchored to the decision log."
+                    + " Remove the flag or contribute a real hook bean.");
+        }
         return new NoopCascadeAttestationHook();
     }
 }

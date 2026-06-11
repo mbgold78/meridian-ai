@@ -99,6 +99,18 @@ method-level role annotations beyond the existing gates, multi-tenant issuer fed
 token-exchange for orchestrator dispatches. The contracts/agents gateway keeps its own
 principal-type model unchanged.
 
+**Named hardening follow-up — MCP party authority on compliance writes:** OIDC verifies WHO
+the principal is, not WHAT it may touch. `report_metric` hard-requires the caller's
+`contract_parties.mcp_principal_id` binding on the target contract; `attest_commitment`,
+`record_commitment_progress`, `acknowledge_breach` and `mark_breach_remediated` do NOT — a
+verified principal that clears the registry gate can target any commitment/breach id (every
+write is attributed in `actor_id`/`attested_by`, so it is auditable, not authorized). The
+gateway's §8.2 PARTY carve-out is own-contract scoped for party-only principals, but
+REGISTERED agents pass the §8.3 ladder, which has no own-party check by spec. Enforcing
+bound-party on those four verbs is a product decision (it would brick registered non-party
+agents that agents.md §8.3 deliberately permits to attest) — tracked here so the gap is
+disclosed, never silent.
+
 ## 9. Frontend wiring (Stage 2 — `frontend/src/auth/`)
 
 Anonymous mode is a NO-OP: `AuthProvider` renders children synchronously under a constant
@@ -127,6 +139,14 @@ to be mounted for components to behave). Oidc mode is additive:
   (`window.__SUBSTRATE_AUTH__.oidc.roleMap` / `rolesClaimPath`) is a DISPLAY-ONLY mirror of
   `substrate.auth.oidc.persona.role-map`; the backend's projection from the verified token
   stays authoritative.
+- **Deep links**: `beginSignIn` captures `state.returnTo` (current path + query) and the
+  callback handler restores it after `signinRedirectCallback` (same-origin paths only), so a
+  user who hit `/portfolio/cascade/<id>` unauthenticated lands back there, not on `/`.
+- **redirectUri caveat**: the default redirect URI is `origin + '/'`, which the Boot-served
+  bundle always forwards. A customer-configured `window.__SUBSTRATE_AUTH__.oidc.redirectUri`
+  whose PATH is outside `SpaController`'s forward list (`/ecosystem`, `/diagnostics`,
+  `/designer`, `/transformation`, `/roadmap`, `/decisions`, `/portfolio`) would hard-404 on
+  the IdP callback — keep the redirect path on a forwarded route (or `/`).
 - **Tests**: `auth/__tests__` (config resolution, claim extraction, AuthProvider with a mocked
   UserManager), `api/__tests__/client.test.ts` (interceptor in both modes, 401 behavior),
   `api/__tests__/chatStream.test.ts` (SSE token URL), `personas/__tests__` (mode rendering).

@@ -388,6 +388,24 @@ class AgentVerbStateMachineTest extends AgentVerbTestSupport {
     }
 
     @Test
+    void sameIdempotencyKeyOnADifferentVerbIsA409Conflict_neverA500() throws Exception {
+        AgentRegistration reg = deploy(UUID.randomUUID(), "a-msg-router");
+        ObjectNode pause = reasonedBody("Paused pending Compliance review");
+        postVerb(reg.getId() + "/pause", pause).andExpect(status().isOk());
+        long before = events.countByAgentRegistrationId(reg.getId());
+
+        // SAME key reused on a DIFFERENT verb: a contradiction — conflicts as
+        // AGENT_IDEMPOTENCY_REUSE (pre-fix this proceeded to appendEvent and
+        // died on uq_ase_idem at flush as a raw 500).
+        ObjectNode resume = verbBody();   // resume takes no reason field
+        resume.put("idempotencyKey", pause.get("idempotencyKey").asText());
+        postVerb(reg.getId() + "/resume", resume)
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.errors[0].code", is("AGENT_IDEMPOTENCY_REUSE")));
+        assertThat(events.countByAgentRegistrationId(reg.getId())).isEqualTo(before);
+    }
+
+    @Test
     void staleExpectedEventSeqAnswers409WithTheCurrentDetailInData() throws Exception {
         AgentRegistration reg = deploy(UUID.randomUUID(), "a-msg-router");
         ObjectNode stale = reasonedBody("racing operator");

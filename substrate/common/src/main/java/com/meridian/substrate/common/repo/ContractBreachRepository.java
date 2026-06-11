@@ -31,6 +31,16 @@ public interface ContractBreachRepository extends JpaRepository<ContractBreach, 
     List<ContractBreach> findByStatus(BreachStatus status);
 
     /**
+     * Id-only candidate projection for the surfacing pass: loading ENTITIES
+     * here would put them in the persistence context, and the subsequent
+     * {@link #findByIdForUpdate} lock would return the CACHED (possibly
+     * stale) state instead of the freshly locked row — the id list keeps the
+     * lock-then-recheck honest.
+     */
+    @Query("SELECT b.id FROM ContractBreach b WHERE b.status = :status")
+    List<UUID> findIdsByStatus(@Param("status") BreachStatus status);
+
+    /**
      * Open-breach dedup lookup under row lock (ADR D13; §5.4/§10.6): at most
      * one open breach per {@code (monitor_id, commitment_id, period_key)}.
      * NULL source components match NULL (the V5_1 partial index COALESCEs the
@@ -39,6 +49,18 @@ public interface ContractBreachRepository extends JpaRepository<ContractBreach, 
      * be inside {@code @Transactional}; on the PG constraint violation race,
      * retry as refresh (§10.6).
      */
+    /**
+     * Single-row PESSIMISTIC_WRITE load — the breach mutation serialization
+     * point shared by the §2.4 human verbs and the §5.4 surfacing pass.
+     * Without it the verbs mutated an UNLOCKED {@code findById} read and
+     * raced the sweep's locked reconfirm writes (and the surfacing pass)
+     * into request-failing optimistic 409s — every other write path in the
+     * system serializes pessimistically (§10).
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT b FROM ContractBreach b WHERE b.id = :id")
+    Optional<ContractBreach> findByIdForUpdate(@Param("id") UUID id);
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("""
             SELECT b FROM ContractBreach b

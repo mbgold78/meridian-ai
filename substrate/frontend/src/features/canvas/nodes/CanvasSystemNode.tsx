@@ -53,6 +53,12 @@ type NodeType = Node<CanvasSystemNodeData, 'canvasSystem'>;
 function CanvasSystemNodeComponent({ data, selected }: NodeProps<NodeType>) {
   const style =
     TYPE_STYLE[(data.systemType ?? 'legacy').toLowerCase()] ?? TYPE_STYLE.legacy;
+  // SystemEntity.status is free-text served verbatim — the demo pack seeds
+  // 'ACTIVE' (uppercase) while the homepoc fixture vocabulary was lowercase.
+  // Normalize for the comparisons below (the retirementHeuristics /
+  // ReductionService idiom — systemType above already does the same);
+  // without it the status dot never colored for live/seeded data.
+  const status = data.status ? data.status.toLowerCase() : null;
   const hasFindings = data.findingCount > 0;
   const critical = data.criticalCount > 0;
 
@@ -134,22 +140,26 @@ function CanvasSystemNodeComponent({ data, selected }: NodeProps<NodeType>) {
             <span
               className={cn(
                 'ml-auto inline-flex items-center gap-1 text-[10px] font-medium',
-                data.status === 'active' && 'text-emerald-300',
-                data.status === 'deprecated' && 'text-red-300',
-                data.status === 'in-review' && 'text-amber-300',
-                !data.status && 'text-foreground-subtle'
+                status === 'active' && 'text-emerald-300',
+                status === 'deprecated' && 'text-red-300',
+                status === 'in-review' && 'text-amber-300',
+                !status && 'text-foreground-subtle'
               )}
             >
               <span
                 className={cn(
                   'inline-block h-1.5 w-1.5 rounded-full',
-                  data.status === 'active' && 'bg-emerald-400',
-                  data.status === 'deprecated' && 'bg-red-400',
-                  data.status === 'in-review' && 'bg-amber-400',
-                  !data.status && 'bg-foreground/40'
+                  status === 'active' && 'bg-emerald-400',
+                  status === 'deprecated' && 'bg-red-400',
+                  status === 'in-review' && 'bg-amber-400',
+                  !status && 'bg-foreground/40',
+                  // unrecognized vocabulary still gets a (neutral) dot —
+                  // never an invisible transparent span
+                  status && !['active', 'deprecated', 'in-review'].includes(status)
+                    && 'bg-foreground/40'
                 )}
               />
-              {data.status ?? 'unknown'}
+              {status ?? 'unknown'}
             </span>
           </div>
         </div>

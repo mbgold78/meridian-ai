@@ -62,6 +62,11 @@ export function CapabilityDesigner() {
 
   const [createOpen, setCreateOpen] = useState(false);
   const [aiOpen, setAiOpen] = useState(false);
+  // 409-and-refresh discipline (the cascades/agents/contracts shipping gate,
+  // retrofitted): a failed write must refetch (snap the tree back to server
+  // truth) AND tell the user — silent swallowing left the drag "applied"
+  // on screen while the server rejected it.
+  const [mutationError, setMutationError] = useState<string | null>(null);
 
   const treePaneRef = useRef<HTMLDivElement | null>(null);
   const [treeHeight, setTreeHeight] = useState<number>(480);
@@ -76,20 +81,38 @@ export function CapabilityDesigner() {
     return () => ro.disconnect();
   }, []);
 
+  const onWriteFailed = useCallback(
+    (what: string) => (err: unknown) => {
+      const status = (err as { response?: { status?: number } } | null)?.response?.status;
+      setMutationError(
+        status === 409
+          ? `${what} conflicted with a concurrent change — the tree was refreshed; please retry.`
+          : `${what} failed${err instanceof Error && err.message ? ` (${err.message})` : ''} — the tree was refreshed.`,
+      );
+      // refetch = snap back to server truth (the 409-and-refresh pattern)
+      if (domainId) void qc.invalidateQueries({ queryKey: ['capabilities', domainId] });
+    },
+    [domainId, qc],
+  );
+
   const reparent = useMutation({
     mutationFn: ({ id, newParentId }: { id: string; newParentId: string | null }) =>
       reparentCapability(id, newParentId),
     onSuccess: () => {
+      setMutationError(null);
       if (domainId) qc.invalidateQueries({ queryKey: ['capabilities', domainId] });
     },
+    onError: onWriteFailed('Moving the capability'),
   });
 
   const reorder = useMutation({
     mutationFn: ({ id, newSequence }: { id: string; newSequence: number }) =>
       updateCapabilitySequence(id, newSequence),
     onSuccess: () => {
+      setMutationError(null);
       if (domainId) qc.invalidateQueries({ queryKey: ['capabilities', domainId] });
     },
+    onError: onWriteFailed('Reordering the capability'),
   });
 
   const handleReparent = useCallback(
@@ -148,6 +171,23 @@ export function CapabilityDesigner() {
           </Button>
         </div>
       </header>
+
+      {mutationError && (
+        <div
+          role="alert"
+          className="flex items-center justify-between gap-3 border-b border-destructive/40 bg-destructive/10 px-6 py-2 text-sm text-destructive"
+        >
+          <span>{mutationError}</span>
+          <button
+            type="button"
+            onClick={() => setMutationError(null)}
+            className="shrink-0 text-xs font-medium underline-offset-2 hover:underline"
+            aria-label="Dismiss error"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
 
       <div className="flex flex-1 min-h-0">
         <aside

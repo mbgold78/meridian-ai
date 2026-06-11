@@ -53,12 +53,23 @@ import java.util.UUID;
  * implementation, this gives post-migration verifiers a map of what was
  * seeded where without writing SQL.
  *
- * <p><b>Transaction note:</b> the whole run executes in one transaction
- * (homepoc behavior — all-or-nothing seed). {@code DiagnosticSeeder}'s
- * decision appends therefore join this outer transaction; that is safe here
- * because seeding is strictly single-threaded, so the per-domain append lock
- * in {@code DecisionLogService} cannot be contended (its no-outer-transaction
- * caveat targets concurrent request-path callers).
+ * <p><b>Transaction note:</b> the run executes in one transaction
+ * (homepoc behavior) — but it is NOT fully all-or-nothing anymore.
+ * {@code DecisionLogService.appendDecision} pins {@code REQUIRES_NEW} (the
+ * ADR-002 D14 mirror requirement), so {@code DiagnosticSeeder}'s decision
+ * appends COMMIT IMMEDIATELY and independently of this outer transaction.
+ * Consequence on a mid-seed failure AFTER DiagnosticSeeder (topo position
+ * 13/14 — in practice an {@code EvidenceSeeder} failure or an outer-commit
+ * failure): the domain/systems/findings roll back, but the already-committed
+ * {@code design_decisions} chain rows survive, soft-referencing a domain
+ * UUID that never came to exist; the next boot sees zero domains, re-seeds a
+ * NEW demo domain, and the orphan chain persists in any persistent DB
+ * (postgres profile — in-memory H2 dev masks it). The startup verifier walks
+ * orphan chains as INTACT (they are self-consistent), so the residue is
+ * cosmetic, demo-lane-only garbage — accepted; clean up with
+ * {@code DELETE FROM design_decisions WHERE domain_id NOT IN (SELECT id FROM
+ * domains)} if it ever matters. Seeding stays strictly single-threaded, so
+ * the per-domain append lock in {@code DecisionLogService} is uncontended.
  */
 @Component
 public class SeedOrchestrator {

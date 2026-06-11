@@ -221,7 +221,22 @@ public class BreachService {
         Instant now = clock.instant();
         ContractActor actor = ContractActor.system(SWEEP_ACTOR_ID);
         int surfaced = 0;
-        for (ContractBreach breach : breachRepository.findByStatus(BreachStatus.DETECTED)) {
+        // Candidate IDS first (id projection — never entities, which would
+        // poison the lock re-read with first-level-cache state), then a
+        // per-row PESSIMISTIC_WRITE load + status re-check: the leased sweep
+        // and the un-leased caller-thread runNow both enter this pass, and
+        // the human verbs mutate the same rows — without row locks a racing
+        // writer turned ONE version conflict into a WHOLE-pass rollback
+        // (every SURFACED transition + event + after-commit
+        // BreachSurfacedEvent of the pass). Locked + re-checked, a raced row
+        // is skipped idempotently instead (candidates iterate in query
+        // order, so two concurrent passes lock in a consistent order — no
+        // deadlock).
+        for (UUID candidateId : breachRepository.findIdsByStatus(BreachStatus.DETECTED)) {
+            ContractBreach breach = loadBreach(candidateId, false);
+            if (breach == null || breach.getStatus() != BreachStatus.DETECTED) {
+                continue;                    // another pass/verb moved it — idempotent skip
+            }
             transition(breach, BreachStatus.SURFACED);
             breach.setSurfacedAt(now);
             breachRepository.save(breach);
@@ -335,9 +350,34 @@ public class BreachService {
 
     // ------------------------------------------------------------------ helpers
 
+    /**
+     * Verb load under PESSIMISTIC_WRITE: the §2.4 transition guard must run
+     * on a row no concurrent writer (sweep reconfirm, surfacing pass, racing
+     * verb) can move underneath it — contention serializes like every other
+     * write path (§10) instead of failing the human's request with an
+     * optimistic 409 at flush.
+     */
     private ContractBreach loadBreach(UUID breachId) {
-        return breachRepository.findById(breachId)
-                .orElseThrow(() -> new EntityNotFoundException("ContractBreach not found: " + breachId));
+        return loadBreach(breachId, true);
+    }
+
+    /**
+     * Locked load when a transaction is active (production: every verb and
+     * the surfacing pass are {@code @Transactional}); plain load otherwise —
+     * PESSIMISTIC_WRITE requires an active transaction, and the no-tx branch
+     * exists ONLY for hand-constructed, proxy-less service graphs (the
+     * MonitorHarness H2 fast lane), where {@code @Version} stays the
+     * backstop. Same runtime-tx discipline as {@link #onBreachDetected}.
+     */
+    private ContractBreach loadBreach(UUID breachId, boolean required) {
+        var breach = TransactionSynchronizationManager.isActualTransactionActive()
+                ? breachRepository.findByIdForUpdate(breachId)
+                : breachRepository.findById(breachId);
+        if (required) {
+            return breach.orElseThrow(
+                    () -> new EntityNotFoundException("ContractBreach not found: " + breachId));
+        }
+        return breach.orElse(null);
     }
 
     /**

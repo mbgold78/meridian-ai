@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { useAppSelector } from '@/app/hooks';
 import { sendChat } from '@/api/endpoints/chat';
 import { useTheme } from '@/app/theme';
 import { cn } from '@/lib/utils';
@@ -50,7 +49,6 @@ export function AmbientChatBar({
   domainId: string;
   onSignal: (s: AmbientSignal) => void;
 }) {
-  const personaLevel = useAppSelector((s) => s.persona.level);
   const { config } = useTheme();
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<Message[]>([]);
@@ -75,12 +73,16 @@ export function AmbientChatBar({
       setMessages((m) => [...m, userMsg, holder]);
 
       try {
-        const env = await sendChat({ domainId, message, personaLevel });
+        const env = await sendChat({ domainId, message });
         if (env.errors && env.errors.length > 0) {
           throw new Error(env.errors[0].message);
         }
-        const reply = env.data?.reply ?? '';
-        const tools: ToolCall[] = (env.data?.toolCalls ?? []).map((name) => ({ name }));
+        // Wire contract (backend ChatResponse record): `message` is the
+        // assistant text; toolCalls are ToolCallTrace OBJECTS — map to the
+        // tool NAME for the pills/spotlight (rendering the trace object as a
+        // JSX child crashed React pre-fix).
+        const reply = env.data?.message ?? '';
+        const tools: ToolCall[] = (env.data?.toolCalls ?? []).map((t) => ({ name: t.toolName }));
 
         // Emit spotlight signal based on tools used
         for (const t of tools) {
@@ -116,7 +118,7 @@ export function AmbientChatBar({
         setBusy(false);
       }
     },
-    [busy, domainId, personaLevel, onSignal]
+    [busy, domainId, onSignal]
   );
 
   const handleKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {

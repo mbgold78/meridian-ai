@@ -69,7 +69,13 @@ export function resolveWorkspaceDomain(
   return firstNonDemo ?? domains[0];
 }
 
-function readPinnedDomainId(): string | null {
+/**
+ * Deploy-time pinned domain id (VITE_SUBSTRATE_DOMAIN_ID). Exported so
+ * demo-biased bindings (the Beacon cascade grid's demo-first resolution)
+ * can let an explicit operator pin OVERRIDE their demo preference — the
+ * pin's whole purpose is defending against wrong-domain binding.
+ */
+export function readPinnedDomainId(): string | null {
   const raw = import.meta.env?.VITE_SUBSTRATE_DOMAIN_ID as string | undefined;
   return raw && raw.length > 0 ? raw : null;
 }

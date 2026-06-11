@@ -67,10 +67,25 @@ import java.util.stream.Collectors;
  * <p><b>Identity:</b> write tools REQUIRE the principal header
  * ({@code PRINCIPAL_REQUIRED} otherwise) — a write without an actor identity
  * would corrupt the §2.1 actor audit trail. Phase 1-4 localhost trust,
- * documented spoofable (spec §15 #12). {@code report_metric} and
- * {@code invoke_decline} resolve the caller's party from
- * {@code contract_parties.mcp_principal_id} (§5.5 party authority — advisory
- * pre-Phase-5).
+ * documented spoofable (spec §15 #12). {@code report_metric} HARD-resolves
+ * the caller's party from {@code contract_parties.mcp_principal_id} (throws
+ * when unbound); {@code invoke_decline} resolves it advisorily.
+ *
+ * <p><b>Party-authority honesty (named Phase-5+ hardening follow-up):</b>
+ * {@code attest_commitment}, {@code record_commitment_progress},
+ * {@code acknowledge_breach} and {@code mark_breach_remediated} perform NO
+ * adapter-level party-authority check — any verified principal that clears
+ * the registry gate may target any commitment/breach id, and the only
+ * cross-contract scoping is the gateway's §8.2 PARTY carve-out (own-contract
+ * scoped for principals that are ONLY party-bound; REGISTERED agents pass
+ * the §8.3 ladder instead, which has no own-party check BY SPEC). The
+ * verified principal is always recorded in {@code actor_id} /
+ * {@code attested_by}, so every write is attributable post-hoc — but
+ * identity-in-the-audit-trail is not authorization. Enforcing bound-party
+ * here (the {@code report_metric} idiom) would brick registered non-party
+ * agents that the agents.md §8.3 observation scope deliberately permits to
+ * attest — a product decision, deferred with this disclosure instead of
+ * silently absent.
  *
  * <p>No {@code waive_breach} special-casing here: the ADR D16 built-in
  * non-removable guard lives in the gateway ({@code contract.waive_breach}
@@ -122,7 +137,10 @@ public class ContractsMcpWriteTools {
                         "GOVERNED: submit a compliance attestation for a commitment period"
                                 + " (§5.5 idempotent upsert on (commitment_id, period_key);"
                                 + " every submission appends a COMMITMENT_ATTESTED event)."
-                                + " complianceClaim MISSED auto-opens a breach.",
+                                + " complianceClaim MISSED auto-opens a breach."
+                                + " Party authority is NOT verified pre-Phase-5 hardening —"
+                                + " the caller is recorded in attested_by/actor_id (attributable,"
+                                + " not authorized).",
                         """
                         {"type":"object","properties":{
                           "commitment_id":{"type":"string","description":"Commitment UUID"},
@@ -187,7 +205,9 @@ public class ContractsMcpWriteTools {
                         this::invokeDecline),
                 spec(tool("acknowledge_breach",
                         "GOVERNED: acknowledge a SURFACED breach (§2.4 — agents MAY"
-                                + " acknowledge, ADR D16).",
+                                + " acknowledge, ADR D16). Party authority is NOT verified"
+                                + " pre-Phase-5 hardening — attributable via actor_id, not"
+                                + " authorized.",
                         """
                         {"type":"object","properties":{
                           "breach_id":{"type":"string"},
@@ -196,7 +216,9 @@ public class ContractsMcpWriteTools {
                         this::acknowledgeBreach),
                 spec(tool("mark_breach_remediated",
                         "GOVERNED: mark an ACKNOWLEDGED breach REMEDIATED with mandatory"
-                                + " evidence refs (§2.4); the commitment returns to COMPLIANT.",
+                                + " evidence refs (§2.4); the commitment returns to COMPLIANT."
+                                + " Party authority is NOT verified pre-Phase-5 hardening —"
+                                + " attributable via actor_id, not authorized.",
                         """
                         {"type":"object","properties":{
                           "breach_id":{"type":"string"},

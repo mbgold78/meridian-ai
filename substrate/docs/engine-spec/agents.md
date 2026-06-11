@@ -423,8 +423,8 @@ Precedence is a projector choice from a fixture that conflates mode and attentio
 
 | Verb | SUBSTRATE_MCP locus | ORCHESTRATOR locus | CUSTOMER_SYSTEM locus |
 |---|---|---|---|
-| pause / kill / retire | `GATEWAY_BLOCK` once contracts 3c is live (registry flip ⇒ gateway denies next governed call; cache invalidated, 30s TTL net). Before 3c: `RECORDED_INTENT` + `disclosure="enforcement pending gateway"` | `RECORDED_INTENT` + no-new-dispatch preflight + result quarantine (§14); in-flight dispatches CANNOT be aborted — disclosed | `RECORDED_INTENT` + outbox notify + ack/confirm tracking |
-| throttle | `GATEWAY_BLOCK` via budget rows + rate counters (§8.3) | `RECORDED_INTENT`; budgets pace substrate-side submissions | `RECORDED_INTENT`; published obligation, MCP-readable |
+| pause / kill / retire | `GATEWAY_BLOCK` only while the gateway **posture is BLOCKING** — gate bean present AND `substrate.contracts.enforcement.mode=enforce` (registry flip ⇒ gateway denies next governed call; cache invalidated, 30s TTL net). Any other posture is `RECORDED_INTENT` with an honest disclosure: bean ABSENT ⇒ `disclosure="enforcement pending gateway"`; ladder `shadow` (OBSERVE) ⇒ governed calls rowed would-deny + zombie signals, not blocked; ladder `off` (INERT) ⇒ nothing evaluated at the gateway | `RECORDED_INTENT` + no-new-dispatch preflight + result quarantine (§14); in-flight dispatches CANNOT be aborted — disclosed | `RECORDED_INTENT` + outbox notify + ack/confirm tracking |
+| throttle | `GATEWAY_BLOCK` via budget rows + rate counters (§8.3) — same posture gate: claimed only while BLOCKING, else `RECORDED_INTENT` with the posture disclosure | `RECORDED_INTENT`; budgets pace substrate-side submissions | `RECORDED_INTENT`; published obligation, MCP-readable |
 | resume / promote | immediate — substrate-held state IS the control plane | recorded + notified | recorded + notified |
 
 `confirmationState`: `NOT_REQUIRED` for GATEWAY_BLOCK and for resume/promote; `PENDING` on a RECORDED_INTENT suspension until `ACKNOWLEDGED` (runtime, M17) and/or `CONFIRMED` (human, M16). CONFIRMED does not require ACKNOWLEDGED (a human may verify a runtime that never acked); neither is ever auto-derived from sighting absence.
@@ -556,7 +556,7 @@ resolve(principal.id):
 1. `operational_mode ∈ {PAUSED, RETIRED}` ⇒ DENY `AGENT_CONTROL_SUSPENDED` + GATEWAY_ACTION sighting + zombie flow (§6.4). Exception: the `acknowledge_control` tool is allowed (the compliant act).
 2. `operational_mode = SHADOW` ⇒ only observation-scope tools (`agent_heartbeat`, `report_agent_activity`, `report_metric`, `attest_commitment`, `record_commitment_progress`, `acknowledge_control`) + reads; all other governed writes ⇒ DENY `AGENT_SHADOW_SCOPE`. P11 observation-only trial, structural.
 3. `read_only = true` ⇒ mutating actionTypes beyond the observation scope ⇒ DENY `AGENT_READ_ONLY`.
-4. Budgets: active `ACTIONS_PER_WINDOW` budget ⇒ atomic increment of the current `agent_rate_counters` window inside the check transaction; over limit ⇒ DENY `AGENT_BUDGET_EXHAUSTED` + signal at exhaustion. `SCHEDULE_WINDOW` ⇒ DENY `OUTSIDE_SCHEDULE_WINDOW` when configured and violated. (TOKENS_PER_DAY / SAMPLING_PCT: schema-ready, no evaluator in v1 — EXTENSION POINT agent-10.)
+4. Budgets: active `ACTIONS_PER_WINDOW` budget ⇒ atomic increment of the current `agent_rate_counters` window inside the check transaction; over limit ⇒ DENY `AGENT_BUDGET_EXHAUSTED` + signal at exhaustion. (SCHEDULE_WINDOW / TOKENS_PER_DAY / SAMPLING_PCT: schema-ready rows, NO evaluator in v1 — a configured row of those kinds is a published obligation, never a gate check; EXTENSION POINT agent-10, consistent with ADR-003 D12 and §15 row 10. *Spec correction 2026-06-11: this row previously promised `SCHEDULE_WINDOW ⇒ DENY OUTSIDE_SCHEDULE_WINDOW`, contradicting D12, §15 row 10 and the implementation — only ACTIONS_PER_WINDOW is evaluated; no `OUTSIDE_SCHEDULE_WINDOW` reason code exists anywhere.*)
 5. Open intervention (LIVE) ⇒ ALLOW + flag `AGENT_IN_INTERVENTION` — never brick the telemetry that diagnoses the problem.
 6. Every allowed governed call records a GATEWAY_ACTION sighting (liveness for free).
 
@@ -757,3 +757,9 @@ Promotion seeding records an APPROVED PROMOTION review (reviewer = oversight pos
 - Both polished fixture mandates compile to monitors/signals and zero blocking guards until an agent population generates governed writes — demo the gateway with the 6c MCP beats (paused-agent denial, zombie heartbeat), not with invented guards on fixture agents.
 - This dev machine has no Docker: V6_1 trigger, partial uniques, FOR UPDATE, and counter-increment semantics are CI-verified ONLY — claiming local verification is a false-PASS.
 - The registry lookup joins the contracts gateway hot path: keep it on the `GuardCache` invalidation discipline and assert the latency budget in CI; a registry fault fail-closes ALL agent traffic (deliberate, ADR-002 D5 inheritance).
+
+---
+
+## Changelog
+
+- 2026-06-11: §5.3 amended from bean-presence framing to posture framing, matching the shipped resolution (non-negotiable #1 / invariant I8; doctor-verified against `AgentControlEffects` + `AgentRegistryGate.posture()`). `GATEWAY_BLOCK` is claimed only when the gateway posture is BLOCKING — gate bean present AND `substrate.contracts.enforcement.mode=enforce`; bean-absent (ABSENT), `off` (INERT), and `shadow` (OBSERVE) postures all derive `RECORDED_INTENT` with honest per-posture disclosures, because claiming "the next governed call is denied" in shadow/off would be fabricated control. Original sentence, retained verbatim for Mike's ratification trail: "`GATEWAY_BLOCK` once contracts 3c is live (registry flip ⇒ gateway denies next governed call; cache invalidated, 30s TTL net). Before 3c: `RECORDED_INTENT` + `disclosure=\"enforcement pending gateway\"`". Pending Mike ratification of the broader §5.3/I8 tension disposition.

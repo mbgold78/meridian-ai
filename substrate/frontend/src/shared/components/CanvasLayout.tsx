@@ -46,7 +46,10 @@ export function CanvasLayout() {
             <Link
               to="/portfolio"
               className="inline-flex items-center gap-2 rounded-xl border border-warning/40 bg-surface/80 px-3 py-2 text-xs font-medium text-warning shadow-xl backdrop-blur-xl hover:text-warning-foreground"
-              title="Beacon Industries portfolio (fixture data)"
+              // "(demo)" not "(fixture data)": the dashboards render LIVE
+              // engine slices whenever the backend answers (FIX-03) — the
+              // PortfolioLayout banner carries the precise provenance.
+              title="Beacon Industries portfolio (demo)"
             >
               Portfolio
             </Link>

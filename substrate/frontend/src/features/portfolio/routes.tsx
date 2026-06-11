@@ -1,4 +1,5 @@
 import type { RouteObject } from 'react-router-dom';
+import { NotFound } from '@/shared/components';
 import { PortfolioLayout } from './PortfolioLayout';
 import { PortfolioLandingPage } from './PortfolioLandingPage';
 import { CorporateOperatingPartnerView } from './CorporateOperatingPartnerView';
@@ -32,6 +33,9 @@ export const PORTFOLIO_ROUTES: RouteObject[] = [
       { path: 'subsidiary/:slug', element: <SubsidiaryCooView /> },
       { path: 'cascade/:cascadeId', element: <CascadeDetailView /> },
       { path: 'contract/:contractId', element: <ContractDetailView /> },
+      // Unmatched /portfolio/** would otherwise fail the whole route tree
+      // and blank the page (e.g. a stale tab deep link with an extra segment).
+      { path: '*', element: <NotFound /> },
     ],
   },
 ];

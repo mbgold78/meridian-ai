@@ -22,6 +22,7 @@ import com.meridian.substrate.engine.EngineTestApplication;
 import com.meridian.substrate.engine.ai.validative.FindingCandidate;
 import com.meridian.substrate.engine.ai.validative.FindingCandidateSeverity;
 import com.meridian.substrate.engine.ai.validative.FindingCandidateType;
+import com.meridian.substrate.engine.diagnostic.exception.StaleBatchClaimException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -34,6 +35,7 @@ import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Diagnostic test plan #2 (the §5.2 mapping pins) + the commit-side half of
@@ -105,7 +107,7 @@ class FindingCommitServiceTest {
 
     @Test
     void severityMatrixPinned_includingLossyInfoToLow() {
-        commitService.commitBatch(run.getId(), batch.getId(), generation(List.of(
+        commitService.commitBatch(run.getId(), batch.getId(), batch.getAttempt(), generation(List.of(
                 structural(FindingCandidateSeverity.CRITICAL, "Critical one.", null, null),
                 structural(FindingCandidateSeverity.HIGH, "High one.", null, null),
                 structural(FindingCandidateSeverity.MEDIUM, "Medium one.", null, null),
@@ -125,7 +127,7 @@ class FindingCommitServiceTest {
 
     @Test
     void findingTypePassthrough_validValueIsNotDefaulted() {
-        commitService.commitBatch(run.getId(), batch.getId(), generation(List.of(
+        commitService.commitBatch(run.getId(), batch.getId(), batch.getAttempt(), generation(List.of(
                 structural(FindingCandidateSeverity.MEDIUM, "Typed.", null, "DUPLICATION"))));
 
         Finding finding = soleFinding();
@@ -136,7 +138,7 @@ class FindingCommitServiceTest {
     @Test
     void findingTypeDifferentialDefaults_structuralCoverageGap_contentDataQuality() {
         UUID evidenceId = evidence("glacier-systems.csv").getId();
-        commitService.commitBatch(run.getId(), batch.getId(), generation(List.of(
+        commitService.commitBatch(run.getId(), batch.getId(), batch.getAttempt(), generation(List.of(
                 structural(FindingCandidateSeverity.MEDIUM, "Structural untyped.", null, null),
                 content(FindingCandidateSeverity.HIGH, "Content untyped.", List.of(evidenceId), null))));
 
@@ -153,7 +155,7 @@ class FindingCommitServiceTest {
     @Test
     void invalidFindingTypeNeverDiscardsAGroundedCandidate() {
         UUID evidenceId = evidence("glacier-processes.csv").getId();
-        commitService.commitBatch(run.getId(), batch.getId(), generation(List.of(
+        commitService.commitBatch(run.getId(), batch.getId(), batch.getAttempt(), generation(List.of(
                 content(FindingCandidateSeverity.HIGH, "Invalid typed.", List.of(evidenceId),
                         "TOTALLY_MADE_UP_TYPE"))));
 
@@ -167,7 +169,7 @@ class FindingCommitServiceTest {
     @Test
     void titleRules_candidateTitle_firstSentenceFallback_truncation200() {
         String longTail = "x".repeat(300);
-        commitService.commitBatch(run.getId(), batch.getId(), generation(List.of(
+        commitService.commitBatch(run.getId(), batch.getId(), batch.getAttempt(), generation(List.of(
                 candidate(FindingCandidateType.STRUCTURAL, FindingCandidateSeverity.MEDIUM,
                         "Description here. Second sentence.", List.of(), "Explicit title", null),
                 candidate(FindingCandidateType.STRUCTURAL, FindingCandidateSeverity.MEDIUM,
@@ -187,7 +189,7 @@ class FindingCommitServiceTest {
     @Test
     void enrichedEvidenceSnapshotShape_isPinned() {
         Evidence evidence = evidence("glacier-systems.csv");
-        commitService.commitBatch(run.getId(), batch.getId(), generation(List.of(
+        commitService.commitBatch(run.getId(), batch.getId(), batch.getAttempt(), generation(List.of(
                 content(FindingCandidateSeverity.HIGH, "Snapshot shape.",
                         List.of(evidence.getId()), null))));
 
@@ -217,7 +219,7 @@ class FindingCommitServiceTest {
 
     @Test
     void structuralEvidenceLessCommitsWithEmptyEvidenceArray() {
-        commitService.commitBatch(run.getId(), batch.getId(), generation(List.of(
+        commitService.commitBatch(run.getId(), batch.getId(), batch.getAttempt(), generation(List.of(
                 structural(FindingCandidateSeverity.MEDIUM, "Evidence-less structural.", null, null))));
 
         Finding finding = soleFinding();
@@ -233,7 +235,7 @@ class FindingCommitServiceTest {
         Evidence solid = evidence("glacier-systems.csv");
         UUID vanished = UUID.randomUUID(); // was grounded at filter time; row gone now
         FindingCommitService.BatchCommitResult result = commitService.commitBatch(
-                run.getId(), batch.getId(), generation(List.of(
+                run.getId(), batch.getId(), batch.getAttempt(), generation(List.of(
                         content(FindingCandidateSeverity.HIGH, "Still grounded.",
                                 List.of(solid.getId()), null),
                         content(FindingCandidateSeverity.HIGH, "Lost grounding.",
@@ -260,7 +262,7 @@ class FindingCommitServiceTest {
         system.setCreatedBy("test");
         UUID systemId = systemRepository.save(system).getId();
 
-        commitService.commitBatch(run.getId(), batch.getId(), generation(List.of(
+        commitService.commitBatch(run.getId(), batch.getId(), batch.getAttempt(), generation(List.of(
                 candidate(FindingCandidateType.STRUCTURAL, FindingCandidateSeverity.MEDIUM,
                         "Resolved system.", List.of(), null, null, "system", systemId),
                 candidate(FindingCandidateType.STRUCTURAL, FindingCandidateSeverity.MEDIUM,
@@ -290,7 +292,7 @@ class FindingCommitServiceTest {
                 111, 222, "mock-model", false, null, null);
 
         FindingCommitService.BatchCommitResult result =
-                commitService.commitBatch(run.getId(), batch.getId(), generation);
+                commitService.commitBatch(run.getId(), batch.getId(), batch.getAttempt(), generation);
 
         assertThat(result.candidatesReturned()).isEqualTo(5);
         assertThat(result.findingsCommitted()).isEqualTo(2);
@@ -312,6 +314,41 @@ class FindingCommitServiceTest {
         assertThat(metadata.get("structuralCommitted").asInt()).isEqualTo(1);
         assertThat(metadata.get("filterHistogram").get("badSeverity").asInt()).isEqualTo(2);
         assertThat(metadata.get("executorMix").get("in-process").asInt()).isEqualTo(1);
+    }
+
+    // ------------------------------------------------- stale-claim commit fence
+
+    @Test
+    void staleClaimCommit_isRefused_andTheRowIsLeftUntouched() {
+        // Simulate failStaleBatches + a resume re-claim: the row moved on to a
+        // newer attempt while THIS executor was still generating.
+        int staleAttempt = batch.getAttempt();
+        batch.setAttempt(staleAttempt + 1);
+        batch = batchRepository.save(batch);
+
+        assertThatThrownBy(() -> commitService.commitBatch(run.getId(), batch.getId(),
+                staleAttempt, generation(List.of(
+                        structural(FindingCandidateSeverity.MEDIUM, "Stale-claim finding.", null, null)))))
+                .isInstanceOf(StaleBatchClaimException.class)
+                .hasMessageContaining("re-claimed");
+
+        // Nothing committed, row untouched: the new claimant still owns it.
+        assertThat(findingRepository.findByDomainIdAndAiGeneratedTrue(domainId)).isEmpty();
+        DiagnosticRunBatch row = batchRepository.findById(batch.getId()).orElseThrow();
+        assertThat(row.getStatus()).isEqualTo(DiagnosticRunBatch.STATUS_RUNNING);
+        assertThat(row.getAttempt()).isEqualTo(staleAttempt + 1);
+    }
+
+    @Test
+    void terminallyResolvedBatch_refusesALateCommit() {
+        batch.setStatus(DiagnosticRunBatch.STATUS_FAILED);
+        batch = batchRepository.save(batch);
+
+        assertThatThrownBy(() -> commitService.commitBatch(run.getId(), batch.getId(),
+                batch.getAttempt(), generation(List.of(
+                        structural(FindingCandidateSeverity.MEDIUM, "Late commit.", null, null)))))
+                .isInstanceOf(StaleBatchClaimException.class);
+        assertThat(findingRepository.findByDomainIdAndAiGeneratedTrue(domainId)).isEmpty();
     }
 
     // --------------------------------------------------------------- helpers

@@ -21,6 +21,7 @@ import com.meridian.substrate.engine.ai.validative.FindingCandidate;
 import com.meridian.substrate.engine.ai.validative.FindingCandidateSeverity;
 import com.meridian.substrate.engine.ai.validative.FindingCandidateType;
 import com.meridian.substrate.engine.contract.gateway.Governed;
+import com.meridian.substrate.engine.diagnostic.exception.StaleBatchClaimException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -99,15 +100,34 @@ public class FindingCommitService {
      * THE one commit transaction of a batch (spec §4.3 step 3; governed verb
      * {@code diagnostic.commit_findings}, SERVICE principal — ADR-004 D12; the
      * diagnostic CLI gets NO exemption, it transits this same PEP).
+     *
+     * <p><b>Claim fence:</b> {@code claimedAttempt} is the {@code attempt}
+     * value of the claim that produced {@code generation}. The commit refuses
+     * ({@link StaleBatchClaimException}) unless the batch row is still
+     * RUNNING at exactly that attempt — a slow-but-alive executor whose claim
+     * was declared stale ({@code failStaleBatches}) and re-claimed by a
+     * resume must never commit a second time (duplicate findings, double
+     * token/cost accounting). The original §4.3 doctrine ("a failed batch
+     * committed nothing") only covered true crashes; this fence covers the
+     * stale-while-alive case.
      */
     @Governed(actionType = "diagnostic.commit_findings")
     @Transactional
-    public BatchCommitResult commitBatch(UUID runId, UUID batchId,
+    public BatchCommitResult commitBatch(UUID runId, UUID batchId, int claimedAttempt,
                                          DiagnosticExecutor.BatchGeneration generation) {
         SynthesisRun run = runRepository.findById(runId)
                 .orElseThrow(() -> new IllegalStateException("synthesis run vanished mid-batch: " + runId));
         DiagnosticRunBatch batch = batchRepository.findById(batchId)
                 .orElseThrow(() -> new IllegalStateException("batch ledger row vanished mid-batch: " + batchId));
+        if (!DiagnosticRunBatch.STATUS_RUNNING.equals(batch.getStatus())
+                || batch.getAttempt() != claimedAttempt) {
+            throw new StaleBatchClaimException(batchId, "batch " + batchId
+                    + " is no longer held by this executor's claim (row status="
+                    + batch.getStatus() + ", attempt=" + batch.getAttempt()
+                    + ", commit presented attempt=" + claimedAttempt
+                    + ") — refusing the commit; the batch was re-claimed or"
+                    + " terminally resolved elsewhere (spec §4.3/§4.4 stale-claim rule)");
+        }
 
         Map<CandidateFilter.Outcome, Integer> histogram =
                 new EnumMap<>(CandidateFilter.Outcome.class);

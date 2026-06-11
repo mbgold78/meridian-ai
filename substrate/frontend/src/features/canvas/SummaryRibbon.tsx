@@ -15,10 +15,21 @@ export interface RibbonStats {
   annualSavings: string;
 }
 
+// Target/Waves provenance honesty (S14 residual): retirement waves come from
+// the TODO(S14) demo heuristics (retirementHeuristics.ts), NOT from plan
+// data — the subtitle says so wherever those lenses render over real
+// workspace systems (a live engagement must never read fabricated waves as
+// plan facts).
 const LENS_COPY: Record<Lens, { subtitle: string }> = {
   today: { subtitle: 'Click a node to inspect. Red dot = open risks.' },
-  target: { subtitle: 'Faded systems retire. Live ones absorb their work.' },
-  waves: { subtitle: 'Drag the timeline — watch the map evolve month by month.' },
+  target: {
+    subtitle:
+      'Faded systems retire. Live ones absorb their work. (Illustrative retirement heuristics — plan engine pending.)',
+  },
+  waves: {
+    subtitle:
+      'Drag the timeline — watch the map evolve month by month. (Illustrative retirement heuristics — plan engine pending.)',
+  },
 };
 
 export function SummaryRibbon({
@@ -61,6 +72,9 @@ export function SummaryRibbon({
           <Stat
             value={stats.annualSavings}
             label="annual save target"
+            // Derived from ReductionService's MARKED-FOR-REPLACEMENT POC
+            // dollar constants — an estimate, never a computed plan figure.
+            hint="heuristic estimate"
             accent="text-emerald-300"
           />
         </div>

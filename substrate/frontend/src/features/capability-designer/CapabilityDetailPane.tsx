@@ -118,7 +118,7 @@ function DisplayNameEditor({ capability, domainId }: { capability: Capability; d
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState(capability.displayName);
   const [error, setError] = useState<string | null>(null);
-  const mutation = usePatchCapability(capability.id, domainId, () => setEditing(false));
+  const mutation = usePatchCapability(capability.id, domainId, () => setEditing(false), setError);
 
   // Resync when a different capability becomes selected.
   useEffect(() => {
@@ -195,10 +195,12 @@ function DisplayNameEditor({ capability, domainId }: { capability: Capability; d
 function DescriptionEditor({ capability, domainId }: { capability: Capability; domainId: string }) {
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState(capability.description ?? '');
-  const mutation = usePatchCapability(capability.id, domainId, () => setEditing(false));
+  const [error, setError] = useState<string | null>(null);
+  const mutation = usePatchCapability(capability.id, domainId, () => setEditing(false), setError);
 
   useEffect(() => {
     setValue(capability.description ?? '');
+    setError(null);
     setEditing(false);
   }, [capability.id, capability.description]);
 
@@ -240,6 +242,7 @@ function DescriptionEditor({ capability, domainId }: { capability: Capability; d
               <X size={16} className="mr-1" /> Cancel
             </Button>
           </div>
+          {error && <p className="text-sm text-destructive" role="alert">{error}</p>}
         </div>
       ) : (
         <div className="group flex items-start gap-2">
@@ -265,13 +268,30 @@ function DescriptionEditor({ capability, domainId }: { capability: Capability; d
   );
 }
 
-function usePatchCapability(id: string, domainId: string, onSuccess: () => void) {
+function usePatchCapability(
+  id: string,
+  domainId: string,
+  onSuccess: () => void,
+  onError?: (message: string) => void,
+) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: CapabilityUpdateRequest) => updateCapability(id, body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['capabilities', domainId] });
       onSuccess();
+    },
+    // 409-and-refresh discipline (cascades/agents/contracts shipping gate,
+    // retrofitted): a failed PATCH refetches server truth AND surfaces the
+    // failure — pre-fix the editor silently stayed open as if it landed.
+    onError: (err: unknown) => {
+      void qc.invalidateQueries({ queryKey: ['capabilities', domainId] });
+      const status = (err as { response?: { status?: number } } | null)?.response?.status;
+      onError?.(
+        status === 409
+          ? 'Edit conflicted with a concurrent change — values refreshed; please retry.'
+          : `Save failed${err instanceof Error && err.message ? ` (${err.message})` : ''}.`,
+      );
     },
   });
 }

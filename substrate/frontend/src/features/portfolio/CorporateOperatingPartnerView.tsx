@@ -221,6 +221,7 @@ export function CorporateOperatingPartnerView() {
         industryCount={industryCount}
         totalRevenueB={totalRevenueB}
         activePhaseCount={activePhaseCount}
+        statsSource={stripStats.source}
       />
 
       <div className="space-y-12 px-8 py-8">
@@ -256,6 +257,8 @@ interface PortfolioHeaderProps {
   industryCount: number;
   totalRevenueB: string;
   activePhaseCount: number;
+  /** Live-vs-fixture provenance (the stats swap switch) for the honesty chip. */
+  statsSource: 'live' | 'fixture';
 }
 
 function PortfolioHeader({
@@ -263,7 +266,13 @@ function PortfolioHeader({
   industryCount,
   totalRevenueB,
   activePhaseCount,
+  statsSource,
 }: PortfolioHeaderProps) {
+  // Provenance honesty (FIX-03): in live mode some figures on this screen
+  // ARE a live feed (cascade grid, coordination signals) while the roster,
+  // revenues and opportunities stay illustrative fixtures — the chip must
+  // never assert "not a live feed" over live engine data.
+  const live = statsSource === 'live';
   return (
     <header className="border-b border-border px-8 py-6">
       <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
@@ -277,11 +286,13 @@ function PortfolioHeader({
         </div>
         <div
           className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.05em] text-foreground-subtle"
-          aria-label="Illustrative demo data"
-          title="Every figure on this screen is illustrative fixture data for demonstration — not a live feed."
+          aria-label={live ? 'Demo workspace — mixed live and fixture data' : 'Illustrative demo data'}
+          title={live
+            ? 'Demo workspace: the cascade grid and coordination signals are live engine data; the subsidiary roster, revenues and opportunities are illustrative fixtures.'
+            : 'Every figure on this screen is illustrative fixture data for demonstration — not a live feed.'}
         >
           <span className="h-2 w-2 rounded-full bg-foreground-subtle/60" aria-hidden />
-          Illustrative demo data
+          {live ? 'Demo workspace · live + fixture data' : 'Illustrative demo data'}
         </div>
       </div>
     </header>
@@ -337,6 +348,12 @@ function CoordinationSignalStrip({
       : 'Subsidiaries 90+ days in current phase';
 
   return (
+    // data-stats-source scopes to the three §12 engine-computed cards; the
+    // cross-opportunity card is ALWAYS fixture-derived (the live DTO's
+    // crossPortfolioOpportunities is deliberately unmodeled and the fixture
+    // count stays coherent with the fixture Zone-4 grid below) and carries
+    // its own data-card-source so a machine reading the markers never takes
+    // a fixture figure as live evidence.
     <section
       aria-label="Coordination signals"
       data-stats-source={stats.source}
@@ -348,6 +365,7 @@ function CoordinationSignalStrip({
         value={crossOppCount}
         description="Capabilities being rebuilt across subs"
         active
+        provenance="fixture"
       />
       <CoordinationSignalCard
         icon={<Warning size={24} aria-hidden weight="regular" />}
@@ -355,6 +373,7 @@ function CoordinationSignalStrip({
         value={interventionValue}
         description={interventionDescription}
         active
+        provenance={stats.source}
       />
       <CoordinationSignalCard
         icon={<Clock size={24} aria-hidden weight="regular" />}
@@ -362,6 +381,7 @@ function CoordinationSignalStrip({
         value={stats.lifecycleStallCount}
         description={stallDescription}
         active
+        provenance={stats.source}
       />
       <CoordinationSignalCard
         icon={<Broadcast size={24} aria-hidden weight="regular" />}
@@ -369,6 +389,7 @@ function CoordinationSignalStrip({
         value={stats.coordinationPatternsThisWeek}
         description="Cross-sub patterns AI surfaced this week"
         active
+        provenance={stats.source}
       />
     </section>
   );
@@ -380,6 +401,8 @@ interface CoordinationSignalCardProps {
   value: number | string;
   description: string;
   active: boolean;
+  /** Per-card data provenance — rendered as data-card-source. */
+  provenance: 'live' | 'fixture';
 }
 
 function CoordinationSignalCard({
@@ -388,9 +411,10 @@ function CoordinationSignalCard({
   value,
   description,
   active,
+  provenance,
 }: CoordinationSignalCardProps) {
   return (
-    <article className="rounded-md border border-border bg-surface p-6">
+    <article data-card-source={provenance} className="rounded-md border border-border bg-surface p-6">
       <div className="flex items-start justify-between gap-3">
         <span className="text-[11px] font-medium uppercase tracking-[0.05em] text-foreground-muted">
           {label}

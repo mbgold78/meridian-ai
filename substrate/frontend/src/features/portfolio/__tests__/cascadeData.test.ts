@@ -5,6 +5,7 @@ import {
   adaptCascadeSummary,
   attentionOrder,
   fixtureToGridRow,
+  resolveBeaconCascadeDomainId,
 } from '@/features/portfolio/cascadeData';
 import type { CascadeGridRow } from '@/features/portfolio/cascadeData';
 import type { CascadeDetailDto, CascadeLevelDto, CascadeSummaryDto } from '@/api/endpoints';
@@ -190,5 +191,40 @@ describe('attentionOrder (spec §11 item 4)', () => {
     const snapshot = input.map((r) => r.id);
     attentionOrder(input);
     expect(input.map((r) => r.id)).toEqual(snapshot);
+  });
+});
+
+describe('resolveBeaconCascadeDomainId (FIX-05: pin > demo > workspace)', () => {
+  const domain = (id: string, demo: boolean) =>
+    ({
+      id,
+      name: id,
+      description: null,
+      taxonomyConfig: null,
+      regulatoryContext: null,
+      metadata: null,
+      demo,
+      createdAt: '2026-06-11T00:00:00Z',
+      updatedAt: '2026-06-11T00:00:00Z',
+    }) as import('@/shared/types/api').Domain;
+
+  it('an explicit deploy-time pin overrides the demo-first preference', () => {
+    const domains = [domain('demo-1', true), domain('real-1', false)];
+    expect(resolveBeaconCascadeDomainId(domains, 'real-1', 'real-1')).toBe('real-1');
+  });
+
+  it('without a pin, the demo-seeded domain wins (demo coherence, spec §11.4)', () => {
+    const domains = [domain('real-1', false), domain('demo-1', true)];
+    expect(resolveBeaconCascadeDomainId(domains, null, 'real-1')).toBe('demo-1');
+  });
+
+  it('a pin that matches no fetched domain falls through to demo-then-workspace', () => {
+    const domains = [domain('demo-1', true)];
+    expect(resolveBeaconCascadeDomainId(domains, 'missing', 'demo-1')).toBe('demo-1');
+  });
+
+  it('no demo domain: the workspace-resolved domain binds', () => {
+    const domains = [domain('real-1', false)];
+    expect(resolveBeaconCascadeDomainId(domains, null, 'real-1')).toBe('real-1');
   });
 });

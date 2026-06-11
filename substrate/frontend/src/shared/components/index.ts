@@ -9,3 +9,4 @@ export { LoadingSpinner } from './LoadingSpinner';
 export { ErrorBanner } from './ErrorBanner';
 export { PageHeader } from './PageHeader';
 export { CanvasLayout } from './CanvasLayout';
+export { NotFound } from './NotFound';

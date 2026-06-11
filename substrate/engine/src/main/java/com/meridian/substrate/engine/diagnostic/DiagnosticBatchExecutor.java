@@ -5,6 +5,7 @@ import com.meridian.substrate.common.domain.DiagnosticRunBatch;
 import com.meridian.substrate.common.domain.SynthesisRun;
 import com.meridian.substrate.common.repo.DiagnosticRunBatchRepository;
 import com.meridian.substrate.engine.diagnostic.exception.DispatchFallbackException;
+import com.meridian.substrate.engine.diagnostic.exception.StaleBatchClaimException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -31,9 +32,13 @@ import java.util.UUID;
  *       {@link FindingCommitService#commitBatch} (findings + ledger + run
  *       counters). A crash between 2 and 3 leaves RUNNING with a stale
  *       {@code claimed_at}; resume treats stale RUNNING as FAILED and
- *       re-executes — duplicates are impossible because a failed batch
- *       committed nothing. No cross-LLM-run semantic dedupe is attempted; the
- *       tx boundary is the dedupe.</li>
+ *       re-executes — a TRUE crash committed nothing, and a slow-but-alive
+ *       executor whose claim was declared stale is refused at commit time by
+ *       the claim fence (commit/fail/skip all re-validate
+ *       {@code status=RUNNING ∧ attempt=claimed attempt} — a re-claimed batch
+ *       can neither double-commit nor be stomped back to FAILED). No
+ *       cross-LLM-run semantic dedupe is attempted; the tx boundary plus the
+ *       claim fence is the dedupe.</li>
  * </ol>
  *
  * <p>Emits one {@code DIAG_EVENT} line per batch outcome (spec §10.3 — the
@@ -121,14 +126,23 @@ public class DiagnosticBatchExecutor {
         }
 
         try {
-            // Step 3 — the ONE commit tx (governed; spec §4.3).
+            // Step 3 — the ONE commit tx (governed; spec §4.3), fenced on the
+            // claim that produced this generation: a stale executor whose
+            // batch was re-claimed by resume must not double-commit.
             FindingCommitService.BatchCommitResult result =
-                    commitService.commitBatch(run.getId(), batchId, generation);
+                    commitService.commitBatch(run.getId(), batchId, claimed.getAttempt(), generation);
             log.info("DIAG_EVENT kind=batch_completed runId={} batch={}/{} scope={} returned={} filtered={} committed={}",
                     run.getId(), claimed.getBatchNo(), totalBatches, claimed.getScope(),
                     result.candidatesReturned(), result.candidatesFiltered(),
                     result.findingsCommitted());
             return BatchOutcome.COMPLETED;
+        } catch (StaleBatchClaimException staleClaim) {
+            // Another claimant owns the row now — refuse AND leave the row
+            // untouched (flipping it to FAILED would stomp the new claim).
+            log.warn("DIAG_EVENT kind=batch_commit_refused_stale_claim runId={} batch={}/{} attempt={} detail='{}'",
+                    run.getId(), claimed.getBatchNo(), totalBatches, claimed.getAttempt(),
+                    staleClaim.getMessage());
+            return BatchOutcome.SKIPPED;
         } catch (RuntimeException commitFailure) {
             // The commit tx rolled back atomically — zero findings persisted.
             return fail(run, claimed, totalBatches,
@@ -191,6 +205,14 @@ public class DiagnosticBatchExecutor {
                                     int totalBatches, DispatchFallbackException fallback) {
         transactionTemplate.executeWithoutResult(tx -> {
             DiagnosticRunBatch row = batchRepository.findById(batch.getId()).orElseThrow();
+            if (!DiagnosticRunBatch.STATUS_RUNNING.equals(row.getStatus())
+                    || row.getAttempt() != batch.getAttempt()) {
+                // Claim fence (see fail()): never stomp a re-claimed row.
+                log.warn("DIAG_EVENT kind=batch_skip_refused_stale_claim runId={} batch={} attempt={} rowStatus={} rowAttempt={}",
+                        run.getId(), row.getBatchNo(), batch.getAttempt(),
+                        row.getStatus(), row.getAttempt());
+                return;
+            }
             row.setStatus(DiagnosticRunBatch.STATUS_SKIPPED_BUDGET);
             row.setError(null);
             row.setFinishedAt(Instant.now(clock));
@@ -206,6 +228,15 @@ public class DiagnosticBatchExecutor {
                               String error) {
         transactionTemplate.executeWithoutResult(tx -> {
             DiagnosticRunBatch row = batchRepository.findById(batch.getId()).orElseThrow();
+            if (!DiagnosticRunBatch.STATUS_RUNNING.equals(row.getStatus())
+                    || row.getAttempt() != batch.getAttempt()) {
+                // Same fence as the commit: the row was re-claimed/resolved by
+                // another executor — flipping it to FAILED would stomp them.
+                log.warn("DIAG_EVENT kind=batch_fail_refused_stale_claim runId={} batch={} attempt={} rowStatus={} rowAttempt={}",
+                        run.getId(), row.getBatchNo(), batch.getAttempt(),
+                        row.getStatus(), row.getAttempt());
+                return;
+            }
             row.setStatus(DiagnosticRunBatch.STATUS_FAILED);
             row.setError(error);
             row.setFinishedAt(Instant.now(clock));

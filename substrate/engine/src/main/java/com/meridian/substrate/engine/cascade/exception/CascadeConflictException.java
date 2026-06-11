@@ -24,7 +24,19 @@ public class CascadeConflictException extends RuntimeException {
         /** State-machine guard violation (§5.2/§5.3) incl. payload conditionals I4. */
         CASCADE_ILLEGAL_TRANSITION,
         /** Terminal states are absorbing — any further action conflicts (§5.2). */
-        CASCADE_TERMINAL
+        CASCADE_TERMINAL,
+        /**
+         * The idempotency key was already spent on a DIFFERENT verb/depth of
+         * this cascade. Replaying the original 200 here would silently drop
+         * the new command while reporting success (e.g. a DECLINE masked as
+         * a CASCADE acknowledgment — losing a decline violates ADR-001
+         * non-negotiable #1); the diagnostic engine's
+         * {@code CURATION_CONFLICT} is the established cross-engine idiom for
+         * the same contradiction. Recorded improve-as-you-go deviation:
+         * cascade.md §5.5 literally reads "hit → return the original result"
+         * with no verb pin — flagged for spec ratification.
+         */
+        CASCADE_IDEMPOTENCY_REUSE
     }
 
     private final Code code;

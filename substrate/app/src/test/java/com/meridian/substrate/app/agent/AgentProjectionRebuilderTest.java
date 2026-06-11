@@ -40,6 +40,9 @@ class AgentProjectionRebuilderTest extends AgentVerbTestSupport {
     @Autowired
     AgentProjectionRebuilder rebuilder;
 
+    @Autowired
+    com.meridian.substrate.common.repo.AgentSightingRepository sightingRepository;
+
     @Test
     void rebuildReproducesTheProjectionsFieldEqualAfterAWipe() throws Exception {
         UUID domainId = UUID.randomUUID();
@@ -106,6 +109,48 @@ class AgentProjectionRebuilderTest extends AgentVerbTestSupport {
                         .header("X-Persona-Label", OPERATOR))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.eventSeq", is(2)));
+    }
+
+    @Test
+    void equalInstantSightings_rebuildKeepsTheFirstRecordedChannel() throws Exception {
+        // Ties are guaranteed under the demo fixed clock (every sighting in a
+        // session stamps the identical instant). The live rule
+        // (AgentLivenessService.recordSighting) only overwrites on a
+        // STRICTLY-later sighting, so the FIRST recorded channel wins a tie —
+        // the rebuild must derive the same winner deterministically, never an
+        // arbitrary DB-returned tied row (§16.2 #7 rebuild-equality).
+        AgentRegistration reg = deploy(UUID.randomUUID(), "a-noshow");
+        Instant tick = Instant.parse("2026-04-26T12:00:00Z");
+
+        // saveAndFlush + a real-time gap: @CreationTimestamp is generated at
+        // INSERT execution, so without the flush both rows would stamp the
+        // same instant at the deferred batch flush and the recorded order
+        // (what the tie-break recovers) would be lost.
+        com.meridian.substrate.common.domain.AgentSighting first =
+                new com.meridian.substrate.common.domain.AgentSighting();
+        first.setAgentRegistrationId(reg.getId());
+        first.setSeenAt(tick);
+        first.setChannel(AgentSightingChannel.GATEWAY_ACTION);
+        first.setBucketKey("tie-bucket-gateway");
+        sightingRepository.saveAndFlush(first);
+        Thread.sleep(5);
+        com.meridian.substrate.common.domain.AgentSighting second =
+                new com.meridian.substrate.common.domain.AgentSighting();
+        second.setAgentRegistrationId(reg.getId());
+        second.setSeenAt(tick);
+        second.setChannel(AgentSightingChannel.METRIC_REPORT);
+        second.setBucketKey("tie-bucket-metric");
+        sightingRepository.saveAndFlush(second);
+
+        // What the live projection holds after those two sightings:
+        AgentRegistration row = registrations.findById(reg.getId()).orElseThrow();
+        row.setLastSeenAt(tick);
+        row.setLastSeenVia(AgentSightingChannel.GATEWAY_ACTION);
+        registrations.save(row);
+
+        AgentRegistration rebuilt = rebuilder.rebuild(reg.getId());
+        assertThat(rebuilt.getLastSeenAt()).isEqualTo(tick);
+        assertThat(rebuilt.getLastSeenVia()).isEqualTo(AgentSightingChannel.GATEWAY_ACTION);
     }
 
     @Test

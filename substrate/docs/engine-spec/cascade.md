@@ -369,7 +369,7 @@ Read endpoints ship FIRST (§12) and double as the read-only surface orchestrato
   "overdue": false, "levelCount": 3, "frontierDepth": 2, "frontierState": "declined",
   "frontierOwnerLabel": "Curasync HIM Director", "lastActivityAt": "2026-04-22T00:00:00Z",
   "affectedDomainId": "…|null", "affectedDomainName": "Curasync Clinical Systems|null",
-  "cascadeGroupId": null, "predecessorCascadeId": null, "chainSeq": 4 }
+  "cascadeGroupId": null, "predecessorCascadeId": null, "chainSeq": 3 }
 
 // CascadeDetail = CascadeSummary fields +
 { "levels": [   // ordered by depth asc — 1:1 with the Beacon CascadeLevel view type
@@ -516,7 +516,7 @@ User-runnable acceptance (per the standing acceptance rule — no report-only co
 gradlew :app:bootRun --args='--spring.profiles.active=dev --substrate.demo.seed=true'
 curl -s localhost:8080/api/v1/cascades?domainId=<demo-domain-id>
 # → 3 cascades; c-vendor-cost attentionSignal=decline-pending; other two escalating
-curl -s localhost:8080/api/v1/cascades/<c-vendor-cost-id>/actions   # → 4 actions, chain_seq 1..4
+curl -s localhost:8080/api/v1/cascades/<c-vendor-cost-id>/actions   # → 3 actions, chain_seq 1..3
 ```
 
 Test plan (H2 fast lane for units; **Testcontainers-Postgres is the acceptance gate — H2-green never is; this dev machine cannot run Docker, CI runs the gate**):
@@ -550,3 +550,9 @@ Test plan (H2 fast lane for units; **Testcontainers-Postgres is the acceptance g
 10. **Decision-log attestation** — `CascadeAttestationHook` seam + reserved config flag; digest-anchoring into `engine.decision` NOT implemented in Phase 2 (ADR D15).
 11. **Routing validation against the org chart** — `OrganizationMember.reportsTo` is a name string, not an FK; mis-routing is silently legitimate in v1 (named risk, not an invariant).
 12. **Monitor/Automate phase-entry interplay** — cascade activity as lifecycle-phase entry criteria is UNKNOWN ([LIFECYCLE-MACHINE]); no coupling encoded.
+
+---
+
+## Changelog
+
+- 2026-06-11: §12/§6.1 corrected to match binding §11.4 — spec-text drift found at implementation. The c-vendor-cost action stream is 3 actions (ISSUE → L1 CASCADE → L2 DECLINE), chain_seq 1..3; the §12 acceptance line previously said "4 actions, chain_seq 1..4" and the §6.1 `CascadeSummary` sample showed `"chainSeq": 4`. The shipped engine serves 1..3 (live-verified by the Phase 2 doctor). §11.4 was and remains the binding stream; no engine change.

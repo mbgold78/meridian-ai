@@ -108,7 +108,7 @@ class PostgresContractPersistenceIT {
 
         assertThat(history)
                 .extracting(row -> String.valueOf(row.get("version")))
-                .contains("5", "5.1");
+                .contains("5", "5.1", "5.2");
         assertThat(history)
                 .allSatisfy(row -> assertThat(row.get("success"))
                         .as("migration V%s succeeded", row.get("version"))
@@ -120,6 +120,73 @@ class PostgresContractPersistenceIT {
         assertThat(indexCount)
                 .as("V5_1 open-breach partial unique index present on contract_breaches")
                 .isEqualTo(1);
+
+        for (String trigger : List.of("trg_ce_append_only", "trg_ced_append_only",
+                "trg_cmr_append_only", "trg_cpr_append_only")) {
+            Integer triggerCount = jdbcTemplate.queryForObject(
+                    "SELECT COUNT(*) FROM pg_trigger WHERE tgname = ?", Integer.class, trigger);
+            assertThat(triggerCount)
+                    .as("V5_2 append-only trigger %s present", trigger)
+                    .isEqualTo(1);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // 1b. Append-only triggers (V5_2, the V4_1/V6_1/V7_1 cross-engine
+    //     symmetry backfill): direct JDBC UPDATE/DELETE raises on the
+    //     contract audit tables — ArchUnit pins the repo surfaces, but only
+    //     the DB backstop catches dirty-checking flushes and ops tamper.
+    // -----------------------------------------------------------------------
+
+    @Test
+    void appendOnlyTriggersRejectUpdateAndDeleteOnContractAuditTables() {
+        UUID domainId = UUID.randomUUID();
+        UUID contractId = UUID.randomUUID();
+        insertContractRow(domainId, contractId, "append-only-" + UUID.randomUUID());
+
+        UUID eventId = UUID.randomUUID();
+        jdbcTemplate.update("""
+                INSERT INTO contract_events (id, created_at, created_by, version, contract_id,
+                                             event_type, actor_type, actor_id, occurred_at)
+                VALUES (?, now(), 'it', 0, ?, 'CONTRACT_CREATED', 'HUMAN', 'it-actor', now())
+                """, eventId, contractId);
+
+        assertThatThrownBy(() -> jdbcTemplate.update(
+                "UPDATE contract_events SET actor_id = 'tampered' WHERE id = ?", eventId))
+                .as("UPDATE on contract_events raises from trg_ce_append_only")
+                .isInstanceOf(DataAccessException.class)
+                .hasMessageContaining("append-only");
+        assertThatThrownBy(() -> jdbcTemplate.update(
+                "DELETE FROM contract_events WHERE id = ?", eventId))
+                .as("DELETE on contract_events raises from trg_ce_append_only")
+                .isInstanceOf(DataAccessException.class)
+                .hasMessageContaining("append-only");
+
+        UUID decisionId = UUID.randomUUID();
+        jdbcTemplate.update("""
+                INSERT INTO contract_enforcement_decisions (id, created_at, created_by, version,
+                        domain_id, action_type, actor_type, actor_id, decision, mode, decided_at)
+                VALUES (?, now(), 'it', 0, ?, 'contract.attest_commitment', 'AGENT', 'it-agent',
+                        'ALLOW', 'shadow', now())
+                """, decisionId, domainId);
+
+        assertThatThrownBy(() -> jdbcTemplate.update(
+                "UPDATE contract_enforcement_decisions SET decision = 'DENY' WHERE id = ?",
+                decisionId))
+                .as("UPDATE on contract_enforcement_decisions raises from trg_ced_append_only")
+                .isInstanceOf(DataAccessException.class)
+                .hasMessageContaining("append-only");
+        assertThatThrownBy(() -> jdbcTemplate.update(
+                "DELETE FROM contract_enforcement_decisions WHERE id = ?", decisionId))
+                .as("DELETE on contract_enforcement_decisions raises from trg_ced_append_only")
+                .isInstanceOf(DataAccessException.class)
+                .hasMessageContaining("append-only");
+
+        Integer survivors = jdbcTemplate.queryForObject(
+                "SELECT (SELECT COUNT(*) FROM contract_events WHERE id = ?)"
+                        + " + (SELECT COUNT(*) FROM contract_enforcement_decisions WHERE id = ?)",
+                Integer.class, eventId, decisionId);
+        assertThat(survivors).as("audit rows survive the rejected tamper attempts").isEqualTo(2);
     }
 
     // -----------------------------------------------------------------------

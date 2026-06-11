@@ -222,17 +222,78 @@ public class DecisionLogService {
     }
 
     /**
-     * Retrieve the full decision log for a domain, ordered chronologically by creation time.
+     * Retrieve the full decision log for a domain in <b>chain-linkage order</b>
+     * (append order): the walk starts at the GENESIS-rooted decision and
+     * follows {@code previousHash → currentHash} linkage. Rows the linkage
+     * walk cannot reach (forks, tampered rows, orphans) are appended after the
+     * reachable chain in a deterministic {@code (createdAt, id)} order so
+     * {@link #verifyChain(UUID)} reports them as broken at a stable position.
+     *
+     * <p>Why not {@code ORDER BY created_at}: {@code createdAt} is the JVM
+     * wall clock ({@code @CreationTimestamp}), which is non-monotonic (NTP
+     * step-back, VM resume) and carries no tie-breaker — a clock step-back
+     * between appends would make timestamp order disagree with linkage order,
+     * forking the chain on the NEXT append and permanently false-breaking
+     * verification on an INTACT chain. Linkage IS the chain's own order; the
+     * timestamp is display metadata only.
      *
      * @param domainId the domain to query
-     * @return all decisions in creation order
+     * @return all decisions in chain-linkage (append) order
      */
     @Transactional(readOnly = true)
     public List<DesignDecision> getDecisionLog(UUID domainId) {
-        List<DesignDecision> decisions = designDecisionRepository.findByDomainId(domainId);
-        decisions.sort(Comparator.comparing(
-                d -> d.getCreatedAt() != null ? d.getCreatedAt() : java.time.Instant.EPOCH));
-        return decisions;
+        return chainOrder(designDecisionRepository.findByDomainId(domainId));
+    }
+
+    /**
+     * Orders rows by hash linkage from GENESIS, with a deterministic
+     * {@code (createdAt, id)} base order used (a) to break ties when more
+     * than one row claims the same {@code previousHash} (a fork — the
+     * stragglers land after the walked chain and verification flags them)
+     * and (b) to order unreachable rows at the tail.
+     */
+    private static List<DesignDecision> chainOrder(List<DesignDecision> rows) {
+        List<DesignDecision> base = new ArrayList<>(rows);
+        base.sort(Comparator
+                .comparing((DesignDecision d) ->
+                        d.getCreatedAt() != null ? d.getCreatedAt() : java.time.Instant.EPOCH)
+                .thenComparing(d -> d.getId() != null ? d.getId().toString() : ""));
+
+        Map<String, List<DesignDecision>> byPreviousHash = new HashMap<>();
+        for (DesignDecision row : base) {
+            String prev = row.getPreviousHash() != null ? row.getPreviousHash() : GENESIS_HASH;
+            byPreviousHash.computeIfAbsent(prev, k -> new ArrayList<>()).add(row);
+        }
+
+        List<DesignDecision> ordered = new ArrayList<>(base.size());
+        Set<DesignDecision> visited = java.util.Collections.newSetFromMap(new IdentityHashMap<>());
+        String expected = GENESIS_HASH;
+        while (ordered.size() < base.size()) {
+            List<DesignDecision> candidates = byPreviousHash.getOrDefault(expected, List.of());
+            DesignDecision next = null;
+            for (DesignDecision candidate : candidates) {
+                if (!visited.contains(candidate)) {
+                    next = candidate;            // first in base order — deterministic
+                    break;
+                }
+            }
+            if (next == null || next.getCurrentHash() == null) {
+                if (next != null) {
+                    ordered.add(next);
+                    visited.add(next);
+                }
+                break;                           // chain ends (or a hash-less row terminates it)
+            }
+            ordered.add(next);
+            visited.add(next);
+            expected = next.getCurrentHash();
+        }
+        for (DesignDecision row : base) {        // forks / orphans / tampered tails
+            if (!visited.contains(row)) {
+                ordered.add(row);
+            }
+        }
+        return ordered;
     }
 
     /**

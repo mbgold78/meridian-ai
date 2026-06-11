@@ -220,14 +220,24 @@ public class AgentProjectionRebuilder {
 
     // ------------------------------------------------------------- liveness (I7)
 
-    /** Liveness re-derives from sightings ONLY — never events, never row recency. */
+    /**
+     * Liveness re-derives from sightings ONLY — never events, never row
+     * recency. Tie-break discipline: the deterministic
+     * {@code seenAt DESC, createdAt ASC, id ASC} variants mirror the live
+     * rule ({@code recordSighting} overwrites only on STRICTLY-later, so the
+     * FIRST recorded channel wins an equal-instant tie) — equal-instant
+     * sightings are guaranteed under the demo fixed clock, and an arbitrary
+     * tied row would flip {@code last_seen_via} live-vs-rebuild (§16.2 #7
+     * rebuild-equality).
+     */
     private void rebuildLivenessFromSightings(AgentRegistration reg, List<AgentStatusEvent> events) {
         AgentSighting latest = sightingRepository
-                .findFirstByAgentRegistrationIdOrderBySeenAtDesc(reg.getId()).orElse(null);
+                .findFirstByAgentRegistrationIdOrderBySeenAtDescCreatedAtAscIdAsc(reg.getId())
+                .orElse(null);
         reg.setLastSeenAt(latest == null ? null : latest.getSeenAt());
         reg.setLastSeenVia(latest == null ? null : latest.getChannel());
         AgentSighting attested = sightingRepository
-                .findFirstByAgentRegistrationIdAndChannelOrderBySeenAtDesc(
+                .findFirstByAgentRegistrationIdAndChannelOrderBySeenAtDescCreatedAtAscIdAsc(
                         reg.getId(), AgentSightingChannel.ATTESTATION).orElse(null);
         reg.setLastAttestedAt(attested == null ? null : attested.getSeenAt());
         if (attested == null) {

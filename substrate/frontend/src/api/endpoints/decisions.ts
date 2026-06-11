@@ -13,7 +13,17 @@ export async function createDecision(decision: Partial<DesignDecision>): Promise
   return data;
 }
 
-export async function analyzeImpact(request: { description: string; domainId: string }): Promise<ApiResponse<ImpactAnalysisResult>> {
+/**
+ * Wire contract = the backend `ImpactAnalysisRequest` record verbatim:
+ * {domainId, systemIds, consolidationDescription}. The pre-fix shape sent
+ * {description, domainId} — Jackson silently dropped the unknown key, left
+ * systemIds null, and every click 500'd on the service's first line.
+ */
+export async function analyzeImpact(request: {
+  domainId: string;
+  systemIds: string[];
+  consolidationDescription: string;
+}): Promise<ApiResponse<ImpactAnalysisResult>> {
   const { data } = await apiClient.post<ApiResponse<ImpactAnalysisResult>>('/design/impact-analysis', request);
   return data;
 }

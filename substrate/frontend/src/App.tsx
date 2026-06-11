@@ -1,6 +1,6 @@
 import { lazy, Suspense } from 'react';
 import { Navigate, useRoutes, type RouteObject } from 'react-router-dom';
-import { CanvasLayout, LoadingSpinner } from '@/shared/components';
+import { CanvasLayout, LoadingSpinner, NotFound } from '@/shared/components';
 import { PORTFOLIO_ROUTES } from '@/features/portfolio';
 
 // Heavy surfaces are lazy-loaded so the canvas (xyflow/d3/elk) and the
@@ -48,6 +48,9 @@ const APP_ROUTES: RouteObject[] = [
   },
   { path: '/designer/capabilities', element: <CapabilityDesigner /> },
   ...PORTFOLIO_ROUTES,
+  // Catch-all: SpaController forwards unknown paths to index.html, so an
+  // unmatched route would otherwise render a silent blank page.
+  { path: '*', element: <NotFound /> },
 ];
 
 function App() {

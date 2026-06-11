@@ -142,6 +142,46 @@ class DecisionLogServiceTest {
         assertThat(service.getChainHead(domainId)).isEqualTo(second.getCurrentHash());
     }
 
+    // ---------------------------------------------------------------------
+    // Linkage-derived ordering: head derivation and verification follow
+    // previousHash → currentHash linkage, never wall-clock createdAt (which
+    // is non-monotonic and tie-prone — NTP step-back, VM resume).
+    // ---------------------------------------------------------------------
+
+    @Test
+    void appendAfterClockStepBack_linksToTheLinkageHead_notTheTimestampMax() {
+        DesignDecision first = service.appendDecision(decision("first"));
+        DesignDecision second = service.appendDecision(decision("second"));
+        // Simulate a wall-clock step-back between appends: the TRUE head
+        // (second) carries an EARLIER createdAt than its predecessor.
+        first.setCreatedAt(java.time.Instant.parse("2026-06-10T10:00:00Z"));
+        second.setCreatedAt(java.time.Instant.parse("2026-06-10T09:00:00Z"));
+
+        DesignDecision third = service.appendDecision(decision("third"));
+
+        assertThat(third.getPreviousHash()).isEqualTo(second.getCurrentHash());
+        HashChainVerification result = service.verifyChain(domainId);
+        assertThat(result.valid()).isTrue();
+        assertThat(result.verifiedLinks()).isEqualTo(3);
+        assertThat(service.getChainHead(domainId)).isEqualTo(third.getCurrentHash());
+    }
+
+    @Test
+    void equalCreatedAtRows_inArbitraryDbReturnOrder_keepHeadAndVerificationStable() {
+        java.time.Instant tick = java.time.Instant.parse("2026-06-10T12:00:00Z");
+        service.appendDecision(decision("first"));
+        service.appendDecision(decision("second"));
+        DesignDecision third = service.appendDecision(decision("third"));
+        stored.forEach(d -> d.setCreatedAt(tick));        // all in the same timestamp tick
+        java.util.Collections.shuffle(stored, new java.util.Random(42)); // DB return order is unspecified
+
+        DesignDecision fourth = service.appendDecision(decision("fourth"));
+
+        assertThat(fourth.getPreviousHash()).isEqualTo(third.getCurrentHash());
+        assertThat(service.verifyChain(domainId).valid()).isTrue();
+        assertThat(service.getChainHead(domainId)).isEqualTo(fourth.getCurrentHash());
+    }
+
     @Test
     void hashExcludesVolatileFields_currentHashNotInOwnHashInput() {
         DesignDecision saved = service.appendDecision(decision("first"));

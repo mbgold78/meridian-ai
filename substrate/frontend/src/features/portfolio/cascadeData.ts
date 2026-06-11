@@ -12,7 +12,8 @@ import type {
   CascadeSummaryDto,
 } from '@/api/endpoints';
 import { useApiQuery } from '@/shared/hooks/useApi';
-import { useWorkspace } from '@/shared/hooks/useWorkspace';
+import { readPinnedDomainId, useWorkspace } from '@/shared/hooks/useWorkspace';
+import type { Domain } from '@/shared/types/api';
 import { BEACON_CASCADES, getCascade as getFixtureCascade } from '@/fixtures/beacon';
 import type { BeaconCascade, CascadeLevel } from '@/fixtures/beacon';
 
@@ -173,17 +174,41 @@ export interface BeaconCascadesResult {
 }
 
 /**
+ * Pure domain-binding policy for the Beacon cascade grid — exported for unit
+ * testing.
+ *
+ * Order: (1) an explicit deploy-time pin (VITE_SUBSTRATE_DOMAIN_ID) that
+ * resolves to a fetched domain ALWAYS wins — the pin's documented purpose is
+ * defending against wrong-domain binding, and the demo-first preference must
+ * never silently override it (e.g. a shared staging DB where demo seeding
+ * was once enabled next to a real engagement domain); (2) otherwise the
+ * demo-seeded domain when one exists — `CascadeDemoSeeder` seeds the isDemo
+ * domain only (spec §11.4), keeping the demo dashboard coherent; (3) the
+ * workspace-resolved domain.
+ */
+export function resolveBeaconCascadeDomainId(
+  domains: Domain[],
+  pinnedDomainId: string | null,
+  workspaceDomainId: string | null,
+): string | null {
+  if (pinnedDomainId && domains.some((d) => d.id === pinnedDomainId)) {
+    return pinnedDomainId;
+  }
+  return domains.find((d) => d.demo)?.id ?? workspaceDomainId;
+}
+
+/**
  * Cascades for the Operating Partner grid (spec §11 `useCascades`).
  *
- * Domain binding: the Beacon dashboards bind to the demo-seeded domain when
- * one exists — `CascadeDemoSeeder` seeds the isDemo domain only (spec
- * §11.4) — otherwise the workspace-resolved domain. Until a domain id is
- * known (domains still loading, fetch failed, or empty database) the query
- * stays disabled and the fixture fallback renders.
+ * Domain binding: {@link resolveBeaconCascadeDomainId} — deploy-time pin
+ * first, then the demo-seeded domain, then the workspace resolution. Until a
+ * domain id is known (domains still loading, fetch failed, or empty
+ * database) the query stays disabled and the fixture fallback renders.
  */
 export function useBeaconCascades(): BeaconCascadesResult {
   const workspace = useWorkspace();
-  const domainId = workspace.domains.find((d) => d.demo)?.id ?? workspace.domainId;
+  const domainId = resolveBeaconCascadeDomainId(
+    workspace.domains, readPinnedDomainId(), workspace.domainId);
 
   const query = useApiQuery<CascadeSummaryDto[]>(
     ['cascades', 'list', domainId ?? 'unresolved'],

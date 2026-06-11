@@ -129,6 +129,44 @@ describe('AuthProvider — oidc mode', () => {
     expect(getAccessToken()).toBe('tok-dev-admin');
   });
 
+  it('restores the captured deep link (state.returnTo) after the redirect callback', async () => {
+    window.history.replaceState({}, '', '/?code=abc&state=xyz&session_state=s1');
+    const withReturnTo = {
+      ...DEV_ADMIN,
+      state: { returnTo: '/portfolio/cascade/abc-123?tab=chain' },
+    } as unknown as User;
+    const manager = fakeUserManager({
+      signinRedirectCallback: vi.fn(async () => withReturnTo),
+    });
+    render(
+      <AuthProvider config={OIDC_CONFIG} userManager={manager}>
+        <Probe />
+      </AuthProvider>,
+    );
+    await waitFor(() => expect(screen.getByTestId('status').textContent).toBe('authenticated'));
+    expect(window.location.pathname).toBe('/portfolio/cascade/abc-123');
+    expect(window.location.search).toBe('?tab=chain');
+  });
+
+  it('ignores a non-same-origin returnTo and falls back to URL cleaning', async () => {
+    window.history.replaceState({}, '', '/?code=abc&state=xyz');
+    const evil = {
+      ...DEV_ADMIN,
+      state: { returnTo: '//evil.example/phish' },
+    } as unknown as User;
+    const manager = fakeUserManager({
+      signinRedirectCallback: vi.fn(async () => evil),
+    });
+    render(
+      <AuthProvider config={OIDC_CONFIG} userManager={manager}>
+        <Probe />
+      </AuthProvider>,
+    );
+    await waitFor(() => expect(screen.getByTestId('status').textContent).toBe('authenticated'));
+    expect(window.location.pathname).toBe('/');
+    expect(window.location.search).toBe('');
+  });
+
   it('a backend 401 (notifyUnauthorized) triggers an interactive re-auth redirect', async () => {
     const manager = fakeUserManager({ getUser: vi.fn(async () => DEV_ADMIN) });
     render(

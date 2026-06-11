@@ -1,10 +1,14 @@
 package com.meridian.substrate.engine.agent;
 
 import com.meridian.substrate.common.domain.AgentRateCounter;
+import com.meridian.substrate.common.domain.ContractParty;
 import com.meridian.substrate.common.domain.enums.AgentOperationalMode;
 import com.meridian.substrate.common.repo.AgentRateCounterRepository;
+import com.meridian.substrate.common.repo.ContractBreachRepository;
+import com.meridian.substrate.common.repo.ContractCommitmentRepository;
 import com.meridian.substrate.common.repo.ContractPartyRepository;
 import com.meridian.substrate.engine.contract.ContractProperties;
+import com.meridian.substrate.engine.contract.gateway.ContractGovernedResolvers;
 import com.meridian.substrate.engine.contract.gateway.AgentRegistryGate;
 import com.meridian.substrate.engine.contract.gateway.ContractGateway;
 import com.meridian.substrate.engine.contract.gateway.EnforcementMode;
@@ -20,6 +24,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 
 /**
  * The real {@link AgentRegistryGate} (engine-spec agents.md §8; ADR-003 D7)
@@ -34,10 +39,21 @@ import java.util.Set;
  *       check ladder below;</li>
  *   <li><b>Contract-party carve-out</b>
  *       ({@code contract_parties.mcp_principal_id} match): party-scoped
- *       contract verbs allowed — a legitimate P19 counterparty system is
- *       never bricked; own-party authority stays the services' §5.5
- *       advisory check pre-Phase-5. Anything non-contract falls through to
- *       unregistered;</li>
+ *       contract verbs for the principal's OWN contract(s) allowed — a
+ *       legitimate P19 counterparty system is never bricked on the
+ *       contracts it is a party to. "Party-scoped" is enforced literally
+ *       per the ratified §8.2 step 2 / ADR-003 D7 step 2 text: the verb
+ *       must be in {@link #PARTY_SCOPED_CONTRACT_VERBS} AND the action's
+ *       target must resolve to a contract the principal is bound to
+ *       (CONTRACT target = the contract itself; COMMITMENT/BREACH targets
+ *       resolve through their {@code contract_id}). ANYTHING ELSE —
+ *       non-contract verbs, non-party-scoped contract verbs
+ *       (create/patch/waive), or a contract verb against a contract the
+ *       principal is NOT a party of — falls through to the unregistered
+ *       path (rowed flagged in shadow, denied in enforce), so a
+ *       cross-contract bypass is never silent. Which PARTY of the own
+ *       contract acted stays the services' §5.5 advisory check
+ *       pre-Phase-5;</li>
  *   <li><b>Unregistered:</b> governed writes are mode-asymmetric BY SPEC —
  *       shadow ⇒ ALLOW_WITH_FLAG({@code AGENT_UNREGISTERED}), enforce ⇒
  *       DENY; every touch is rowed ("unknown agent knocking" is surfaced,
@@ -86,8 +102,29 @@ public class AgentRegistryGateImpl implements AgentRegistryGate {
     /** §8.3 #4 default window when an ACTIONS_PER_WINDOW row omits one. */
     static final int DEFAULT_WINDOW_MINUTES = 60;
 
+    /**
+     * §8.2 step 2 "party-scoped contract verbs" — what a counterparty system
+     * bound via {@code contract_parties.mcp_principal_id} may do ON ITS OWN
+     * CONTRACT: report/attest/progress telemetry, respond, invoke a
+     * pre-agreed decline, acknowledge and remediate breaches. Deliberately
+     * EXCLUDED: {@code contract.create}/{@code contract.patch} (registry
+     * authorship is not counterparty business) and
+     * {@code contract.waive_breach} (the D16 hardcoded AGENT deny runs
+     * before this gate anyway).
+     */
+    static final Set<String> PARTY_SCOPED_CONTRACT_VERBS = Set.of(
+            GovernedActions.CONTRACT_REPORT_METRIC,
+            GovernedActions.CONTRACT_ATTEST_COMMITMENT,
+            GovernedActions.CONTRACT_RECORD_COMMITMENT_PROGRESS,
+            GovernedActions.CONTRACT_RESPOND,
+            GovernedActions.CONTRACT_INVOKE_DECLINE,
+            GovernedActions.CONTRACT_ACKNOWLEDGE_BREACH,
+            GovernedActions.CONTRACT_REMEDIATE_BREACH);
+
     private final AgentRegistryLookup registryLookup;
     private final ContractPartyRepository contractPartyRepository;
+    private final ContractCommitmentRepository contractCommitmentRepository;
+    private final ContractBreachRepository contractBreachRepository;
     private final AgentRateCounterRepository rateCounterRepository;
     private final AgentActionWindows actionWindows;
     private final AgentGatewaySignalService signalService;
@@ -96,6 +133,8 @@ public class AgentRegistryGateImpl implements AgentRegistryGate {
 
     public AgentRegistryGateImpl(AgentRegistryLookup registryLookup,
                                  ContractPartyRepository contractPartyRepository,
+                                 ContractCommitmentRepository contractCommitmentRepository,
+                                 ContractBreachRepository contractBreachRepository,
                                  AgentRateCounterRepository rateCounterRepository,
                                  AgentActionWindows actionWindows,
                                  AgentGatewaySignalService signalService,
@@ -103,6 +142,8 @@ public class AgentRegistryGateImpl implements AgentRegistryGate {
                                  Clock clock) {
         this.registryLookup = registryLookup;
         this.contractPartyRepository = contractPartyRepository;
+        this.contractCommitmentRepository = contractCommitmentRepository;
+        this.contractBreachRepository = contractBreachRepository;
         this.rateCounterRepository = rateCounterRepository;
         this.actionWindows = actionWindows;
         this.signalService = signalService;
@@ -141,15 +182,29 @@ public class AgentRegistryGateImpl implements AgentRegistryGate {
         if (registered.isPresent()) {
             return registeredPath(registered.get(), action);
         }
-        // §8.2 step 2 — P19 carve-out: never brick a legitimate counterparty.
-        if (action.actionType().startsWith("contract.")
-                && !contractPartyRepository.findByMcpPrincipalId(principalId).isEmpty()) {
-            return Verdict.Allow.clean();
+        // §8.2 step 2 — P19 carve-out, party-scoped LITERALLY ("party-scoped
+        // contract verbs for OWN party allowed; anything else -> UNREGISTERED
+        // path"): the verb must be in the party scope AND the action's target
+        // must resolve to a contract this principal is bound to. The pre-fix
+        // shape (any contract.* verb, any contract, Allow.clean) let a
+        // principal bound as a party on ONE contract act cleanly and
+        // UNROWED on EVERY contract — the cross-contract case now falls
+        // through to the unregistered path below, which rows every touch.
+        if (PARTY_SCOPED_CONTRACT_VERBS.contains(action.actionType())) {
+            List<ContractParty> bindings =
+                    contractPartyRepository.findByMcpPrincipalId(principalId);
+            if (!bindings.isEmpty()) {
+                UUID targetContractId = resolveTargetContractId(action);
+                if (targetContractId != null && bindings.stream()
+                        .anyMatch(p -> targetContractId.equals(p.getContractId()))) {
+                    return Verdict.Allow.clean();
+                }
+            }
         }
         // §8.2 step 3 — unregistered policy (mode-asymmetric by spec).
         String knock = "principal '" + principalId + "' has no agent registration"
-                + " (agent_registrations.mcp_principal_id) and no contract-party binding —"
-                + " unknown agent knocking (agents.md §8.2)";
+                + " (agent_registrations.mcp_principal_id) and no OWN-contract party binding"
+                + " for this action — unknown agent knocking (agents.md §8.2)";
         if (mode == EnforcementMode.ENFORCE) {
             return new Verdict.Deny(REASON_UNREGISTERED, knock);
         }
@@ -217,6 +272,41 @@ public class AgentRegistryGateImpl implements AgentRegistryGate {
                     + " open intervention(s) — proceeding flagged (agents.md §8.3 #5)"));
         }
         return Verdict.Allow.clean();
+    }
+
+    // ------------------------------------------------ §8.2 step 2 target scope
+
+    /**
+     * Resolves the contract a governed action targets, for own-contract
+     * party scoping: a {@code CONTRACT} target IS the contract; a
+     * {@code CONTRACT_COMMITMENT} / {@code CONTRACT_BREACH} target resolves
+     * through its {@code contract_id}. {@code null} when the action carries
+     * no resolvable contract target — the caller then falls through to the
+     * unregistered path (never a silent allow).
+     */
+    private UUID resolveTargetContractId(GovernedAction action) {
+        if (action.target() == null || action.target().entityId() == null) {
+            return null;
+        }
+        UUID entityId;
+        try {
+            entityId = UUID.fromString(action.target().entityId());
+        } catch (IllegalArgumentException notAUuid) {
+            return null;
+        }
+        String entityType = action.target().entityType();
+        if (ContractGovernedResolvers.TARGET_CONTRACT.equals(entityType)) {
+            return entityId;
+        }
+        if (ContractGovernedResolvers.TARGET_COMMITMENT.equals(entityType)) {
+            return contractCommitmentRepository.findById(entityId)
+                    .map(c -> c.getContractId()).orElse(null);
+        }
+        if (ContractGovernedResolvers.TARGET_BREACH.equals(entityType)) {
+            return contractBreachRepository.findById(entityId)
+                    .map(b -> b.getContractId()).orElse(null);
+        }
+        return null;
     }
 
     // -------------------------------------------------------------- counters

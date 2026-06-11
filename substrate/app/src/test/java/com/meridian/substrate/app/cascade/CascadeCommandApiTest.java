@@ -92,6 +92,37 @@ class CascadeCommandApiTest extends CascadeApiTestSupport {
                 .hasSize(2);
     }
 
+    @Test
+    void idempotencyKeyReusedOnADifferentVerbConflicts_neverSilentlyReplays() throws Exception {
+        UUID domainId = createDomain("Holding Co");
+        Cascade c = issue(openDraft(domainId, null, null), null, L1_OWNER, null);
+
+        String sharedKey = key();
+        String cascadeBody = json.writeValueAsString(Map.of(
+                "idempotencyKey", sharedKey,
+                "refinedCritique", "Refined for the HIM director",
+                "nextOwnerLabel", L2_OWNER));
+        mvc.perform(post("/api/v1/cascades/{id}/levels/{depth}/cascade", c.getId(), 1)
+                        .header("X-Persona-Label", L1_OWNER)
+                        .contentType(MediaType.APPLICATION_JSON).content(cascadeBody))
+                .andExpect(status().isOk());
+
+        // SAME key, DIFFERENT verb (a DECLINE): pre-fix this silently 200'd
+        // the original CASCADE result while the decline was never recorded —
+        // a dropped command masked as success. Now: 409 CASCADE_IDEMPOTENCY_REUSE.
+        String declineBody = json.writeValueAsString(Map.of(
+                "idempotencyKey", sharedKey,
+                "declineReasoning", "We disagree — capacity is committed this quarter"));
+        mvc.perform(post("/api/v1/cascades/{id}/levels/{depth}/decline", c.getId(), 2)
+                        .header("X-Persona-Label", L2_OWNER)
+                        .contentType(MediaType.APPLICATION_JSON).content(declineBody))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.errors[0].code", is("CASCADE_IDEMPOTENCY_REUSE")));
+        assertThat(actionRepository.findByCascadeIdOrderByChainSeqAsc(c.getId()))
+                .as("the contradicted command must append nothing")
+                .hasSize(2); // ISSUE + CASCADE only
+    }
+
     // --------------------------------------------------------- §12 #4 fencing
 
     @Test

@@ -165,16 +165,40 @@ class AgentGatewayResolutionTest extends AgentVerbTestSupport {
     void contractPartyPrincipal_allowedPartyScopedContractVerbs_unregisteredOtherwise() {
         UUID domainId = UUID.randomUUID();
         String principalId = "counterparty-system-" + UUID.randomUUID();
-        partyBoundTo(domainId, principalId);
+        UUID ownContractId = partyBoundTo(domainId, principalId);
         contractProperties.getEnforcement().setMode("enforce");
 
-        // party-scoped contract verb → allowed (P19 carve-out)
+        // party-scoped contract verb against the OWN contract → allowed
+        // (P19 carve-out; §8.2 step 2 "for OWN party")
         assertThat(evaluate(action(GovernedActions.CONTRACT_ATTEST_COMMITMENT,
-                principalId, domainId)))
+                principalId, domainId, contractTarget(ownContractId))))
                 .isInstanceOf(Decision.Allow.class);
 
         // anything non-contract falls through to the unregistered policy
         assertGateDenied(action(MUTATING_ACTION, principalId, domainId),
+                AgentRegistryGate.REASON_UNREGISTERED);
+    }
+
+    @Test
+    void contractPartyCarveOut_isOwnContractScoped_crossContractFallsToUnregistered() {
+        UUID domainId = UUID.randomUUID();
+        String principalId = "counterparty-system-" + UUID.randomUUID();
+        partyBoundTo(domainId, principalId);                  // bound to contract A …
+        UUID otherContractId = partyBoundTo(domainId,         // … contract B belongs to
+                "someone-else-" + UUID.randomUUID());         //     a DIFFERENT principal
+        contractProperties.getEnforcement().setMode("enforce");
+
+        // §8.2 step 2: "party-scoped contract verbs for OWN party allowed;
+        // anything else -> UNREGISTERED path". A binding on contract A must
+        // NOT unlock contract B — and the refusal is ROWED (the unregistered
+        // path rows every touch; the pre-fix clean allow was invisible).
+        assertGateDenied(action(GovernedActions.CONTRACT_ATTEST_COMMITMENT,
+                        principalId, domainId, contractTarget(otherContractId)),
+                AgentRegistryGate.REASON_UNREGISTERED);
+
+        // non-party-scoped contract verbs never ride the carve-out either
+        assertGateDenied(action(GovernedActions.CONTRACT_PATCH,
+                        principalId, domainId, contractTarget(otherContractId)),
                 AgentRegistryGate.REASON_UNREGISTERED);
     }
 
@@ -230,6 +254,18 @@ class AgentGatewayResolutionTest extends AgentVerbTestSupport {
         return new GovernedAction(actionType, Principal.agent(principalId), domainId, null, null);
     }
 
+    private static GovernedAction action(String actionType, String principalId, UUID domainId,
+                                         com.meridian.substrate.engine.contract.gateway.TargetRef target) {
+        return new GovernedAction(actionType, Principal.agent(principalId), domainId, target, null);
+    }
+
+    /** The resolver-vocabulary CONTRACT target (§4.3) the @Governed aspect would build. */
+    private static com.meridian.substrate.engine.contract.gateway.TargetRef contractTarget(UUID contractId) {
+        return new com.meridian.substrate.engine.contract.gateway.TargetRef(
+                com.meridian.substrate.engine.contract.gateway.ContractGovernedResolvers.TARGET_CONTRACT,
+                contractId.toString());
+    }
+
     private void bind(AgentRegistration reg, String principalId) throws Exception {
         ObjectNode body = verbBody();
         body.put("mcpPrincipalId", principalId);
@@ -265,8 +301,8 @@ class AgentGatewayResolutionTest extends AgentVerbTestSupport {
         return registrations.findByDomainIdAndAgentKey(domainId, agentKey).orElseThrow();
     }
 
-    /** Test-arranged party binding (the ContractsMcpWriteTest identity idiom). */
-    private void partyBoundTo(UUID domainId, String principalId) {
+    /** Test-arranged party binding (the ContractsMcpWriteTest identity idiom); returns the contract id. */
+    private UUID partyBoundTo(UUID domainId, String principalId) {
         Contract contract = new Contract();
         contract.setDomainId(domainId);
         contract.setContractKey("party-carveout-" + UUID.randomUUID());
@@ -284,5 +320,6 @@ class AgentGatewayResolutionTest extends AgentVerbTestSupport {
         party.setMcpPrincipalId(principalId);
         party.setSequenceOrder(1);
         parties.save(party);
+        return contract.getId();
     }
 }

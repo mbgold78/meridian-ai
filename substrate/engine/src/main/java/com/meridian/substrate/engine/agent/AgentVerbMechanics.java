@@ -54,12 +54,29 @@ final class AgentVerbMechanics {
                         "agent registration not found: " + id));
     }
 
-    /** Idempotent-replay lookup under the lock; a hit means "answer the original, append nothing". */
+    /**
+     * Idempotent-replay lookup under the lock; a same-verb hit means "answer
+     * the original, append nothing". A hit on a DIFFERENT verb is a
+     * contradiction and conflicts ({@code AGENT_IDEMPOTENCY_REUSE}) — the
+     * pre-fix {@code .filter(type)} treated it as a miss, so the verb
+     * proceeded to {@link #appendEvent} and died on {@code uq_ase_idem} at
+     * flush as a raw 500 (the CurationService {@code replayOf} idiom, applied
+     * here).
+     */
     static Optional<AgentStatusEvent> replay(AgentStatusEventRepository events,
                                              AgentRegistration reg, String idempotencyKey,
                                              AgentEventType type) {
-        return events.findByAgentRegistrationIdAndIdempotencyKey(reg.getId(), idempotencyKey)
-                .filter(e -> e.getEventType() == type);
+        Optional<AgentStatusEvent> hit =
+                events.findByAgentRegistrationIdAndIdempotencyKey(reg.getId(), idempotencyKey);
+        if (hit.isPresent() && hit.get().getEventType() != type) {
+            throw new AgentConflictException(AgentConflictException.Code.AGENT_IDEMPOTENCY_REUSE,
+                    null,
+                    "idempotency key '" + idempotencyKey + "' was already spent on "
+                            + hit.get().getEventType().wireValue() + " for agent '"
+                            + reg.getAgentKey() + "' — it cannot replay as "
+                            + type.wireValue() + "; mint a fresh key per command (spec §7.2)");
+        }
+        return hit;
     }
 
     /** Optional fencing token (cascade D8): stale ⇒ 409 with the current detail in {@code data}. */

@@ -56,10 +56,29 @@ public class DiagnosticEngineConfig {
         return new ExistenceGroundingVerifier(evidenceRepository);
     }
 
-    /** No-op attestation seam default (ADR-004 D12); a real hook bean replaces it. */
+    /**
+     * No-op attestation seam default (ADR-004 D12); a real hook bean replaces
+     * it.
+     *
+     * <p>This bean method only runs when NO real hook bean exists — exactly
+     * the condition under which
+     * {@code substrate.diagnostic.attest-to-decision-log} is INERT (the flag
+     * is a reserved extension point read by nothing; the property value
+     * cannot change which bean is wired). A true flag with the no-op hook
+     * would otherwise silently fake a tamper-evidence posture, so it WARNs
+     * loudly here (the DemoFixedClockConfig idiom).
+     */
     @Bean
     @ConditionalOnMissingBean(DiagnosticAttestationHook.class)
-    public DiagnosticAttestationHook diagnosticAttestationHook() {
+    public DiagnosticAttestationHook diagnosticAttestationHook(DiagnosticProperties properties) {
+        if (properties.isAttestToDecisionLog()) {
+            org.slf4j.LoggerFactory.getLogger(DiagnosticEngineConfig.class)
+                    .warn("substrate.diagnostic.attest-to-decision-log=true but NO"
+                            + " DiagnosticAttestationHook bean is present — the flag is INERT"
+                            + " (reserved extension point, ADR-004 D12): diagnostic curation is"
+                            + " NOT being anchored to the decision log. Remove the flag or"
+                            + " contribute a real hook bean.");
+        }
         return new NoopDiagnosticAttestationHook();
     }
 }

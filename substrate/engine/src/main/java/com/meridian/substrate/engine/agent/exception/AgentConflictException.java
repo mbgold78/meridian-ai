@@ -27,7 +27,17 @@ public class AgentConflictException extends RuntimeException {
         /** Second deploy on the same (domain, agent_key) — uq_agent_domain_key (§5.4). */
         AGENT_KEY_CONFLICT,
         /** Promote without an unconsumed APPROVED PROMOTION review (M4; ADR D10). */
-        PROMOTION_REVIEW_REQUIRED
+        PROMOTION_REVIEW_REQUIRED,
+        /**
+         * The idempotency key was already spent on a DIFFERENT verb of this
+         * registration. Without this guard the verb proceeded to append and
+         * hit {@code uq_ase_idem} at flush — a raw 500 instead of the §7.2
+         * conflict envelope; the diagnostic engine's {@code CURATION_CONFLICT}
+         * is the established cross-engine idiom for the same contradiction
+         * (cascade lands {@code CASCADE_IDEMPOTENCY_REUSE} in the same fix).
+         * Additive code — flagged for spec ratification.
+         */
+        AGENT_IDEMPOTENCY_REUSE
     }
 
     private final Code code;

@@ -25,6 +25,15 @@ public interface AgentSightingRepository extends JpaRepository<AgentSighting, UU
     Optional<AgentSighting> findFirstByAgentRegistrationIdAndChannelOrderBySeenAtDesc(
             UUID agentRegistrationId, AgentSightingChannel channel);
 
+    /**
+     * Rebuilder variant of the latest-ATTESTATION lookup with DETERMINISTIC
+     * tie-breaking ({@code seenAt DESC, createdAt ASC, id ASC}) — see
+     * {@link #findFirstByAgentRegistrationIdOrderBySeenAtDescCreatedAtAscIdAsc}
+     * for why the secondary keys match the live first-channel-wins rule.
+     */
+    Optional<AgentSighting> findFirstByAgentRegistrationIdAndChannelOrderBySeenAtDescCreatedAtAscIdAsc(
+            UUID agentRegistrationId, AgentSightingChannel channel);
+
     List<AgentSighting> findByAgentRegistrationIdOrderBySeenAtDesc(UUID agentRegistrationId);
 
     /** {@code GET /agents/{idOrKey}/sightings?since} lane (idx_as_agent_seen). */
@@ -33,6 +42,23 @@ public interface AgentSightingRepository extends JpaRepository<AgentSighting, UU
 
     /** Latest sighting — the first {@code recentActivity} derivation source (spec §7.3). */
     Optional<AgentSighting> findFirstByAgentRegistrationIdOrderBySeenAtDesc(UUID agentRegistrationId);
+
+    /**
+     * Rebuilder variant of the latest-sighting lookup with DETERMINISTIC
+     * tie-breaking: among rows tied at the max {@code seenAt}, the FIRST
+     * recorded one ({@code createdAt ASC}, then {@code id ASC}) wins —
+     * matching the live projection rule, where
+     * {@code AgentLivenessService.recordSighting} only overwrites
+     * {@code last_seen_via} on a STRICTLY-later sighting (first channel wins
+     * a tie). Ties are real, not theoretical: under the demo fixed clock
+     * (DemoFixedClockConfig pins the shared engine Clock) every sighting in a
+     * session stamps the identical instant, and the seenAt-only variant let
+     * the DB return an arbitrary tied row — a rebuild could flip
+     * {@code last_seen_via} against the live projection, false-failing the
+     * §16.2 #7 rebuild-equality contract.
+     */
+    Optional<AgentSighting> findFirstByAgentRegistrationIdOrderBySeenAtDescCreatedAtAscIdAsc(
+            UUID agentRegistrationId);
 
     /**
      * Latest sighting carrying a human-readable detail — the §7.3

@@ -131,7 +131,15 @@ function OidcAuthBoundary({ children, oidcConfig, injectedManager }: OidcAuthBou
         if (hasAuthResponseParams(window.location.search) && !callbackHandledRef.current) {
           callbackHandledRef.current = true; // StrictMode double-effect guard
           const fromCallback = await manager.signinRedirectCallback();
-          window.history.replaceState({}, document.title, urlWithoutAuthParams());
+          // Deep-link restoration: beginSignIn captured where the user was
+          // (state.returnTo) — land them back there, not on the redirect
+          // URI. Same-origin paths only (defense against a tampered state).
+          const returnTo = (fromCallback?.state as { returnTo?: string } | undefined)?.returnTo;
+          const safeReturnTo =
+            typeof returnTo === 'string' && returnTo.startsWith('/') && !returnTo.startsWith('//')
+              ? returnTo
+              : null;
+          window.history.replaceState({}, document.title, safeReturnTo ?? urlWithoutAuthParams());
           adoptUser(fromCallback);
           return;
         }

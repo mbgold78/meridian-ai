@@ -137,5 +137,14 @@ public class DesignController {
             UUID domainId,
             List<UUID> systemIds,
             String consolidationDescription
-    ) {}
+    ) {
+        public ImpactAnalysisRequest {
+            // Null tolerance: Jackson leaves an omitted array null, and
+            // ImpactAnalysisService dereferences systemIds on its first line
+            // — an omitted field must degrade to "no systems named", never a
+            // 500 (the pre-fix frontend sent a wrong-shaped body and every
+            // click NPE'd here).
+            systemIds = systemIds == null ? List.of() : systemIds;
+        }
+    }
 }

@@ -85,6 +85,26 @@ public class GlobalExceptionHandler {
         return buildErrorResponse(HttpStatus.CONFLICT, "CONFLICT", "Resource was modified by another request");
     }
 
+    /**
+     * Database constraint violation surfaced from a verb transaction — a
+     * CONFLICT, never a 5xx. This is the envelope for the check-then-insert
+     * race tails the services cannot pre-check away (e.g. two concurrent
+     * deploys racing {@code uq_agent_domain_key}, two contract creates racing
+     * {@code uq_contracts_domain_key}): the racing loser's constraint
+     * violation previously fell through to the 500 catch-all instead of the
+     * designed conflict family. Sequential duplicates keep their specific
+     * service-level envelopes (409 {@code AGENT_KEY_CONFLICT}, 400, …) —
+     * this handler only catches what slips past those checks at flush time.
+     */
+    @ExceptionHandler(org.springframework.dao.DataIntegrityViolationException.class)
+    public ResponseEntity<ApiResponse<Void>> handleDataIntegrity(
+            org.springframework.dao.DataIntegrityViolationException ex) {
+        log.warn("Data integrity conflict: {}", ex.getMessage());
+        return buildErrorResponse(HttpStatus.CONFLICT, "CONFLICT",
+                "Request conflicts with concurrently committed data (constraint violation)"
+                        + " — refresh and retry");
+    }
+
     @ExceptionHandler(LlmRefusalException.class)
     public ResponseEntity<ApiResponse<Void>> handleLlmRefusal(LlmRefusalException ex) {
         log.warn("LLM refusal: {}", ex.getMessage());

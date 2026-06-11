@@ -486,7 +486,7 @@ surfacedAt(f) := f.curationStatus IS NULL        → f.createdAt        // opera
                  otherwise (PENDING_REVIEW/REJECTED/SUPERSEDED) → not client-surfaced (excluded from COO views)
 ```
 
-"Surfaced N days ago" computes against server time (`DEMO_CURRENT_DATE` stays demo-mode-only, S15). **Flagged product decision (ADR D10/follow-up #1):** if Mike rules AI findings client-visible pre-curation, this becomes `createdAt` everywhere — projection change only.
+"Surfaced N days ago" is computed CLIENT-side from the served `surfacedAt`. *Spec correction 2026-06-11 (S15 status, honest):* the backend half of S15 is severed (system `Clock` default; `DemoFixedClockConfig` is the opt-in demo lever), but the FRONTEND half is built-yet-unarmed — `clock.ts` ships `setPortfolioClock` with no production caller, so the active portfolio clock is the fixture date (`DEMO_CURRENT_DATE`). That is CORRECT today (the findings region renders fixture findings, whose dates are coherent with the fixture clock) — but the findings live swap (FIX-06 slice) MUST arm the live clock in the same change, or every real finding surfaced after the fixture date renders "Surfaced 0 days ago" forever (the `daysBetween` clamp). The swap checklist item "DEMO_CURRENT_DATE → injectable clock already handled by C9/S15" covers the SEAM existing, not the swap having happened. **Flagged product decision (ADR D10/follow-up #1):** if Mike rules AI findings client-visible pre-curation, this becomes `createdAt` everywhere — projection change only.
 
 ### 12.5 `progressPct` (per initiative) — V8 thin slice
 

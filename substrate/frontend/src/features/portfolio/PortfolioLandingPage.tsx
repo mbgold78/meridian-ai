@@ -103,8 +103,10 @@ export function PortfolioLandingPage() {
       </p>
 
       <p className="mt-10 text-xs text-foreground-muted">
-        Every subsidiary, capability, agent, and finding shown here is
-        fixture data. No backend is contacted; AI responses are pre-canned.
+        Beacon Industries is a fictional demonstration portfolio. Cascades,
+        contracts, agents, and portfolio statistics are served live by the
+        substrate engines from seeded demo data; remaining surfaces still
+        render fixture data while their live swaps land.
       </p>
     </div>
   );

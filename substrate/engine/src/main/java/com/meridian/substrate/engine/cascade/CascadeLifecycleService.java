@@ -50,8 +50,11 @@ import java.util.UUID;
  *   <li>{@code findByIdForUpdate} — PESSIMISTIC_WRITE serializes the cascade
  *       (PG {@code SELECT … FOR UPDATE}; honored by H2 PG-mode — the
  *       CapabilityService/BrandingConfigService locking precedent);</li>
- *   <li>idempotency check under the lock — a replayed {@code idempotencyKey}
- *       returns the original result re-projected (no new action row); the
+ *   <li>idempotency check under the lock — the same {@code idempotencyKey}
+ *       replayed on the SAME verb/depth returns the original result
+ *       re-projected (no new action row); reused on a DIFFERENT verb/depth it
+ *       conflicts (409 {@code CASCADE_IDEMPOTENCY_REUSE} — a silent replay
+ *       there would mask a dropped command as success); the
  *       {@code uq_cla_idem} UNIQUE constraint is the backstop;</li>
  *   <li>{@code expectedChainSeq} fencing → 409 {@code CASCADE_STALE_STATE};</li>
  *   <li>guard validation (§5.2/§5.3) → 409 {@code CASCADE_ILLEGAL_TRANSITION}
@@ -280,7 +283,8 @@ public class CascadeLifecycleService {
     @Governed(actionType = GovernedActions.CASCADE_CASCADE)
     @Transactional
     public Cascade cascade(UUID cascadeId, int depth, CascadeCommand cmd) {
-        return execute(cascadeId, cmd.idempotencyKey(), cmd.expectedChainSeq(), ctx -> {
+        return execute(cascadeId, cmd.idempotencyKey(), cmd.expectedChainSeq(),
+                CascadeActionType.CASCADE, depth, ctx -> {
             CascadeLevel level = requireLevel(ctx, depth);
             stateMachine.requireLevelOwner(ctx.cascade, level, cmd.actor());
             CascadeLevelAction action = newAction(ctx.cascade, CascadeActionType.CASCADE, depth,
@@ -297,7 +301,8 @@ public class CascadeLifecycleService {
     @Governed(actionType = GovernedActions.CASCADE_ABSORB)
     @Transactional
     public Cascade absorb(UUID cascadeId, int depth, AbsorbCommand cmd) {
-        return execute(cascadeId, cmd.idempotencyKey(), cmd.expectedChainSeq(), ctx -> {
+        return execute(cascadeId, cmd.idempotencyKey(), cmd.expectedChainSeq(),
+                CascadeActionType.ABSORB, depth, ctx -> {
             CascadeLevel level = requireLevel(ctx, depth);
             stateMachine.requireLevelOwner(ctx.cascade, level, cmd.actor());
             CascadeLevelAction action = newAction(ctx.cascade, CascadeActionType.ABSORB, depth,
@@ -321,7 +326,8 @@ public class CascadeLifecycleService {
     @Governed(actionType = GovernedActions.CASCADE_DECLINE)
     @Transactional
     public Cascade decline(UUID cascadeId, int depth, DeclineCommand cmd) {
-        return execute(cascadeId, cmd.idempotencyKey(), cmd.expectedChainSeq(), ctx -> {
+        return execute(cascadeId, cmd.idempotencyKey(), cmd.expectedChainSeq(),
+                CascadeActionType.DECLINE, depth, ctx -> {
             CascadeLevel level = requireLevel(ctx, depth);
             stateMachine.requireLevelOwner(ctx.cascade, level, cmd.actor());
             CascadeLevelAction action = newAction(ctx.cascade, CascadeActionType.DECLINE, depth,
@@ -336,7 +342,8 @@ public class CascadeLifecycleService {
     @Governed(actionType = GovernedActions.CASCADE_RECASCADE)
     @Transactional
     public Cascade recascade(UUID cascadeId, int depth, RecascadeCommand cmd) {
-        return execute(cascadeId, cmd.idempotencyKey(), cmd.expectedChainSeq(), ctx -> {
+        return execute(cascadeId, cmd.idempotencyKey(), cmd.expectedChainSeq(),
+                CascadeActionType.RECASCADE, depth, ctx -> {
             CascadeLevel level = requireLevel(ctx, depth);
             stateMachine.requireLevelOwner(ctx.cascade, level, cmd.actor());
             CascadeLevelAction action = newAction(ctx.cascade, CascadeActionType.RECASCADE, depth,
@@ -361,9 +368,11 @@ public class CascadeLifecycleService {
         if (cmd.resolution() == null) {
             throw new IllegalArgumentException("resolution is required: looks-good | declined");
         }
-        return execute(cascadeId, cmd.idempotencyKey(), cmd.expectedChainSeq(), ctx -> {
+        boolean declined = cmd.resolution() == Resolution.DECLINED;
+        CascadeActionType verb = declined
+                ? CascadeActionType.RESOLVE_DECLINED : CascadeActionType.RESOLVE_LOOKS_GOOD;
+        return execute(cascadeId, cmd.idempotencyKey(), cmd.expectedChainSeq(), verb, 0, ctx -> {
             stateMachine.requireOriginator(ctx.cascade, cmd.actor());
-            boolean declined = cmd.resolution() == Resolution.DECLINED;
             if (declined) {
                 CascadeLevelAction acceptedDecline = cmd.acceptedDeclineActionId() == null ? null
                         : actionRepository.findById(cmd.acceptedDeclineActionId()).orElse(null);
@@ -399,21 +408,38 @@ public class CascadeLifecycleService {
     }
 
     private Cascade execute(UUID cascadeId, String idempotencyKey, Integer expectedChainSeq,
-                            ActionBuilder builder) {
+                            CascadeActionType verb, int depth, ActionBuilder builder) {
         requireIdempotencyKey(idempotencyKey);
 
         // 1. The per-cascade serialization point (ADR D8).
         Cascade cascade = cascadeRepository.findByIdForUpdate(cascadeId)
                 .orElseThrow(() -> new EntityNotFoundException("Cascade not found: " + cascadeId));
 
-        // 2. Idempotency replay under the lock: the original action's result is
-        //    re-projected as success — no new row, regardless of how the chain
-        //    has moved since (the original 200 semantics, D8).
+        // 2. Idempotency replay under the lock: a SAME-verb/depth hit means
+        //    the original action's result is re-projected as success — no new
+        //    row, regardless of how the chain has moved since (the original
+        //    200 semantics, D8). A hit on a DIFFERENT verb/depth is a
+        //    contradiction and conflicts: replaying the original 200 there
+        //    would silently drop the new command while reporting success
+        //    (e.g. a DECLINE masked as a CASCADE acknowledgment — decline is
+        //    never lost, ADR-001 #1). Cross-engine idiom: diagnostic
+        //    CURATION_CONFLICT; recorded deviation from the cascade.md §5.5
+        //    letter (no verb pin there), flagged for spec ratification.
         Optional<CascadeLevelAction> replay =
                 actionRepository.findByCascadeIdAndIdempotencyKey(cascadeId, idempotencyKey);
         if (replay.isPresent()) {
+            CascadeLevelAction original = replay.get();
+            if (original.getAction() != verb || original.getDepth() != depth) {
+                throw new CascadeConflictException(
+                        CascadeConflictException.Code.CASCADE_IDEMPOTENCY_REUSE, cascadeId,
+                        "idempotency key '" + idempotencyKey + "' was already spent on "
+                                + original.getAction().wireValue() + " at depth "
+                                + original.getDepth() + " of this cascade — it cannot replay as "
+                                + verb.wireValue() + " at depth " + depth
+                                + "; mint a fresh key per command (§5.5)");
+            }
             log.debug("Idempotent replay [cascadeId={}, key={}, chainSeq={}]",
-                    cascadeId, idempotencyKey, replay.get().getChainSeq());
+                    cascadeId, idempotencyKey, original.getChainSeq());
             return cascade;
         }
 

@@ -124,9 +124,14 @@ export function FutureStateDesigner() {
       setAnalysisError(null);
       setIsAnalyzing(true);
 
+      // Backend ImpactAnalysisRequest shape: the decision's affected systems
+      // are the consolidation scope; its description is the consolidation
+      // narrative (the record field is consolidationDescription, not
+      // description — the pre-fix mismatch 500'd every click).
       analyzeImpact({
-        description: decision.description,
         domainId: decision.domainId ?? domainId ?? '',
+        systemIds: decision.affectedSystemIds ?? [],
+        consolidationDescription: decision.description,
       })
         .then((response) => {
           if (response.errors && response.errors.length > 0) {
