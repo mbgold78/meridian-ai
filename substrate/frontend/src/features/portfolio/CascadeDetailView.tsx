@@ -37,7 +37,10 @@ export function CascadeDetailView() {
   if (!cascade) return <CascadeNotFound id={cascadeId} />;
 
   return (
-    <div className="mx-auto max-w-[1440px]">
+    // data-cascade-source mirrors the shipped data-stats-source provenance
+    // pattern (DOC-1 §5 live-mode assertion): 'live' only when the detail
+    // came from GET /cascades/{id}, never from the fixture fallback.
+    <div data-cascade-source={status} className="mx-auto max-w-[1440px]">
       <CascadeBackLink />
       <CascadeHeader cascade={cascade} />
       <div className="px-8 pb-12 pt-8">
@@ -83,7 +86,7 @@ const STATE_EYEBROW: Record<BeaconCascade['currentState'], string> = {
 
 function CascadeHeader({ cascade }: { cascade: BeaconCascade }) {
   return (
-    <header className="border-b border-border px-8 py-8">
+    <header data-testid="cascade-header" className="border-b border-border px-8 py-8">
       <div className="flex flex-col gap-8 md:flex-row md:items-start md:justify-between">
         <div className="md:basis-3/5">
           <div className="flex items-center gap-1.5">
@@ -158,7 +161,12 @@ interface LevelRowProps {
 function LevelRow({ level, isLast }: LevelRowProps) {
   const pill = LEVEL_STATE_PILL[level.state];
   return (
-    <li className="relative flex gap-4">
+    <li
+      data-testid="cascade-level-row"
+      data-level={level.level}
+      data-state={level.state}
+      className="relative flex gap-4"
+    >
       <div className="flex flex-col items-center" aria-hidden>
         <span
           className="mt-1 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-border bg-surface-raised font-mono text-[12px] font-semibold leading-[16px] text-foreground"
@@ -306,6 +314,8 @@ function ActionTimeline({ actions }: { actions: CascadeActionDto[] }) {
         {actions.map((action) => (
           <li
             key={action.id}
+            data-testid="cascade-action-row"
+            data-chain-seq={action.chainSeq}
             className="flex items-baseline gap-3 rounded-md border border-border bg-surface px-4 py-3"
           >
             <span

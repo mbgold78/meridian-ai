@@ -1,0 +1,25 @@
+# Legacy scene 08a — REPURPOSED, not reproduced (FILE-6 deviation, recorded).
+#
+# The original 08a-operations-path-segment-BLANK.png documented vv Finding 1:
+# the natural-guess URL /portfolio/subsidiary/curasync-clinical/operations
+# (real route carries ?tab=operations) rendered a silent fully-blank page.
+# That bug is FIXED (catch-all NotFound routes in App.tsx + portfolio
+# routes.tsx), so the blank scene is irreproducible by design. Per plan §7
+# FILE-6's sanctioned follow-up, the URL is repurposed as the NotFound-panel
+# scene; the original BLANK png is archived (not re-emitted) in S3. The
+# output name says "notfound", never "BLANK" — the old name would be a lie.
+#
+# The panel renders inside the portfolio shell, so the provenance banner is
+# in-scene and doubles as the live-mode assertion.
+id: operations-path-segment-notfound
+title: Unknown path inside /portfolio — catch-all NotFound panel (vv Finding 1 fixed)
+topic: manual/troubleshooting#unknown-path-404
+route: /portfolio/subsidiary/curasync-clinical/operations
+persona: L1_EXECUTIVE
+waits:
+  - api: { get: /api/v1/domains, until: { path: "$.data.length", equals: 23 }, timeoutMs: 60000 }
+  - selector: '[data-banner-provenance="live"]'
+  - selector: '[data-testid="not-found"]'
+capture: { mode: fullPage }
+output: 08a-operations-path-segment-notfound.png
+determinism: static

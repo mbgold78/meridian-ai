@@ -134,6 +134,8 @@ function CapabilityTreeRow({
   return (
     <div
       ref={dragHandle}
+      data-testid="capability-tree-row"
+      data-capability-id={node.data.id}
       style={rowStyle}
       className={cn(
         'flex items-center gap-1 pr-2 cursor-pointer select-none text-sm',

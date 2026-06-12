@@ -1,0 +1,40 @@
+# Legacy scene b (vv 02-designer.png) — the decision register at /designer.
+#
+# Persona: Architect-side (L3_ANALYST) — design surface.
+#
+# The register renders the 5 seeded decisions (D-001..D-005) PLUS the
+# cross-engine accountability ledger anchor appended when contracts.activate
+# flips co-tribal-knowledge-depopulation ACTIVE — 6 rows total. The anchor is
+# appended via an afterCommit hook, i.e. potentially a beat AFTER the
+# domains==23 readiness signal, so the spec polls the decisions API for the
+# full count before trusting the table.
+#
+# Discovered S2 reality (recorded as a deviation against plan §5's
+# "@CreationTimestamp rows are not UI-rendered" claim): the Date column
+# renders DesignDecision.createdAt, which is the JVM wall clock, NOT the
+# pinned demo clock. Output is stable within a verify invocation and within
+# one UTC day, but a fresh boot on a different day renders a different date.
+id: future-state-designer
+title: Future State Designer — decision register with accountability ledger row
+topic: manual/future-state-designer#decision-register
+route: /designer
+persona: L3_ANALYST
+resolve:
+  - { var: domainId, get: /api/v1/domains, pick: "$.data[?(@.name=='Operational Risk')].id" }
+localStorage:
+  substrate-workspace-domain-id: "{domainId}"
+waits:
+  - api: { get: /api/v1/domains, until: { path: "$.data.length", equals: 23 }, timeoutMs: 60000 }
+  # 5 seeded + 1 CONTRACT_ACTIVATED ledger anchor (afterCommit — see header).
+  - api: { get: "/api/v1/design/decisions?domainId={domainId}", until: { path: "$.data.length", equals: 6 }, timeoutMs: 60000 }
+  - selector: '[data-row-id]'    # decision ids are per-boot UUIDs — presence only (P-3)
+liveModeExempt: >-
+  No data-*-source marker exists on this surface because it has no fixture
+  fallback: rows render solely from GET /design/decisions (an ErrorBanner
+  renders on failure, and the runner fails the capture on any unexpected
+  app-API failure). The api wait on the live row count (6, including the
+  cross-engine CONTRACT_ACTIVATED anchor that only exists when the live
+  contract engine ran) is the live-data proof.
+capture: { mode: fullPage }
+output: 02-designer.png
+determinism: seeded

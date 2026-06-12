@@ -16,7 +16,11 @@ function ConfidencePip({ confidence }: { confidence: number | null }) {
 function EntryCard({ entry }: { entry: EvidenceChainEntry }) {
   const { evidence, document } = entry;
   return (
-    <div className="rounded-lg border border-border/60 bg-foreground/5 p-3">
+    <div
+      data-testid="provenance-entry"
+      data-evidence-id={evidence.id}
+      className="rounded-lg border border-border/60 bg-foreground/5 p-3"
+    >
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0 flex-1">
           <p className="truncate text-[11px] font-semibold text-foreground/90">
@@ -75,7 +79,7 @@ export function ProvenanceTab({
   }
 
   return (
-    <div className="flex h-full flex-col">
+    <div data-testid="provenance-tab" className="flex h-full flex-col">
       <div className="border-b border-border/60 px-4 py-3">
         <h3 className="text-[11px] font-bold uppercase tracking-widest text-foreground-muted">
           {selectedSystem ? `Provenance · ${selectedSystem.name}` : 'Provenance · All sources'}

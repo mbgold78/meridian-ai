@@ -1,0 +1,32 @@
+# Legacy scene e (vv 05-portfolio-dashboard.png) — /portfolio/dashboard.
+#
+# Persona: client-surface (L1_EXECUTIVE).
+#
+# Live beats asserted: the §12 engine-computed coordination-signal cards
+# (data-stats-source="live"; agents-in-intervention 8 of 70 registered) and
+# the issued-cascades grid (3 in-flight seeded cascades, decline-pending
+# attention-ordered first). The phase grid / roster are fixture-rendered by
+# design — their provenance markers say so in the capture itself.
+#
+# Viewport deviation (recorded): the vv original is a 1536x960 viewport shot
+# because the app shell scrolls in an inner container (fullPage == viewport,
+# S1 finding). The tall viewport renders the WHOLE dashboard scroll-free —
+# D2 acceptance is scene-equivalence, not pixel parity, and the full stack
+# (signals → opportunities → cascades → roster → phase grid) IS the scene.
+id: portfolio-dashboard
+title: Corporate Operating Partner dashboard — live signals, cascades, roster
+topic: client/coo-quick-guide#portfolio-dashboard
+route: /portfolio/dashboard
+persona: L1_EXECUTIVE
+viewport: { width: 1536, height: 3400 }
+waits:
+  - api: { get: /api/v1/domains, until: { path: "$.data.length", equals: 23 }, timeoutMs: 60000 }
+  - selector: '[data-banner-provenance="live"]'
+  - selector: '[data-stats-source="live"]'      # §12 engine-computed cards are live
+  - selector: '[data-signal="agents-intervention"][data-card-source="live"]'
+  # The unique decline-pending cascade card — seed-stable signal, never a
+  # hardcoded cascade UUID (P-3).
+  - selector: '[data-testid="cascade-card"][data-attention-signal="decline-pending"]'
+capture: { mode: fullPage }
+output: 05-portfolio-dashboard.png
+determinism: seeded

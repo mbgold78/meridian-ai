@@ -60,6 +60,8 @@ export function DecisionsTab({
         </div>
         {verification && (
           <div
+            data-testid="decision-verify-result"
+            data-valid={verification.valid}
             className={cn(
               'mt-2 rounded-md px-3 py-1.5 text-[11px] font-medium ring-1',
               verification.valid
@@ -83,6 +85,8 @@ export function DecisionsTab({
               return (
                 <div
                   key={d.id}
+                  data-testid="decision-log-row"
+                  data-decision-id={d.id}
                   className="rounded-lg border border-border/50 bg-foreground/[0.03] px-3 py-2.5"
                 >
                   <div className="flex items-start gap-2">

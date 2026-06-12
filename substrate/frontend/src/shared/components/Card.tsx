@@ -5,11 +5,14 @@ interface CardProps {
   className?: string;
   onClick?: () => void;
   hoverable?: boolean;
+  /** Optional data-testid passthrough (DOC-1 §4 capture-selector contract). */
+  testId?: string;
 }
 
-export function Card({ children, className, onClick, hoverable = false }: CardProps) {
+export function Card({ children, className, onClick, hoverable = false, testId }: CardProps) {
   return (
     <div
+      data-testid={testId}
       className={cn(
         'rounded-lg border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-gray-900',
         hoverable && 'cursor-pointer transition-shadow hover:shadow-md',

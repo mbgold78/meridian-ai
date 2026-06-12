@@ -1,0 +1,37 @@
+# Legacy scene f (vv 06-cascade-detail-decline-pending.png) — the decline-
+# pending cascade detail (c-vendor-cost lineage: Issued → Cascaded → Declined).
+#
+# Persona: client-surface (L1_EXECUTIVE) — the Operating Partner inspecting a
+# cascade they issued.
+#
+# Identity resolution (P-3): cascade ids regenerate every boot (in-memory H2),
+# so the spec resolves the route id by the seed-deterministic signal — the
+# UNIQUE decline-pending cascade — via the same API the dashboard rides.
+#
+# Live discriminators: data-cascade-source="live" (additive provenance attr,
+# S2) AND the append-only Action timeline — fixture cascades predate the
+# action log, so cascade-action-row rows exist only for live data (plan §4
+# item 23). Waiting for chain-seq 3 pins the full Issued→Cascaded→Declined
+# log before capture.
+#
+# Viewport deviation (recorded): tall viewport renders the whole scene
+# (header, L0→L2 level timeline, action timeline, summary footer) scroll-free;
+# the vv original was viewport-cropped at 960 (inner-scroll shell).
+id: cascade-detail-decline-pending
+title: Cascade detail — decline pending, with level and action timelines
+topic: client/coo-quick-guide#inspect-a-cascade
+route: /portfolio/cascade/{cascadeId}
+persona: L1_EXECUTIVE
+resolve:
+  - { var: domainId, get: /api/v1/domains, pick: "$.data[?(@.name=='Operational Risk')].id" }
+  - { var: cascadeId, get: "/api/v1/cascades?domainId={domainId}", pick: "$.data[?(@.attentionSignal=='decline-pending')].id" }
+viewport: { width: 1536, height: 2200 }
+waits:
+  - api: { get: /api/v1/domains, until: { path: "$.data.length", equals: 23 }, timeoutMs: 60000 }
+  - selector: '[data-cascade-source="live"]'
+  - selector: '[data-testid="cascade-header"]'
+  - selector: '[data-testid="cascade-level-row"][data-state="declined"]'
+  - selector: '[data-testid="cascade-action-row"][data-chain-seq="3"]'
+capture: { mode: fullPage }
+output: 06-cascade-detail-decline-pending.png
+determinism: seeded

@@ -18,19 +18,27 @@ const ANIMATION_KILL_CSS =
  */
 export async function runSpec({ browser, spec, config, baseUrl, outDir, warnings, log }) {
   // --- resolve: per-boot UUIDs via API (P-3 — never hardcoded) -------------
+  // Resolved vars substitute into: the route, LATER resolve `get` paths
+  // (chaining — e.g. domain id -> cascade list), and localStorage values
+  // (e.g. the P-5 workspace key, whose value is a per-boot domain UUID that
+  // must never be hardcoded in a spec).
+  const vars = {};
+  const substitute = (s) => s.replace(/\{([a-zA-Z_]+)\}/g, (m, name) => (name in vars ? String(vars[name]) : m));
   let route = spec.route;
   if (spec.resolve) {
     for (const r of spec.resolve) {
-      const res = await fetch(baseUrl + r.get, { signal: AbortSignal.timeout(15000) });
+      const getPath = substitute(r.get);
+      const res = await fetch(baseUrl + getPath, { signal: AbortSignal.timeout(15000) });
       if (!res.ok) {
-        throw new PipelineError(EXIT.ENV, `spec=${spec.id} resolve var=${r.var}: GET ${r.get} -> HTTP ${res.status}`);
+        throw new PipelineError(EXIT.ENV, `spec=${spec.id} resolve var=${r.var}: GET ${getPath} -> HTTP ${res.status}`);
       }
       const value = evalJsonPath(r.pick, await res.json());
       if (value === undefined || value === null) {
         throw new PipelineError(EXIT.ENV, `spec=${spec.id} resolve var=${r.var}: pick ${r.pick} yielded nothing`);
       }
-      route = route.replaceAll(`{${r.var}}`, String(value));
+      vars[r.var] = value;
     }
+    route = substitute(route);
   }
   if (/\{[a-zA-Z_]+\}/.test(route)) {
     throw new PipelineError(EXIT.ENV, `spec=${spec.id}: route still has unresolved placeholders: ${route}`);
@@ -53,7 +61,7 @@ export async function runSpec({ browser, spec, config, baseUrl, outDir, warnings
     // sets the rendered chip and the X-Persona-Level wire header atomically.
     const storageEntries = [
       [config.storage.personaKey, spec.persona],
-      ...Object.entries(spec.localStorage ?? {}),
+      ...Object.entries(spec.localStorage ?? {}).map(([k, v]) => [k, substitute(v)]),
     ];
     await context.addInitScript((entries) => {
       for (const [k, v] of entries) localStorage.setItem(k, v);
@@ -94,7 +102,7 @@ export async function runSpec({ browser, spec, config, baseUrl, outDir, warnings
     // --- waits (ordered) ----------------------------------------------------
     for (const w of spec.waits) {
       if (w.api) {
-        await pollApi(baseUrl, w.api, { label: `spec=${spec.id}`, log });
+        await pollApi(baseUrl, { ...w.api, get: substitute(w.api.get) }, { label: `spec=${spec.id}`, log });
       } else {
         try {
           await page.waitForSelector(w.selector, { state: 'visible', timeout: w.timeoutMs ?? selectorTimeout });
@@ -127,6 +135,23 @@ export async function runSpec({ browser, spec, config, baseUrl, outDir, warnings
 
     // --- pre-capture determinism gates --------------------------------------
     await page.evaluate(() => document.fonts.ready.then(() => undefined));
+
+    // SMIL freeze (S2 finding, `determinism: animated`): SVG <animateMotion
+    // repeatCount="indefinite"> (the canvas FlowEdge flow dots) is neither a
+    // CSS animation (kill stylesheet) nor a Web Animation (reducedMotion) —
+    // it rides the SVG document clock. pauseAnimations() stops that clock and
+    // setCurrentTime(0) pins every SMIL element to its t=0 pose, identical on
+    // every run and boot. Done after waits/preSteps so the SVGs exist.
+    if (spec.determinism === 'animated') {
+      await page.evaluate(() => {
+        for (const svg of document.querySelectorAll('svg')) {
+          if (typeof svg.pauseAnimations === 'function') {
+            svg.pauseAnimations();
+            svg.setCurrentTime(0);
+          }
+        }
+      });
+    }
 
     const quiesceDeadline = Date.now() + (config.settle?.quiescenceTimeoutMs ?? 15000);
     while (inflight > 0) {
@@ -179,11 +204,21 @@ export async function runSpec({ browser, spec, config, baseUrl, outDir, warnings
       );
     }
 
-    if (apiFailures.length > 0) {
+    // Expected, deterministic non-2xx responses (schema `allowedApiFailures`)
+    // are downgraded to visible warnings; everything else stays a hard fail
+    // (the retry:false data hooks would freeze fallback UI into the PNG).
+    const allowed = spec.allowedApiFailures ?? [];
+    const unexpected = [];
+    for (const f of [...new Set(apiFailures)]) {
+      const rule = allowed.find((a) => f.includes(a.match));
+      if (rule) warnings.push(`spec=${spec.id} expected API failure (${rule.reason}): ${f}`);
+      else unexpected.push(f);
+    }
+    if (unexpected.length > 0) {
       throw new PipelineError(
         EXIT.ENV,
-        `spec=${spec.id}: ${apiFailures.length} app API request(s) failed during capture — the retry:false data hooks would freeze fallback UI into the PNG. ` +
-          [...new Set(apiFailures)].join('; '),
+        `spec=${spec.id}: ${unexpected.length} app API request(s) failed during capture — the retry:false data hooks would freeze fallback UI into the PNG. ` +
+          unexpected.join('; '),
       );
     }
 

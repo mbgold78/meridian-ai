@@ -1,0 +1,57 @@
+# Legacy scene a (vv 01-living-canvas.png) — the ecosystem map at '/'.
+#
+# Persona: Architect-side (L3_ANALYST) — this is the operator/analyst working
+# surface, not a client read-path (slice S2 persona constraint).
+#
+# Workspace binding: the canvas family resolves its domain via useWorkspace.
+# With 23 seeded domains the implicit policy result is order-dependent, so the
+# spec PINS the workspace to the root demo domain ("Operational Risk") through
+# the documented P-5 localStorage key, with the per-boot UUID resolved by API
+# (P-3: never hardcoded).
+#
+# Live-mode posture: the canvas hooks have NO fixture fallback — every node,
+# stat, badge and pill renders from live API responses or not at all (error/
+# empty states render instead), and the runner hard-fails the capture on any
+# unexpected app-API failure. The one EXPECTED failure is the fixture-gated
+# transformation-plan endpoint (seam S4): GET /transformation/plan 404s on
+# every boot (vv-documented, "known S4 flag") and the ribbon falls back to the
+# deterministic reduction thesis. That 404 is allowlisted BY NAME with this
+# reason; anything else still fails loudly.
+id: living-canvas
+title: Living Canvas — ecosystem map with stats ribbon, lenses, and drawer rail
+topic: manual/living-canvas#overview
+route: /
+persona: L3_ANALYST
+resolve:
+  - { var: domainId, get: /api/v1/domains, pick: "$.data[?(@.name=='Operational Risk')].id" }
+localStorage:
+  substrate-canvas-welcomed-v1: "1"        # suppress the welcome overlay (P-5 key contract)
+  substrate-workspace-domain-id: "{domainId}"
+waits:
+  - api: { get: /api/v1/domains, until: { path: "$.data.length", equals: 23 }, timeoutMs: 60000 }
+  # data-canvas-ready reflects nodes.length>0 — the only deterministic gate
+  # for the async ELK layout (plan §4 item 1).
+  - selector: '[data-testid="living-canvas"]'
+    attr: data-canvas-ready
+    equals: "true"
+  - selector: '[data-testid="canvas-system-node"]'
+  - selector: '[data-testid="canvas-process-node"]'
+  - selector: '[data-testid="canvas-summary-ribbon"] [data-stat="annual-savings"]'
+  - selector: '[data-testid="completeness-badge"]'
+liveModeExempt: >-
+  No data-*-source marker exists on this surface because it has no fixture
+  fallback to discriminate against: the canvas hooks (ecosystem/findings/
+  thesis/assistant) render live API data or an explicit error/empty state,
+  and the runner fails the capture on any unexpected app-API failure. The
+  data-canvas-ready=true wait therefore already proves live engine data.
+allowedApiFailures:
+  - match: /api/v1/transformation/plan
+    reason: >-
+      Fixture-gated seam S4 — the plan endpoint 404s on every seeded boot
+      (vv-documented); the ribbon deterministically falls back to the
+      reduction thesis. Deliberately NOT worked around in product code.
+capture: { mode: fullPage }
+output: 01-living-canvas.png
+# Canvas family: framer-motion entrance animations + infinite CSS pulses —
+# the runner injects the animation-kill stylesheet and settle-polls (plan §5).
+determinism: animated

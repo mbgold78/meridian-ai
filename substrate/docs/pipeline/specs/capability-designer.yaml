@@ -1,0 +1,32 @@
+# Legacy scene c (vv 03-capability-designer.png) — /designer/capabilities.
+#
+# Persona: Architect-side (L3_ANALYST) — design surface.
+#
+# The tree renders the 2 seeded capabilities (Customer Onboarding → KYC
+# Verification) from GET /capabilities; the header carries the
+# terminology-driven Create affordance and Draft from Universe. Capability
+# ids are per-boot UUIDs, so waits target testid presence only (P-3);
+# react-arborist virtualization is a non-issue at 2 rows (plan §7).
+id: capability-designer
+title: Capability Designer — seeded tree with Create and Draft affordances
+topic: manual/capability-designer#tree-and-create
+route: /designer/capabilities
+persona: L3_ANALYST
+resolve:
+  - { var: domainId, get: /api/v1/domains, pick: "$.data[?(@.name=='Operational Risk')].id" }
+localStorage:
+  substrate-workspace-domain-id: "{domainId}"
+waits:
+  - api: { get: /api/v1/domains, until: { path: "$.data.length", equals: 23 }, timeoutMs: 60000 }
+  - api: { get: "/api/v1/capabilities?domainId={domainId}", until: { path: "$.data.length", equals: 2 }, timeoutMs: 60000 }
+  - selector: '[data-testid="capability-tree-row"]'
+  - selector: '[data-testid="create-capability"]'
+liveModeExempt: >-
+  No data-*-source marker exists on this surface because it has no fixture
+  fallback: the tree renders solely from GET /capabilities (explicit error
+  text on failure, and the runner fails the capture on any unexpected
+  app-API failure). The api wait on the live capability count is the
+  live-data proof.
+capture: { mode: fullPage }
+output: 03-capability-designer.png
+determinism: seeded

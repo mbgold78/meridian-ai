@@ -360,6 +360,7 @@ function CoordinationSignalStrip({
       className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4"
     >
       <CoordinationSignalCard
+        signal="cross-opportunities"
         icon={<GitBranch size={24} aria-hidden weight="regular" />}
         label="Cross-portfolio opportunities"
         value={crossOppCount}
@@ -368,6 +369,7 @@ function CoordinationSignalStrip({
         provenance="fixture"
       />
       <CoordinationSignalCard
+        signal="agents-intervention"
         icon={<Warning size={24} aria-hidden weight="regular" />}
         label="Agents in intervention"
         value={interventionValue}
@@ -376,6 +378,7 @@ function CoordinationSignalStrip({
         provenance={stats.source}
       />
       <CoordinationSignalCard
+        signal="lifecycle-stalls"
         icon={<Clock size={24} aria-hidden weight="regular" />}
         label="Lifecycle stalls"
         value={stats.lifecycleStallCount}
@@ -384,6 +387,7 @@ function CoordinationSignalStrip({
         provenance={stats.source}
       />
       <CoordinationSignalCard
+        signal="coordination-signals"
         icon={<Broadcast size={24} aria-hidden weight="regular" />}
         label="Coordination signals"
         value={stats.coordinationPatternsThisWeek}
@@ -396,6 +400,8 @@ function CoordinationSignalStrip({
 }
 
 interface CoordinationSignalCardProps {
+  /** Machine-readable card key — rendered as data-signal (DOC-1 §4 item 17). */
+  signal: string;
   icon: React.ReactNode;
   label: string;
   value: number | string;
@@ -406,6 +412,7 @@ interface CoordinationSignalCardProps {
 }
 
 function CoordinationSignalCard({
+  signal,
   icon,
   label,
   value,
@@ -414,7 +421,11 @@ function CoordinationSignalCard({
   provenance,
 }: CoordinationSignalCardProps) {
   return (
-    <article data-card-source={provenance} className="rounded-md border border-border bg-surface p-6">
+    <article
+      data-signal={signal}
+      data-card-source={provenance}
+      className="rounded-md border border-border bg-surface p-6"
+    >
       <div className="flex items-start justify-between gap-3">
         <span className="text-[11px] font-medium uppercase tracking-[0.05em] text-foreground-muted">
           {label}
@@ -692,7 +703,14 @@ function CascadeCard({ row }: CascadeCardProps) {
   const originatedDate = formatCascadeDate(row.originatedAt);
   const chip = ATTENTION_SIGNAL_CHIP[row.attentionSignal];
   return (
-    <article className="flex flex-col rounded-md border border-border bg-surface-raised p-6 transition-colors duration-100 hover:border-border-strong">
+    // data-cascade-id: live ids are per-boot UUIDs — machine consumers select
+    // by data-attention-signal (seed-stable), never by hardcoded id (P-3).
+    <article
+      data-testid="cascade-card"
+      data-cascade-id={row.id}
+      data-attention-signal={row.attentionSignal}
+      className="flex flex-col rounded-md border border-border bg-surface-raised p-6 transition-colors duration-100 hover:border-border-strong"
+    >
       <div className="flex items-center gap-1.5">
         <GitBranch size={16} weight="regular" aria-hidden className="text-primary" />
         <span className="text-[11px] font-medium uppercase tracking-[0.05em] text-primary">

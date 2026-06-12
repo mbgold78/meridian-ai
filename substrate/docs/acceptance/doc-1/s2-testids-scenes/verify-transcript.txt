@@ -1,0 +1,471 @@
+DOC-1 S2 acceptance evidence — testids + all 9 legacy scene specs; .\gradlew.bat docsVerify green
+TWICE with identical hash sets, plus the -PfreshBoots lane (plan section 5) also green on the SAME set.
+
+Platform: Windows 11 local (win32). Per ratified D-A this demonstrates WITHIN-PLATFORM byte-identity +
+two-run self-identity; Linux CI becomes the canonical baseline when the S6 gate lands.
+Each docsVerify invocation = fresh JVM boot (dev profile, demo seed + contracts.activate + fixed-clock
+2026-05-12T00:00:00Z, runner-allocated free port) + one DISCARDED warm-up sweep + TWO full capture
+passes byte-compared. -PfreshBoots = two fresh JVM boots (new in-memory H2, new entity UUIDs), one
+warmed pass each, byte-compared — this lane exercises the API id-resolution (P-3) hardest.
+Date: 2026-06-12
+
+Suite: 9 scene specs covering the full legacy inventory of acceptance/final/visual-verification.md
+(01 02 03 04 05 06 07 08 + 08a-repurposed-as-notfound per plan section 7 FILE-6; 04 and 08 are the two
+plan section 3 worked examples, upgraded in this slice to the S2 testid selectors).
+
+Aggregate manifest, ALL THREE invocations: 1be63f915f8975492fc9ea03284c62e5e6d797d8694fa5d722a03e618f862199
+Per-file SHA-256 (identical in every compared pass):
+  c29f8716091a3d007dbcd5b4996227b01b957771c248f3b555eb5024821e48e1  01-living-canvas.png
+  7d7b19aaa9eb91c0304d1b07eb7070b4cd943ecbf85ad51ee9e17baa64a1313e  02-designer.png
+  37c16f21203d7fc36e54cf14d3411a9efa4447af2ac9ff140de598dee8ae1061  03-capability-designer.png
+  6be0a8717c3a5f61e6e9b5588de59e4755f70b9e853d478d53a62ed0e48ec305  04-portfolio-landing.png
+  0e3b2580a0c5fec099f71a27f0484162e75e456adbd6e61eb8154a7cc2f7c204  05-portfolio-dashboard.png
+  7a726aee9879d825e10d362f84a3d146bedc606838ccbba36feff58c8599bec5  06-cascade-detail-decline-pending.png
+  27485d14ca6f22316a3c2a1e9e246fa9e4b55037d15c044af14b8e266455c6a0  07-contract-detail.png
+  8742a3477251fb33e5760dcde4a1e6d9fcb96fdcb9c7dc8f65cc54b3d9da240b  08-subsidiary-operations.png
+  5e563fd2a067ae39ac4fd5f5799d3f864358c8084957de6aad31418327498473  08-subsidiary-operations.annotated.png
+  05867a21e7921be784e83c087d3d23598f165d348bdb5c0f25f34ab7636851e4  08a-operations-path-segment-notfound.png
+
+Frontend gate at this commit (re-measured per plan section 8 A5): type-check clean; eslint clean
+(--max-warnings 0); vitest 145 passed / 145 (21 files); vite build clean.
+
+Determinism war stories found and fixed in THIS slice (recorded in pipeline.config.yaml / cli.js / capture.js):
+ 1. SMIL is a third animation system: the canvas FlowEdge flow dots are SVG <animateMotion
+    repeatCount="indefinite"> — untouched by the CSS animation-kill stylesheet AND by reducedMotion.
+    01-living-canvas never settled (exit 4). Fix: for determinism:animated specs the runner calls
+    SVGSVGElement.pauseAnimations() + setCurrentTime(0) after waits/preSteps — every SMIL element
+    pinned to its t=0 pose on every run and boot.
+ 2. Cold-app first-session text raster bimodality: against a freshly booted app the FIRST sweep
+    reproducibly rendered the SummaryRibbon (text on a translucent backdrop-blur card) with a
+    different anti-aliasing weight — identical glyphs, 2137 differing pixels, bbox (431,33)-(840,66),
+    byte-stable PER STATE across separate JVMs and browser processes (runA=48498a4c... twice,
+    runB=c29f8716... twice). --disable-lcd-text (kept: it removes the per-layer LCD-text heuristic
+    from the pixel pipeline) did NOT eliminate it; every sweep against a warmed app is byte-identical.
+    Fix: boot-mode capture/verify runs one full discarded warm-up sweep per boot; warm-state pixels
+    are canonical.
+Plus one plan correction discovered: plan section 5 claims @CreationTimestamp rows are "not
+UI-rendered" — false for scene 02: the designer Date column renders DesignDecision.createdAt (JVM
+wall clock, NOT the pinned demo clock). Stable within any verify invocation and within one UTC day;
+a fresh boot on a different calendar day shifts the rendered dates (documented in the spec header;
+candidate FILE-9 for the plan).
+
+=== INVOCATION 1: .\gradlew.bat docsVerify (EXIT=0) ===
+> Task :engine:processResources UP-TO-DATE
+> Task :app:nodeSetup UP-TO-DATE
+> Task :app:npmSetup SKIPPED
+> Task :app:npmInstall UP-TO-DATE
+> Task :app:frontendBuild UP-TO-DATE
+> Task :docs:nodeSetup UP-TO-DATE
+> Task :app:processResources UP-TO-DATE
+> Task :docs:npmSetup SKIPPED
+> Task :docs:npmInstall UP-TO-DATE
+> Task :common:compileJava UP-TO-DATE
+> Task :common:processResources NO-SOURCE
+> Task :common:classes UP-TO-DATE
+> Task :common:jar UP-TO-DATE
+> Task :engine:compileJava UP-TO-DATE
+> Task :engine:classes UP-TO-DATE
+> Task :engine:jar UP-TO-DATE
+> Task :app:compileJava UP-TO-DATE
+> Task :app:classes UP-TO-DATE
+> Task :app:resolveMainClassName UP-TO-DATE
+> Task :app:bootJar UP-TO-DATE
+> Task :docs:playwrightInstall
+
+> Task :docs:docsVerify
+
+> substrate-docs-pipeline@0.1.0 verify
+> node src/cli.js verify --jar=C:\Users\mbgol\dev\doc1-docs-pipeline\substrate/app/build/libs/app-0.1.0.jar
+
+loaded 9 capture spec(s) from specs/ — schema OK
+  boot-verify: /api/v1/domains $.data.length = 23 (satisfied after 15532ms)
+booted app-0.1.0.jar on http://127.0.0.1:58298 (log: build\boot-verify.log)
+--- warm-up pass (discarded; cold-app first-session raster effects — see cli.js note) ---
+spec=capability-designer: /api/v1/domains $.data.length = 23 (satisfied after 6ms)
+spec=capability-designer: /api/v1/capabilities?domainId=40e967fd-0bcb-41b8-819f-84ec110d0ed8 $.data.length = 2 (satisfied after 14ms)
+spec=capability-designer captured 03-capability-designer.png
+spec=cascade-detail-decline-pending: /api/v1/domains $.data.length = 23 (satisfied after 7ms)
+spec=cascade-detail-decline-pending captured 06-cascade-detail-decline-pending.png
+spec=contract-detail: /api/v1/domains $.data.length = 23 (satisfied after 4ms)
+spec=contract-detail captured 07-contract-detail.png
+spec=future-state-designer: /api/v1/domains $.data.length = 23 (satisfied after 5ms)
+spec=future-state-designer: /api/v1/design/decisions?domainId=40e967fd-0bcb-41b8-819f-84ec110d0ed8 $.data.length = 6 (satisfied after 4ms)
+spec=future-state-designer captured 02-designer.png
+spec=living-canvas: /api/v1/domains $.data.length = 23 (satisfied after 3ms)
+spec=living-canvas captured 01-living-canvas.png
+spec=operations-path-segment-notfound: /api/v1/domains $.data.length = 23 (satisfied after 3ms)
+spec=operations-path-segment-notfound captured 08a-operations-path-segment-notfound.png
+spec=portfolio-dashboard: /api/v1/domains $.data.length = 23 (satisfied after 4ms)
+spec=portfolio-dashboard captured 05-portfolio-dashboard.png
+spec=portfolio-landing: /api/v1/domains $.data.length = 23 (satisfied after 4ms)
+spec=portfolio-landing captured 04-portfolio-landing.png
+spec=subsidiary-operations: /api/v1/domains $.data.length = 23 (satisfied after 3ms)
+spec=subsidiary-operations annotation n=1 anchor rect x=201 y=736.5
+spec=subsidiary-operations annotation n=2 anchor rect x=201 y=853.5
+spec=subsidiary-operations annotation n=3 anchor rect x=200 y=1526
+spec=subsidiary-operations captured 08-subsidiary-operations.png, 08-subsidiary-operations.annotated.png
+spec=capability-designer: /api/v1/domains $.data.length = 23 (satisfied after 4ms)
+spec=capability-designer: /api/v1/capabilities?domainId=40e967fd-0bcb-41b8-819f-84ec110d0ed8 $.data.length = 2 (satisfied after 3ms)
+spec=capability-designer captured 03-capability-designer.png
+spec=cascade-detail-decline-pending: /api/v1/domains $.data.length = 23 (satisfied after 3ms)
+spec=cascade-detail-decline-pending captured 06-cascade-detail-decline-pending.png
+spec=contract-detail: /api/v1/domains $.data.length = 23 (satisfied after 4ms)
+spec=contract-detail captured 07-contract-detail.png
+spec=future-state-designer: /api/v1/domains $.data.length = 23 (satisfied after 3ms)
+spec=future-state-designer: /api/v1/design/decisions?domainId=40e967fd-0bcb-41b8-819f-84ec110d0ed8 $.data.length = 6 (satisfied after 3ms)
+spec=future-state-designer captured 02-designer.png
+spec=living-canvas: /api/v1/domains $.data.length = 23 (satisfied after 3ms)
+spec=living-canvas captured 01-living-canvas.png
+spec=operations-path-segment-notfound: /api/v1/domains $.data.length = 23 (satisfied after 3ms)
+spec=operations-path-segment-notfound captured 08a-operations-path-segment-notfound.png
+spec=portfolio-dashboard: /api/v1/domains $.data.length = 23 (satisfied after 3ms)
+spec=portfolio-dashboard captured 05-portfolio-dashboard.png
+spec=portfolio-landing: /api/v1/domains $.data.length = 23 (satisfied after 6ms)
+spec=portfolio-landing captured 04-portfolio-landing.png
+spec=subsidiary-operations: /api/v1/domains $.data.length = 23 (satisfied after 4ms)
+spec=subsidiary-operations annotation n=1 anchor rect x=201 y=736.5
+spec=subsidiary-operations annotation n=2 anchor rect x=201 y=853.5
+spec=subsidiary-operations annotation n=3 anchor rect x=200 y=1526
+spec=subsidiary-operations captured 08-subsidiary-operations.png, 08-subsidiary-operations.annotated.png
+spec=capability-designer: /api/v1/domains $.data.length = 23 (satisfied after 3ms)
+spec=capability-designer: /api/v1/capabilities?domainId=40e967fd-0bcb-41b8-819f-84ec110d0ed8 $.data.length = 2 (satisfied after 2ms)
+spec=capability-designer captured 03-capability-designer.png
+spec=cascade-detail-decline-pending: /api/v1/domains $.data.length = 23 (satisfied after 4ms)
+spec=cascade-detail-decline-pending captured 06-cascade-detail-decline-pending.png
+spec=contract-detail: /api/v1/domains $.data.length = 23 (satisfied after 4ms)
+spec=contract-detail captured 07-contract-detail.png
+spec=future-state-designer: /api/v1/domains $.data.length = 23 (satisfied after 4ms)
+spec=future-state-designer: /api/v1/design/decisions?domainId=40e967fd-0bcb-41b8-819f-84ec110d0ed8 $.data.length = 6 (satisfied after 3ms)
+spec=future-state-designer captured 02-designer.png
+spec=living-canvas: /api/v1/domains $.data.length = 23 (satisfied after 2ms)
+spec=living-canvas captured 01-living-canvas.png
+spec=operations-path-segment-notfound: /api/v1/domains $.data.length = 23 (satisfied after 3ms)
+spec=operations-path-segment-notfound captured 08a-operations-path-segment-notfound.png
+spec=portfolio-dashboard: /api/v1/domains $.data.length = 23 (satisfied after 5ms)
+spec=portfolio-dashboard captured 05-portfolio-dashboard.png
+spec=portfolio-landing: /api/v1/domains $.data.length = 23 (satisfied after 2ms)
+spec=portfolio-landing captured 04-portfolio-landing.png
+spec=subsidiary-operations: /api/v1/domains $.data.length = 23 (satisfied after 4ms)
+spec=subsidiary-operations annotation n=1 anchor rect x=201 y=736.5
+spec=subsidiary-operations annotation n=2 anchor rect x=201 y=853.5
+spec=subsidiary-operations annotation n=3 anchor rect x=200 y=1526
+spec=subsidiary-operations captured 08-subsidiary-operations.png, 08-subsidiary-operations.annotated.png
+stopped app instance 'verify'
+--- RUN A manifest (aggregate sha256=1be63f915f8975492fc9ea03284c62e5e6d797d8694fa5d722a03e618f862199) ---
+  c29f8716091a3d007dbcd5b4996227b01b957771c248f3b555eb5024821e48e1  01-living-canvas.png
+  7d7b19aaa9eb91c0304d1b07eb7070b4cd943ecbf85ad51ee9e17baa64a1313e  02-designer.png
+  37c16f21203d7fc36e54cf14d3411a9efa4447af2ac9ff140de598dee8ae1061  03-capability-designer.png
+  6be0a8717c3a5f61e6e9b5588de59e4755f70b9e853d478d53a62ed0e48ec305  04-portfolio-landing.png
+  0e3b2580a0c5fec099f71a27f0484162e75e456adbd6e61eb8154a7cc2f7c204  05-portfolio-dashboard.png
+  7a726aee9879d825e10d362f84a3d146bedc606838ccbba36feff58c8599bec5  06-cascade-detail-decline-pending.png
+  27485d14ca6f22316a3c2a1e9e246fa9e4b55037d15c044af14b8e266455c6a0  07-contract-detail.png
+  5e563fd2a067ae39ac4fd5f5799d3f864358c8084957de6aad31418327498473  08-subsidiary-operations.annotated.png
+  8742a3477251fb33e5760dcde4a1e6d9fcb96fdcb9c7dc8f65cc54b3d9da240b  08-subsidiary-operations.png
+  05867a21e7921be784e83c087d3d23598f165d348bdb5c0f25f34ab7636851e4  08a-operations-path-segment-notfound.png
+--- RUN B manifest (aggregate sha256=1be63f915f8975492fc9ea03284c62e5e6d797d8694fa5d722a03e618f862199) ---
+  c29f8716091a3d007dbcd5b4996227b01b957771c248f3b555eb5024821e48e1  01-living-canvas.png
+  7d7b19aaa9eb91c0304d1b07eb7070b4cd943ecbf85ad51ee9e17baa64a1313e  02-designer.png
+  37c16f21203d7fc36e54cf14d3411a9efa4447af2ac9ff140de598dee8ae1061  03-capability-designer.png
+  6be0a8717c3a5f61e6e9b5588de59e4755f70b9e853d478d53a62ed0e48ec305  04-portfolio-landing.png
+  0e3b2580a0c5fec099f71a27f0484162e75e456adbd6e61eb8154a7cc2f7c204  05-portfolio-dashboard.png
+  7a726aee9879d825e10d362f84a3d146bedc606838ccbba36feff58c8599bec5  06-cascade-detail-decline-pending.png
+  27485d14ca6f22316a3c2a1e9e246fa9e4b55037d15c044af14b8e266455c6a0  07-contract-detail.png
+  5e563fd2a067ae39ac4fd5f5799d3f864358c8084957de6aad31418327498473  08-subsidiary-operations.annotated.png
+  8742a3477251fb33e5760dcde4a1e6d9fcb96fdcb9c7dc8f65cc54b3d9da240b  08-subsidiary-operations.png
+  05867a21e7921be784e83c087d3d23598f165d348bdb5c0f25f34ab7636851e4  08a-operations-path-segment-notfound.png
+DOCS-VERIFY PASS runs=2 mode=same-boot files=10 manifest=1be63f915f8975492fc9ea03284c62e5e6d797d8694fa5d722a03e618f862199
+--- 3 warning(s) ---
+  WARN spec=living-canvas expected API failure (Fixture-gated seam S4 — the plan endpoint 404s on every seeded boot (vv-documented); the ribbon deterministically falls back to the reduction thesis. Deliberately NOT worked around in product code.): HTTP 404 http://127.0.0.1:58298/api/v1/transformation/plan?domainId=40e967fd-0bcb-41b8-819f-84ec110d0ed8
+
+BUILD SUCCESSFUL in 51s
+16 actionable tasks: 2 executed, 14 up-to-date
+
+=== INVOCATION 2: .\gradlew.bat docsVerify (EXIT=0) ===
+> Task :engine:processResources UP-TO-DATE
+> Task :docs:nodeSetup UP-TO-DATE
+> Task :docs:npmSetup SKIPPED
+> Task :docs:npmInstall UP-TO-DATE
+> Task :app:nodeSetup UP-TO-DATE
+> Task :app:npmSetup SKIPPED
+> Task :app:npmInstall UP-TO-DATE
+> Task :app:frontendBuild UP-TO-DATE
+> Task :app:processResources UP-TO-DATE
+> Task :common:compileJava UP-TO-DATE
+> Task :common:processResources NO-SOURCE
+> Task :common:classes UP-TO-DATE
+> Task :common:jar UP-TO-DATE
+> Task :engine:compileJava UP-TO-DATE
+> Task :engine:classes UP-TO-DATE
+> Task :engine:jar UP-TO-DATE
+> Task :app:compileJava UP-TO-DATE
+> Task :app:classes UP-TO-DATE
+> Task :app:resolveMainClassName UP-TO-DATE
+> Task :app:bootJar UP-TO-DATE
+> Task :docs:playwrightInstall
+
+> Task :docs:docsVerify
+
+> substrate-docs-pipeline@0.1.0 verify
+> node src/cli.js verify --jar=C:\Users\mbgol\dev\doc1-docs-pipeline\substrate/app/build/libs/app-0.1.0.jar
+
+loaded 9 capture spec(s) from specs/ — schema OK
+  boot-verify: /api/v1/domains $.data.length = 23 (satisfied after 13452ms)
+booted app-0.1.0.jar on http://127.0.0.1:54345 (log: build\boot-verify.log)
+--- warm-up pass (discarded; cold-app first-session raster effects — see cli.js note) ---
+spec=capability-designer: /api/v1/domains $.data.length = 23 (satisfied after 6ms)
+spec=capability-designer: /api/v1/capabilities?domainId=7e87c3da-0f29-4d1d-bd96-a1914ea44fc5 $.data.length = 2 (satisfied after 17ms)
+spec=capability-designer captured 03-capability-designer.png
+spec=cascade-detail-decline-pending: /api/v1/domains $.data.length = 23 (satisfied after 6ms)
+spec=cascade-detail-decline-pending captured 06-cascade-detail-decline-pending.png
+spec=contract-detail: /api/v1/domains $.data.length = 23 (satisfied after 4ms)
+spec=contract-detail captured 07-contract-detail.png
+spec=future-state-designer: /api/v1/domains $.data.length = 23 (satisfied after 4ms)
+spec=future-state-designer: /api/v1/design/decisions?domainId=7e87c3da-0f29-4d1d-bd96-a1914ea44fc5 $.data.length = 6 (satisfied after 5ms)
+spec=future-state-designer captured 02-designer.png
+spec=living-canvas: /api/v1/domains $.data.length = 23 (satisfied after 4ms)
+spec=living-canvas captured 01-living-canvas.png
+spec=operations-path-segment-notfound: /api/v1/domains $.data.length = 23 (satisfied after 4ms)
+spec=operations-path-segment-notfound captured 08a-operations-path-segment-notfound.png
+spec=portfolio-dashboard: /api/v1/domains $.data.length = 23 (satisfied after 4ms)
+spec=portfolio-dashboard captured 05-portfolio-dashboard.png
+spec=portfolio-landing: /api/v1/domains $.data.length = 23 (satisfied after 4ms)
+spec=portfolio-landing captured 04-portfolio-landing.png
+spec=subsidiary-operations: /api/v1/domains $.data.length = 23 (satisfied after 3ms)
+spec=subsidiary-operations annotation n=1 anchor rect x=201 y=736.5
+spec=subsidiary-operations annotation n=2 anchor rect x=201 y=853.5
+spec=subsidiary-operations annotation n=3 anchor rect x=200 y=1526
+spec=subsidiary-operations captured 08-subsidiary-operations.png, 08-subsidiary-operations.annotated.png
+spec=capability-designer: /api/v1/domains $.data.length = 23 (satisfied after 4ms)
+spec=capability-designer: /api/v1/capabilities?domainId=7e87c3da-0f29-4d1d-bd96-a1914ea44fc5 $.data.length = 2 (satisfied after 3ms)
+spec=capability-designer captured 03-capability-designer.png
+spec=cascade-detail-decline-pending: /api/v1/domains $.data.length = 23 (satisfied after 4ms)
+spec=cascade-detail-decline-pending captured 06-cascade-detail-decline-pending.png
+spec=contract-detail: /api/v1/domains $.data.length = 23 (satisfied after 4ms)
+spec=contract-detail captured 07-contract-detail.png
+spec=future-state-designer: /api/v1/domains $.data.length = 23 (satisfied after 4ms)
+spec=future-state-designer: /api/v1/design/decisions?domainId=7e87c3da-0f29-4d1d-bd96-a1914ea44fc5 $.data.length = 6 (satisfied after 3ms)
+spec=future-state-designer captured 02-designer.png
+spec=living-canvas: /api/v1/domains $.data.length = 23 (satisfied after 2ms)
+spec=living-canvas captured 01-living-canvas.png
+spec=operations-path-segment-notfound: /api/v1/domains $.data.length = 23 (satisfied after 4ms)
+spec=operations-path-segment-notfound captured 08a-operations-path-segment-notfound.png
+spec=portfolio-dashboard: /api/v1/domains $.data.length = 23 (satisfied after 4ms)
+spec=portfolio-dashboard captured 05-portfolio-dashboard.png
+spec=portfolio-landing: /api/v1/domains $.data.length = 23 (satisfied after 3ms)
+spec=portfolio-landing captured 04-portfolio-landing.png
+spec=subsidiary-operations: /api/v1/domains $.data.length = 23 (satisfied after 4ms)
+spec=subsidiary-operations annotation n=1 anchor rect x=201 y=736.5
+spec=subsidiary-operations annotation n=2 anchor rect x=201 y=853.5
+spec=subsidiary-operations annotation n=3 anchor rect x=200 y=1526
+spec=subsidiary-operations captured 08-subsidiary-operations.png, 08-subsidiary-operations.annotated.png
+spec=capability-designer: /api/v1/domains $.data.length = 23 (satisfied after 3ms)
+spec=capability-designer: /api/v1/capabilities?domainId=7e87c3da-0f29-4d1d-bd96-a1914ea44fc5 $.data.length = 2 (satisfied after 3ms)
+spec=capability-designer captured 03-capability-designer.png
+spec=cascade-detail-decline-pending: /api/v1/domains $.data.length = 23 (satisfied after 3ms)
+spec=cascade-detail-decline-pending captured 06-cascade-detail-decline-pending.png
+spec=contract-detail: /api/v1/domains $.data.length = 23 (satisfied after 5ms)
+spec=contract-detail captured 07-contract-detail.png
+spec=future-state-designer: /api/v1/domains $.data.length = 23 (satisfied after 3ms)
+spec=future-state-designer: /api/v1/design/decisions?domainId=7e87c3da-0f29-4d1d-bd96-a1914ea44fc5 $.data.length = 6 (satisfied after 1ms)
+spec=future-state-designer captured 02-designer.png
+spec=living-canvas: /api/v1/domains $.data.length = 23 (satisfied after 3ms)
+spec=living-canvas captured 01-living-canvas.png
+spec=operations-path-segment-notfound: /api/v1/domains $.data.length = 23 (satisfied after 3ms)
+spec=operations-path-segment-notfound captured 08a-operations-path-segment-notfound.png
+spec=portfolio-dashboard: /api/v1/domains $.data.length = 23 (satisfied after 6ms)
+spec=portfolio-dashboard captured 05-portfolio-dashboard.png
+spec=portfolio-landing: /api/v1/domains $.data.length = 23 (satisfied after 3ms)
+spec=portfolio-landing captured 04-portfolio-landing.png
+spec=subsidiary-operations: /api/v1/domains $.data.length = 23 (satisfied after 2ms)
+spec=subsidiary-operations annotation n=1 anchor rect x=201 y=736.5
+spec=subsidiary-operations annotation n=2 anchor rect x=201 y=853.5
+spec=subsidiary-operations annotation n=3 anchor rect x=200 y=1526
+spec=subsidiary-operations captured 08-subsidiary-operations.png, 08-subsidiary-operations.annotated.png
+stopped app instance 'verify'
+--- RUN A manifest (aggregate sha256=1be63f915f8975492fc9ea03284c62e5e6d797d8694fa5d722a03e618f862199) ---
+  c29f8716091a3d007dbcd5b4996227b01b957771c248f3b555eb5024821e48e1  01-living-canvas.png
+  7d7b19aaa9eb91c0304d1b07eb7070b4cd943ecbf85ad51ee9e17baa64a1313e  02-designer.png
+  37c16f21203d7fc36e54cf14d3411a9efa4447af2ac9ff140de598dee8ae1061  03-capability-designer.png
+  6be0a8717c3a5f61e6e9b5588de59e4755f70b9e853d478d53a62ed0e48ec305  04-portfolio-landing.png
+  0e3b2580a0c5fec099f71a27f0484162e75e456adbd6e61eb8154a7cc2f7c204  05-portfolio-dashboard.png
+  7a726aee9879d825e10d362f84a3d146bedc606838ccbba36feff58c8599bec5  06-cascade-detail-decline-pending.png
+  27485d14ca6f22316a3c2a1e9e246fa9e4b55037d15c044af14b8e266455c6a0  07-contract-detail.png
+  5e563fd2a067ae39ac4fd5f5799d3f864358c8084957de6aad31418327498473  08-subsidiary-operations.annotated.png
+  8742a3477251fb33e5760dcde4a1e6d9fcb96fdcb9c7dc8f65cc54b3d9da240b  08-subsidiary-operations.png
+  05867a21e7921be784e83c087d3d23598f165d348bdb5c0f25f34ab7636851e4  08a-operations-path-segment-notfound.png
+--- RUN B manifest (aggregate sha256=1be63f915f8975492fc9ea03284c62e5e6d797d8694fa5d722a03e618f862199) ---
+  c29f8716091a3d007dbcd5b4996227b01b957771c248f3b555eb5024821e48e1  01-living-canvas.png
+  7d7b19aaa9eb91c0304d1b07eb7070b4cd943ecbf85ad51ee9e17baa64a1313e  02-designer.png
+  37c16f21203d7fc36e54cf14d3411a9efa4447af2ac9ff140de598dee8ae1061  03-capability-designer.png
+  6be0a8717c3a5f61e6e9b5588de59e4755f70b9e853d478d53a62ed0e48ec305  04-portfolio-landing.png
+  0e3b2580a0c5fec099f71a27f0484162e75e456adbd6e61eb8154a7cc2f7c204  05-portfolio-dashboard.png
+  7a726aee9879d825e10d362f84a3d146bedc606838ccbba36feff58c8599bec5  06-cascade-detail-decline-pending.png
+  27485d14ca6f22316a3c2a1e9e246fa9e4b55037d15c044af14b8e266455c6a0  07-contract-detail.png
+  5e563fd2a067ae39ac4fd5f5799d3f864358c8084957de6aad31418327498473  08-subsidiary-operations.annotated.png
+  8742a3477251fb33e5760dcde4a1e6d9fcb96fdcb9c7dc8f65cc54b3d9da240b  08-subsidiary-operations.png
+  05867a21e7921be784e83c087d3d23598f165d348bdb5c0f25f34ab7636851e4  08a-operations-path-segment-notfound.png
+DOCS-VERIFY PASS runs=2 mode=same-boot files=10 manifest=1be63f915f8975492fc9ea03284c62e5e6d797d8694fa5d722a03e618f862199
+--- 3 warning(s) ---
+  WARN spec=living-canvas expected API failure (Fixture-gated seam S4 — the plan endpoint 404s on every seeded boot (vv-documented); the ribbon deterministically falls back to the reduction thesis. Deliberately NOT worked around in product code.): HTTP 404 http://127.0.0.1:54345/api/v1/transformation/plan?domainId=7e87c3da-0f29-4d1d-bd96-a1914ea44fc5
+
+BUILD SUCCESSFUL in 48s
+16 actionable tasks: 2 executed, 14 up-to-date
+
+=== INVOCATION 3 (plan section 5 lane): .\gradlew.bat docsVerify -PfreshBoots (EXIT=0) ===
+> Task :engine:processResources UP-TO-DATE
+> Task :docs:nodeSetup UP-TO-DATE
+> Task :docs:npmSetup SKIPPED
+> Task :docs:npmInstall UP-TO-DATE
+> Task :app:nodeSetup UP-TO-DATE
+> Task :app:npmSetup SKIPPED
+> Task :app:npmInstall UP-TO-DATE
+> Task :app:frontendBuild UP-TO-DATE
+> Task :app:processResources UP-TO-DATE
+> Task :common:compileJava UP-TO-DATE
+> Task :common:processResources NO-SOURCE
+> Task :common:classes UP-TO-DATE
+> Task :common:jar UP-TO-DATE
+> Task :engine:compileJava UP-TO-DATE
+> Task :engine:classes UP-TO-DATE
+> Task :engine:jar UP-TO-DATE
+> Task :app:compileJava UP-TO-DATE
+> Task :app:classes UP-TO-DATE
+> Task :app:resolveMainClassName UP-TO-DATE
+> Task :app:bootJar UP-TO-DATE
+> Task :docs:playwrightInstall
+
+> Task :docs:docsVerify
+
+> substrate-docs-pipeline@0.1.0 verify
+> node src/cli.js verify --jar=C:\Users\mbgol\dev\doc1-docs-pipeline\substrate/app/build/libs/app-0.1.0.jar --fresh-boots
+
+loaded 9 capture spec(s) from specs/ — schema OK
+  boot-verify-a: /api/v1/domains $.data.length = 23 (satisfied after 13504ms)
+booted app-0.1.0.jar on http://127.0.0.1:61154 (log: build\boot-verify-a.log)
+--- warm-up pass (discarded; cold-app first-session raster effects — see cli.js note) ---
+spec=capability-designer: /api/v1/domains $.data.length = 23 (satisfied after 6ms)
+spec=capability-designer: /api/v1/capabilities?domainId=b07cf821-cf5f-4079-9283-4142635b0830 $.data.length = 2 (satisfied after 12ms)
+spec=capability-designer captured 03-capability-designer.png
+spec=cascade-detail-decline-pending: /api/v1/domains $.data.length = 23 (satisfied after 5ms)
+spec=cascade-detail-decline-pending captured 06-cascade-detail-decline-pending.png
+spec=contract-detail: /api/v1/domains $.data.length = 23 (satisfied after 5ms)
+spec=contract-detail captured 07-contract-detail.png
+spec=future-state-designer: /api/v1/domains $.data.length = 23 (satisfied after 5ms)
+spec=future-state-designer: /api/v1/design/decisions?domainId=b07cf821-cf5f-4079-9283-4142635b0830 $.data.length = 6 (satisfied after 13ms)
+spec=future-state-designer captured 02-designer.png
+spec=living-canvas: /api/v1/domains $.data.length = 23 (satisfied after 4ms)
+spec=living-canvas captured 01-living-canvas.png
+spec=operations-path-segment-notfound: /api/v1/domains $.data.length = 23 (satisfied after 4ms)
+spec=operations-path-segment-notfound captured 08a-operations-path-segment-notfound.png
+spec=portfolio-dashboard: /api/v1/domains $.data.length = 23 (satisfied after 5ms)
+spec=portfolio-dashboard captured 05-portfolio-dashboard.png
+spec=portfolio-landing: /api/v1/domains $.data.length = 23 (satisfied after 4ms)
+spec=portfolio-landing captured 04-portfolio-landing.png
+spec=subsidiary-operations: /api/v1/domains $.data.length = 23 (satisfied after 3ms)
+spec=subsidiary-operations annotation n=1 anchor rect x=201 y=736.5
+spec=subsidiary-operations annotation n=2 anchor rect x=201 y=853.5
+spec=subsidiary-operations annotation n=3 anchor rect x=200 y=1526
+spec=subsidiary-operations captured 08-subsidiary-operations.png, 08-subsidiary-operations.annotated.png
+spec=capability-designer: /api/v1/domains $.data.length = 23 (satisfied after 4ms)
+spec=capability-designer: /api/v1/capabilities?domainId=b07cf821-cf5f-4079-9283-4142635b0830 $.data.length = 2 (satisfied after 3ms)
+spec=capability-designer captured 03-capability-designer.png
+spec=cascade-detail-decline-pending: /api/v1/domains $.data.length = 23 (satisfied after 4ms)
+spec=cascade-detail-decline-pending captured 06-cascade-detail-decline-pending.png
+spec=contract-detail: /api/v1/domains $.data.length = 23 (satisfied after 3ms)
+spec=contract-detail captured 07-contract-detail.png
+spec=future-state-designer: /api/v1/domains $.data.length = 23 (satisfied after 4ms)
+spec=future-state-designer: /api/v1/design/decisions?domainId=b07cf821-cf5f-4079-9283-4142635b0830 $.data.length = 6 (satisfied after 2ms)
+spec=future-state-designer captured 02-designer.png
+spec=living-canvas: /api/v1/domains $.data.length = 23 (satisfied after 2ms)
+spec=living-canvas captured 01-living-canvas.png
+spec=operations-path-segment-notfound: /api/v1/domains $.data.length = 23 (satisfied after 3ms)
+spec=operations-path-segment-notfound captured 08a-operations-path-segment-notfound.png
+spec=portfolio-dashboard: /api/v1/domains $.data.length = 23 (satisfied after 3ms)
+spec=portfolio-dashboard captured 05-portfolio-dashboard.png
+spec=portfolio-landing: /api/v1/domains $.data.length = 23 (satisfied after 4ms)
+spec=portfolio-landing captured 04-portfolio-landing.png
+spec=subsidiary-operations: /api/v1/domains $.data.length = 23 (satisfied after 4ms)
+spec=subsidiary-operations annotation n=1 anchor rect x=201 y=736.5
+spec=subsidiary-operations annotation n=2 anchor rect x=201 y=853.5
+spec=subsidiary-operations annotation n=3 anchor rect x=200 y=1526
+spec=subsidiary-operations captured 08-subsidiary-operations.png, 08-subsidiary-operations.annotated.png
+stopped app instance 'verify-a'
+  boot-verify-b: /api/v1/domains $.data.length = 23 (satisfied after 13321ms)
+booted app-0.1.0.jar on http://127.0.0.1:54532 (log: build\boot-verify-b.log)
+--- warm-up pass (discarded; cold-app first-session raster effects — see cli.js note) ---
+spec=capability-designer: /api/v1/domains $.data.length = 23 (satisfied after 6ms)
+spec=capability-designer: /api/v1/capabilities?domainId=51c723c2-64ea-4061-9703-6716281d394a $.data.length = 2 (satisfied after 13ms)
+spec=capability-designer captured 03-capability-designer.png
+spec=cascade-detail-decline-pending: /api/v1/domains $.data.length = 23 (satisfied after 6ms)
+spec=cascade-detail-decline-pending captured 06-cascade-detail-decline-pending.png
+spec=contract-detail: /api/v1/domains $.data.length = 23 (satisfied after 5ms)
+spec=contract-detail captured 07-contract-detail.png
+spec=future-state-designer: /api/v1/domains $.data.length = 23 (satisfied after 4ms)
+spec=future-state-designer: /api/v1/design/decisions?domainId=51c723c2-64ea-4061-9703-6716281d394a $.data.length = 6 (satisfied after 5ms)
+spec=future-state-designer captured 02-designer.png
+spec=living-canvas: /api/v1/domains $.data.length = 23 (satisfied after 3ms)
+spec=living-canvas captured 01-living-canvas.png
+spec=operations-path-segment-notfound: /api/v1/domains $.data.length = 23 (satisfied after 4ms)
+spec=operations-path-segment-notfound captured 08a-operations-path-segment-notfound.png
+spec=portfolio-dashboard: /api/v1/domains $.data.length = 23 (satisfied after 4ms)
+spec=portfolio-dashboard captured 05-portfolio-dashboard.png
+spec=portfolio-landing: /api/v1/domains $.data.length = 23 (satisfied after 3ms)
+spec=portfolio-landing captured 04-portfolio-landing.png
+spec=subsidiary-operations: /api/v1/domains $.data.length = 23 (satisfied after 3ms)
+spec=subsidiary-operations annotation n=1 anchor rect x=201 y=736.5
+spec=subsidiary-operations annotation n=2 anchor rect x=201 y=853.5
+spec=subsidiary-operations annotation n=3 anchor rect x=200 y=1526
+spec=subsidiary-operations captured 08-subsidiary-operations.png, 08-subsidiary-operations.annotated.png
+spec=capability-designer: /api/v1/domains $.data.length = 23 (satisfied after 3ms)
+spec=capability-designer: /api/v1/capabilities?domainId=51c723c2-64ea-4061-9703-6716281d394a $.data.length = 2 (satisfied after 2ms)
+spec=capability-designer captured 03-capability-designer.png
+spec=cascade-detail-decline-pending: /api/v1/domains $.data.length = 23 (satisfied after 3ms)
+spec=cascade-detail-decline-pending captured 06-cascade-detail-decline-pending.png
+spec=contract-detail: /api/v1/domains $.data.length = 23 (satisfied after 3ms)
+spec=contract-detail captured 07-contract-detail.png
+spec=future-state-designer: /api/v1/domains $.data.length = 23 (satisfied after 3ms)
+spec=future-state-designer: /api/v1/design/decisions?domainId=51c723c2-64ea-4061-9703-6716281d394a $.data.length = 6 (satisfied after 3ms)
+spec=future-state-designer captured 02-designer.png
+spec=living-canvas: /api/v1/domains $.data.length = 23 (satisfied after 2ms)
+spec=living-canvas captured 01-living-canvas.png
+spec=operations-path-segment-notfound: /api/v1/domains $.data.length = 23 (satisfied after 3ms)
+spec=operations-path-segment-notfound captured 08a-operations-path-segment-notfound.png
+spec=portfolio-dashboard: /api/v1/domains $.data.length = 23 (satisfied after 4ms)
+spec=portfolio-dashboard captured 05-portfolio-dashboard.png
+spec=portfolio-landing: /api/v1/domains $.data.length = 23 (satisfied after 4ms)
+spec=portfolio-landing captured 04-portfolio-landing.png
+spec=subsidiary-operations: /api/v1/domains $.data.length = 23 (satisfied after 3ms)
+spec=subsidiary-operations annotation n=1 anchor rect x=201 y=736.5
+spec=subsidiary-operations annotation n=2 anchor rect x=201 y=853.5
+spec=subsidiary-operations annotation n=3 anchor rect x=200 y=1526
+spec=subsidiary-operations captured 08-subsidiary-operations.png, 08-subsidiary-operations.annotated.png
+stopped app instance 'verify-b'
+--- RUN A manifest (aggregate sha256=1be63f915f8975492fc9ea03284c62e5e6d797d8694fa5d722a03e618f862199) ---
+  c29f8716091a3d007dbcd5b4996227b01b957771c248f3b555eb5024821e48e1  01-living-canvas.png
+  7d7b19aaa9eb91c0304d1b07eb7070b4cd943ecbf85ad51ee9e17baa64a1313e  02-designer.png
+  37c16f21203d7fc36e54cf14d3411a9efa4447af2ac9ff140de598dee8ae1061  03-capability-designer.png
+  6be0a8717c3a5f61e6e9b5588de59e4755f70b9e853d478d53a62ed0e48ec305  04-portfolio-landing.png
+  0e3b2580a0c5fec099f71a27f0484162e75e456adbd6e61eb8154a7cc2f7c204  05-portfolio-dashboard.png
+  7a726aee9879d825e10d362f84a3d146bedc606838ccbba36feff58c8599bec5  06-cascade-detail-decline-pending.png
+  27485d14ca6f22316a3c2a1e9e246fa9e4b55037d15c044af14b8e266455c6a0  07-contract-detail.png
+  5e563fd2a067ae39ac4fd5f5799d3f864358c8084957de6aad31418327498473  08-subsidiary-operations.annotated.png
+  8742a3477251fb33e5760dcde4a1e6d9fcb96fdcb9c7dc8f65cc54b3d9da240b  08-subsidiary-operations.png
+  05867a21e7921be784e83c087d3d23598f165d348bdb5c0f25f34ab7636851e4  08a-operations-path-segment-notfound.png
+--- RUN B manifest (aggregate sha256=1be63f915f8975492fc9ea03284c62e5e6d797d8694fa5d722a03e618f862199) ---
+  c29f8716091a3d007dbcd5b4996227b01b957771c248f3b555eb5024821e48e1  01-living-canvas.png
+  7d7b19aaa9eb91c0304d1b07eb7070b4cd943ecbf85ad51ee9e17baa64a1313e  02-designer.png
+  37c16f21203d7fc36e54cf14d3411a9efa4447af2ac9ff140de598dee8ae1061  03-capability-designer.png
+  6be0a8717c3a5f61e6e9b5588de59e4755f70b9e853d478d53a62ed0e48ec305  04-portfolio-landing.png
+  0e3b2580a0c5fec099f71a27f0484162e75e456adbd6e61eb8154a7cc2f7c204  05-portfolio-dashboard.png
+  7a726aee9879d825e10d362f84a3d146bedc606838ccbba36feff58c8599bec5  06-cascade-detail-decline-pending.png
+  27485d14ca6f22316a3c2a1e9e246fa9e4b55037d15c044af14b8e266455c6a0  07-contract-detail.png
+  5e563fd2a067ae39ac4fd5f5799d3f864358c8084957de6aad31418327498473  08-subsidiary-operations.annotated.png
+  8742a3477251fb33e5760dcde4a1e6d9fcb96fdcb9c7dc8f65cc54b3d9da240b  08-subsidiary-operations.png
+  05867a21e7921be784e83c087d3d23598f165d348bdb5c0f25f34ab7636851e4  08a-operations-path-segment-notfound.png
+DOCS-VERIFY PASS runs=2 mode=fresh-boots files=10 manifest=1be63f915f8975492fc9ea03284c62e5e6d797d8694fa5d722a03e618f862199
+--- 4 warning(s) ---
+  WARN spec=living-canvas expected API failure (Fixture-gated seam S4 — the plan endpoint 404s on every seeded boot (vv-documented); the ribbon deterministically falls back to the reduction thesis. Deliberately NOT worked around in product code.): HTTP 404 http://127.0.0.1:61154/api/v1/transformation/plan?domainId=b07cf821-cf5f-4079-9283-4142635b0830
+  WARN spec=living-canvas expected API failure (Fixture-gated seam S4 — the plan endpoint 404s on every seeded boot (vv-documented); the ribbon deterministically falls back to the reduction thesis. Deliberately NOT worked around in product code.): HTTP 404 http://127.0.0.1:54532/api/v1/transformation/plan?domainId=51c723c2-64ea-4061-9703-6716281d394a
+
+BUILD SUCCESSFUL in 1m 7s
+16 actionable tasks: 2 executed, 14 up-to-date

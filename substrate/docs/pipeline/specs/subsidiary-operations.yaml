@@ -1,24 +1,18 @@
-# Plan §3 worked example (complex: pre-step + callouts) — S1 VARIANT.
+# Plan §3 worked example (complex: pre-step + callouts) — S2 FINAL FORM.
 #
-# S1 deviation (plan §2: S1 pilots use only EXISTING selectors; the testids in
-# the §3 worked example land in S2): every selector below targets markup that
-# ships today. S2 swaps them for the §3 originals once the additive testids
-# exist:
-#   [data-agents-source="live"]                  <- today: [data-banner-provenance="live"]
-#                                                   (layout-level live marker — proves the
-#                                                   stats API is live, NOT the agents call;
-#                                                   the agents-specific marker is the §4
-#                                                   plan-addition attr, S2)
-#   [data-testid="agent-row"][data-agent-key=..] <- today: button[aria-label="Expand/Collapse
-#                                                   Pre-Visit Intake Assistant deployment detail"]
-#                                                   (name-based; seed-stable: name + deployedAt
-#                                                   come from demopack/beacon-agents.json and the
-#                                                   seeder's stepping fixed clock)
-#   [data-testid="agent-deployment-panel"]       <- today: [role="region"][aria-label="Pre-Visit
-#                                                   Intake Assistant deployment detail"]
-#   [data-testid="finding-card"]                 <- today: section[aria-label="Operations"]
-#                                                   article.bg-surface-raised (class-coupled;
-#                                                   acceptable only as an S1 pilot shim)
+# S1 shipped this spec on name-based/aria shims because the testids did not
+# exist yet; S2 lands the additive attributes (plan §4 items 30/31/33/35) and
+# swaps every selector to the §3 originals:
+#   [data-agents-source="live"]                  — the agents-specific
+#       provenance marker (plan addition): the ONLY way the spec can refuse
+#       the silent live→fixture fallback on this surface (agentData.ts).
+#       S1's banner-level [data-banner-provenance="live"] proved the stats
+#       API only.
+#   [data-testid="agent-row"][data-agent-key="a-pre-visit"] — agent_key is
+#       seed-stable fixture parity (AgentFleetRowDto.id ← agent_key), never a
+#       per-boot UUID (P-3).
+#   [data-testid="agent-deployment-panel"], [data-testid="finding-card"] —
+#       replace the role/aria and class-coupled S1 shims.
 id: subsidiary-operations
 title: Operations tab — agent fleet with deployment detail expanded
 topic: operator/06-agent-lifecycle#observe-in-ui
@@ -33,18 +27,18 @@ localStorage: { substrate-canvas-welcomed-v1: "1" }
 viewport: { width: 1536, height: 2000 }
 waits:
   - api: { get: /api/v1/domains, until: { path: "$.data.length", equals: 23 }, timeoutMs: 60000 }
-  - selector: '[data-banner-provenance="live"]'   # S1 live-mode assertion (see header note)
-  - selector: 'button[aria-label="Expand Pre-Visit Intake Assistant deployment detail"]'
+  - selector: '[data-agents-source="live"]'     # live-mode assertion (plan §4 item 35)
+  - selector: '[data-testid="agent-row"][data-agent-key="a-pre-visit"]'
 preSteps:
-  - click: 'button[aria-label="Expand Pre-Visit Intake Assistant deployment detail"]'
-  - waitSelector: '[role="region"][aria-label="Pre-Visit Intake Assistant deployment detail"]'
+  - click: '[data-testid="agent-row"][data-agent-key="a-pre-visit"]'
+  - waitSelector: '[data-testid="agent-deployment-panel"]'
 capture: { mode: fullPage }
 annotations:
-  - { n: 1, anchor: 'button[aria-label="Collapse Pre-Visit Intake Assistant deployment detail"]',
+  - { n: 1, anchor: '[data-testid="agent-row"][data-agent-key="a-pre-visit"]',
       offset: { x: -18, y: 4 }, text: "Lifecycle badge: Operating / Shadow / In intervention / Paused" }
-  - { n: 2, anchor: '[role="region"][aria-label="Pre-Visit Intake Assistant deployment detail"]',
+  - { n: 2, anchor: '[data-testid="agent-deployment-panel"]',
       offset: { x: -18, y: 8 }, text: "Deployment detail: criteria and oversight chain" }
-  - { n: 3, anchor: 'section[aria-label="Operations"] article.bg-surface-raised',
+  - { n: 3, anchor: '[data-testid="finding-card"]',
       offset: { x: -18, y: 4 }, text: "Open finding — 'Surfaced N days ago' is fixture-clock-pinned" }
 output: 08-subsidiary-operations.png
 determinism: seeded

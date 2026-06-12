@@ -84,6 +84,7 @@ function CanvasSystemNodeComponent({ data, selected }: NodeProps<NodeType>) {
       )}
 
       <div
+        data-testid="canvas-system-node"
         className={cn(
           'relative w-[240px] rounded-xl border-l-4 bg-surface-raised/90 ring-1 ring-border backdrop-blur-sm shadow-xl',
           style.accent,

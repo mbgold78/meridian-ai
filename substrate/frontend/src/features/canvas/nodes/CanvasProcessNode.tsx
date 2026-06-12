@@ -33,6 +33,7 @@ function CanvasProcessNodeComponent({ data }: NodeProps<NodeType>) {
       )}
 
       <div
+        data-testid="canvas-process-node"
         className={cn(
           'relative w-[200px] rounded-xl border border-dashed border-amber-400/40 bg-amber-500/5 px-3 py-2.5',
           high && !data.retired && 'shadow-[0_0_18px_-4px_rgba(251,191,36,0.45)]',

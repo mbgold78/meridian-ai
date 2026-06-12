@@ -9,7 +9,10 @@ import { Link, useLocation } from 'react-router-dom';
 export function NotFound() {
   const { pathname } = useLocation();
   return (
-    <div className="flex h-screen flex-col items-center justify-center gap-4 bg-background text-foreground">
+    <div
+      data-testid="not-found"
+      className="flex h-screen flex-col items-center justify-center gap-4 bg-background text-foreground"
+    >
       <p className="text-sm uppercase tracking-widest text-foreground-muted">404</p>
       <h1 className="text-xl font-semibold">There is nothing at {pathname}</h1>
       <div className="flex gap-6 text-sm">

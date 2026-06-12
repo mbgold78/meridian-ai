@@ -11,6 +11,7 @@ export function DnaPill() {
   return (
     <div className="pointer-events-auto absolute left-4 top-16 z-20">
       <button
+        data-testid="dna-pill"
         onClick={() => setOpen((v) => !v)}
         className="flex items-center gap-1.5 rounded-full border border-primary/20 bg-surface-raised/60 px-3 py-1 text-[10px] font-semibold uppercase tracking-widest text-primary/70 backdrop-blur-xl transition-all hover:border-primary/50 hover:text-primary"
       >

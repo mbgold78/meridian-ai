@@ -117,6 +117,8 @@ export function DetailDrawer({
       <AnimatePresence>
         {open && (
           <motion.aside
+            data-testid="drawer-panel"
+            data-tab={tab}
             initial={{ x: '100%', opacity: 0 }}
             animate={{ x: 0, opacity: 1 }}
             exit={{ x: '100%', opacity: 0 }}

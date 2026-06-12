@@ -77,6 +77,8 @@ export function RisksTab({
             return (
               <div
                 key={f.id}
+                data-testid="canvas-finding-row"
+                data-finding-id={f.id}
                 className="overflow-hidden rounded-lg border border-border/50 bg-foreground/[0.03] transition-colors hover:bg-foreground/[0.06]"
               >
                 <button
@@ -102,7 +104,10 @@ export function RisksTab({
                   </div>
                 </button>
                 {isOpen && (
-                  <div className="border-t border-border/50 bg-foreground/[0.02] px-3 py-2.5">
+                  <div
+                    data-testid="canvas-finding-detail"
+                    className="border-t border-border/50 bg-foreground/[0.02] px-3 py-2.5"
+                  >
                     <p className="text-[12px] leading-relaxed text-foreground-muted">{f.description}</p>
                     {f.recommendation && (
                       <p className="mt-2 rounded border-l-2 border-primary bg-primary/5 px-2 py-1.5 text-[11px] italic text-primary">

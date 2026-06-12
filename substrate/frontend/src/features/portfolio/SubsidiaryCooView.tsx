@@ -235,6 +235,7 @@ function PortfolioContextBand({ sub }: { sub: BeaconSubsidiary }) {
           count={opportunityCount}
         />
         <BandSegment
+          testId="federation-invitations-segment"
           text={
             federationInvitations === 1
               ? '1 federation invitation pending'
@@ -261,12 +262,14 @@ interface BandSegmentProps {
   count?: number;
   /** When provided alongside a non-zero count, the segment navigates on click. */
   onClick?: () => void;
+  /** Optional data-testid (DOC-1 §4 item 46 — count-interpolated text). */
+  testId?: string;
 }
 
-function BandSegment({ text, count, onClick }: BandSegmentProps) {
+function BandSegment({ text, count, onClick, testId }: BandSegmentProps) {
   const isLink = typeof count === 'number' && count > 0;
   return (
-    <li className="flex items-center gap-2">
+    <li data-testid={testId} className="flex items-center gap-2">
       {isLink ? (
         <button
           type="button"

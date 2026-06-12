@@ -46,7 +46,10 @@ export function ContractDetailView() {
   const back = resolveBackLink(fromParam);
 
   return (
-    <div className="mx-auto max-w-[1440px]">
+    // data-contract-source mirrors the shipped data-stats-source provenance
+    // pattern (DOC-1 §5 live-mode assertion): 'live' only when the detail
+    // came from GET /contracts/{idOrKey}, never from the fixture fallback.
+    <div data-contract-source={status} className="mx-auto max-w-[1440px]">
       <ContractBackLink back={back} />
       <ContractHeader contract={contract} />
       <div className="px-8 pb-12 pt-8">
@@ -309,7 +312,10 @@ function ContractFooter({ back }: { back: BackLink }) {
   // treatments are preserved so the surface still communicates the
   // substrate-supports-this claim.
   return (
-    <footer className="mt-10 rounded-md border border-border bg-surface p-6">
+    <footer
+      data-testid="contract-actions"
+      className="mt-10 rounded-md border border-border bg-surface p-6"
+    >
       <p className="text-[11px] font-medium uppercase tracking-[0.05em] text-foreground-muted">
         Available actions
       </p>
@@ -319,6 +325,7 @@ function ContractFooter({ back }: { back: BackLink }) {
       </p>
       <div className="mt-4 flex flex-wrap items-center gap-3">
         <button
+          data-testid="contract-action-review"
           type="button"
           disabled
           aria-disabled="true"
@@ -331,6 +338,7 @@ function ContractFooter({ back }: { back: BackLink }) {
           Review proposal
         </button>
         <button
+          data-testid="contract-action-decline"
           type="button"
           disabled
           aria-disabled="true"

@@ -385,7 +385,13 @@ export function LivingCanvas() {
   };
 
   return (
-    <div className="relative h-full w-full overflow-hidden bg-background">
+    // data-canvas-ready reflects the EXISTING nodes.length>0 state (DOC-1 §4
+    // item 1): the only deterministic wait gate for the async ELK layout.
+    <div
+      data-testid="living-canvas"
+      data-canvas-ready={nodes.length > 0}
+      className="relative h-full w-full overflow-hidden bg-background"
+    >
       {/* Subtle gradient backdrop — dimmer than before so tiles read clearly */}
       <div
         className="pointer-events-none absolute inset-0"

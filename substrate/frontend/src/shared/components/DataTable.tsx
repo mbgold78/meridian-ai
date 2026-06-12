@@ -108,6 +108,7 @@ export function DataTable<T extends Record<string, unknown>>({
               sortedData.map((item) => (
                 <tr
                   key={keyExtractor(item)}
+                  data-row-id={keyExtractor(item)}
                   className={cn(
                     'transition-colors',
                     onRowClick && 'cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-900'

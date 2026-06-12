@@ -12,7 +12,7 @@ import { schemaFailure } from './errors.js';
 const TOP_KEYS = new Set([
   'id', 'title', 'topic', 'route', 'resolve', 'persona', 'localStorage',
   'viewport', 'waits', 'preSteps', 'capture', 'annotations', 'output',
-  'determinism', 'liveModeExempt',
+  'determinism', 'liveModeExempt', 'allowedApiFailures',
 ]);
 const PERSONAS = new Set(['L1_EXECUTIVE', 'L3_ANALYST']);
 const DETERMINISM = new Set(['static', 'seeded', 'animated']);
@@ -115,6 +115,23 @@ export function validateSpec(spec, fileName) {
   );
   if (!hasLive && !isNonEmptyString(spec.liveModeExempt)) {
     fail(errors, `no live-mode assertion in 'waits' (selector matching ${LIVE_MARKER_RE}) and no 'liveModeExempt: <reason>'`);
+  }
+
+  // allowedApiFailures (S2): some surfaces deterministically trigger an
+  // expected non-2xx app-API response on every boot (e.g. the canvas family's
+  // fixture-gated GET /transformation/plan 404 — seam S4, vv-documented).
+  // Each entry needs a substring match AND a written reason; anything not
+  // matched still fails the capture loudly (plan §5 gap 3 stays the default).
+  if (spec.allowedApiFailures !== undefined) {
+    if (!Array.isArray(spec.allowedApiFailures)) {
+      fail(errors, `'allowedApiFailures' must be a list`);
+    } else {
+      spec.allowedApiFailures.forEach((e, i) => {
+        if (!isPlainObject(e) || !isNonEmptyString(e.match) || !isNonEmptyString(e.reason)) {
+          fail(errors, `allowedApiFailures[${i}] needs {match: <substring>, reason: <why this failure is expected>}`);
+        }
+      });
+    }
   }
 
   if (spec.preSteps !== undefined) {

@@ -78,7 +78,7 @@ function ImpactTable({ caption, children }: { caption: string; children: React.R
 
 export function ImpactAnalysisPanel({ result, isLoading, error, onClose }: ImpactAnalysisPanelProps) {
   return (
-    <Card className="mt-4">
+    <Card testId="impact-analysis-panel" className="mt-4">
       <CardHeader>
         <CardTitle>Impact Analysis</CardTitle>
         <button

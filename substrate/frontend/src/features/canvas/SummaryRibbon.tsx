@@ -45,9 +45,13 @@ export function SummaryRibbon({
 
   return (
     <div className="pointer-events-none absolute left-1/2 top-5 z-10 flex w-[min(820px,calc(100vw-14rem))] -translate-x-1/2 flex-col items-center">
-      <div className="pointer-events-auto rounded-2xl border border-border bg-surface-raised/80 px-5 py-2.5 shadow-2xl backdrop-blur-xl">
+      <div
+        data-testid="canvas-summary-ribbon"
+        className="pointer-events-auto rounded-2xl border border-border bg-surface-raised/80 px-5 py-2.5 shadow-2xl backdrop-blur-xl"
+      >
         <div className="flex items-center gap-5">
           <Stat
+            stat="systems"
             value={lens === 'target' ? stats.targetSystems : stats.systems}
             label="systems"
             hint={
@@ -60,9 +64,10 @@ export function SummaryRibbon({
             accent={lens === 'target' ? 'text-emerald-300' : 'text-foreground'}
           />
           <Divider />
-          <Stat value={stats.processes} label="manual procs" />
+          <Stat stat="manual-procs" value={stats.processes} label="manual procs" />
           <Divider />
           <Stat
+            stat="open-risks"
             value={stats.findings}
             label="open risks"
             hint={`${stats.highFindings} high`}
@@ -70,6 +75,7 @@ export function SummaryRibbon({
           />
           <Divider />
           <Stat
+            stat="annual-savings"
             value={stats.annualSavings}
             label="annual save target"
             // Derived from ReductionService's MARKED-FOR-REPLACEMENT POC
@@ -101,18 +107,21 @@ function Divider() {
 }
 
 function Stat({
+  stat,
   value,
   label,
   hint,
   accent = 'text-foreground',
 }: {
+  /** Machine-readable stat key (DOC-1 §4 item 2) — labels stay human-only. */
+  stat: string;
   value: number | string;
   label: string;
   hint?: string;
   accent?: string;
 }) {
   return (
-    <div className="flex items-baseline gap-2">
+    <div data-stat={stat} className="flex items-baseline gap-2">
       <span className={`text-2xl font-black leading-none ${accent}`}>{value}</span>
       <div className="flex flex-col leading-tight">
         <span className="text-[10px] font-bold uppercase tracking-widest text-foreground-subtle">

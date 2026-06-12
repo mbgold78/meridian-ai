@@ -1,0 +1,34 @@
+# Legacy scene g (vv 07-contract-detail.png) — the ACTIVE co-tribal contract.
+#
+# Persona: client-surface (L1_EXECUTIVE).
+#
+# Identity: the route resolves by contractKey — boot-stable, never a UUID
+# (P-3). Live discriminator: data-contract-source="live" (additive provenance
+# attr, S2 — same silent live→fixture fallback idiom as agents/cascades).
+#
+# The footer's Review/Decline affordances are deliberately inert (queue #28
+# pattern; flows unbuilt) — their testids are forward-stable names that the
+# real verb PRs will inherit (plan §4 items 25/26). The surface shows
+# "Proposed Apr 1 2026" with no lifecycle-status indicator even though the
+# contract is ACTIVE — deliberate per contractData.ts, documented in vv, and
+# pinned as-is here (FILE-5 discipline: capture current truth; re-capture is
+# one command when copy changes).
+#
+# Viewport deviation (recorded): tall viewport renders the whole scene
+# (header, context, parties/commitments, monitor mechanism, decline triggers,
+# action footer) scroll-free; the vv original was viewport-cropped at 960.
+id: contract-detail
+title: Coordination contract detail — terms, monitoring, inert Review/Decline
+topic: client/coo-quick-guide#contract-detail
+route: /portfolio/contract/co-tribal-knowledge-depopulation
+persona: L1_EXECUTIVE
+viewport: { width: 1536, height: 2400 }
+waits:
+  - api: { get: /api/v1/domains, until: { path: "$.data.length", equals: 23 }, timeoutMs: 60000 }
+  - selector: '[data-contract-source="live"]'
+  - selector: '[data-testid="contract-actions"]'
+  - selector: '[data-testid="contract-action-review"]'
+  - selector: '[data-testid="contract-action-decline"]'
+capture: { mode: fullPage }
+output: 07-contract-detail.png
+determinism: seeded

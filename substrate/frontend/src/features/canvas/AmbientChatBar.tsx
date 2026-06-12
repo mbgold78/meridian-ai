@@ -204,6 +204,7 @@ export function AmbientChatBar({
           </svg>
         </div>
         <textarea
+          data-testid="chat-input"
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKey}

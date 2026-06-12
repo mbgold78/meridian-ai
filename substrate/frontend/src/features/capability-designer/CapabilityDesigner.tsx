@@ -162,6 +162,7 @@ export function CapabilityDesigner() {
             Draft from Universe
           </Button>
           <Button
+            data-testid="create-capability"
             size="sm"
             onClick={() => setCreateOpen(true)}
             disabled={!domainId}

@@ -91,7 +91,10 @@ export function OperationsTab({ sub }: { sub: BeaconSubsidiary }) {
         </div>
       </div>
 
-      <div>
+      {/* data-agents-source (DOC-1 §4 plan addition): mirrors the shipped
+          data-stats-source pattern — the only way a machine reader can refuse
+          the silent live→fixture fallback on this surface (agentData.ts). */}
+      <div data-agents-source={source}>
         <header className="mb-4">
           <h3 className="text-[18px] font-semibold leading-[24px] text-foreground">
             Recent agent activity
@@ -207,7 +210,11 @@ function AgentActivityRow({ agent, source, isExpanded, onToggle }: AgentActivity
   const hasDeployment = source === 'live' || Boolean(agent.deploymentCriteria);
   const Caret = isExpanded ? CaretDown : CaretRight;
   return (
+    // data-agent-key: AgentFleetRowDto.id IS the seed-stable agent_key
+    // ("a-pre-visit", fixture parity) — never a per-boot UUID.
     <button
+      data-testid="agent-row"
+      data-agent-key={agent.id}
       type="button"
       onClick={onToggle}
       aria-expanded={isExpanded}
@@ -279,6 +286,7 @@ function AgentDeploymentPanel({
     source === 'live' ? (detail?.oversightChain ?? agent.oversightChain) : agent.oversightChain;
   return (
     <div
+      data-testid="agent-deployment-panel"
       role="region"
       aria-label={`${agent.name} deployment detail`}
       className="border-t border-border bg-surface-raised px-4 py-5"
@@ -441,7 +449,11 @@ function FindingCard({ finding, sub }: FindingCardProps) {
   }, [finding, sub]);
 
   return (
-    <article className="flex flex-col rounded-md border border-border bg-surface-raised p-5">
+    <article
+      data-testid="finding-card"
+      data-finding-id={finding.id}
+      className="flex flex-col rounded-md border border-border bg-surface-raised p-5"
+    >
       <header className="flex items-start justify-between gap-3">
         <h4 className="text-[18px] font-semibold leading-[24px] text-foreground">
           {finding.title}

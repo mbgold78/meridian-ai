@@ -84,8 +84,27 @@ async function main() {
       return writeManifest(outDir);
     };
 
+    // Warm-up pass (S2 finding, boot mode only — discarded, never compared).
+    // Against a FRESHLY BOOTED app the very first capture sweep produces a
+    // reproducibly DIFFERENT text rasterization on one canvas surface
+    // (01-living-canvas SummaryRibbon: identical glyphs, two AA weights —
+    // byte-stable across separate JVMs/browsers per state, so it is a
+    // systematic first-session effect of cold-app latency on Chromium's
+    // text raster path, not flake; --disable-lcd-text did NOT remove it).
+    // Empirically every sweep against a warmed app is byte-identical, so
+    // the gate warms each boot with one full discarded sweep first; the
+    // canonical pixels are the warm-state pixels. Attach mode (--base-url)
+    // skips this — debugging reuses an already-warm instance.
+    const runWarmup = async (baseUrl) => {
+      log('--- warm-up pass (discarded; cold-app first-session raster effects — see cli.js note) ---');
+      await runPass(baseUrl, fromPipelineRoot('build/verify/warmup'));
+    };
+
     if (command === 'capture') {
-      const m = await withApp('capture', (baseUrl) => runPass(baseUrl, capturesDir));
+      const m = await withApp('capture', async (baseUrl) => {
+        if (!values['base-url']) await runWarmup(baseUrl);
+        return runPass(baseUrl, capturesDir);
+      });
       printManifest('CAPTURE', m);
       log(`DOCS-CAPTURE PASS files=${Object.keys(m.manifest.files).length} manifest=${m.aggregate}`);
     } else {
@@ -94,10 +113,13 @@ async function main() {
       const dirB = fromPipelineRoot('build/verify/run-b');
       let a, b;
       if (values['fresh-boots'] && !values['base-url']) {
-        a = await withApp('verify-a', (u) => runPass(u, dirA));
-        b = await withApp('verify-b', (u) => runPass(u, dirB));
+        a = await withApp('verify-a', async (u) => { await runWarmup(u); return runPass(u, dirA); });
+        b = await withApp('verify-b', async (u) => { await runWarmup(u); return runPass(u, dirB); });
       } else {
-        [a, b] = await withApp('verify', async (u) => [await runPass(u, dirA), await runPass(u, dirB)]);
+        [a, b] = await withApp('verify', async (u) => {
+          if (!values['base-url']) await runWarmup(u);
+          return [await runPass(u, dirA), await runPass(u, dirB)];
+        });
       }
       printManifest('RUN A', a);
       printManifest('RUN B', b);

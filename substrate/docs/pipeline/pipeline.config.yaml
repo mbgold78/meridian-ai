@@ -51,6 +51,16 @@ browser:
     - --disable-gpu
     - --disable-partial-raster
     - --disable-skia-runtime-opts
+    # Empirical S2 finding (01-living-canvas): the SummaryRibbon — text on a
+    # translucent backdrop-blur card — captured byte-stable within each pass
+    # but BIMODAL across passes against a freshly-booted app: identical
+    # glyphs, two anti-aliasing weights (delta histogram 594 px ≤8 / 1163 px
+    # ≤40 / 380 px >40, bbox 431,33–840,66 = the ribbon strip only). That is
+    # Chromium's per-layer "can use LCD text" heuristic flipping with
+    # compositor timing (subpixel AA is disabled on non-opaque composited
+    # layers; the decision can differ per raster pass). Forcing grayscale
+    # text AA everywhere removes the heuristic from the pixel pipeline.
+    - --disable-lcd-text
 
 storage:
   # Documented localStorage key contract (ratification P-5). Persona is ALWAYS

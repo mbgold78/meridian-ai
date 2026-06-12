@@ -19,6 +19,7 @@ export function CompletenessBadge({
 
   return (
     <motion.button
+      data-testid="completeness-badge"
       layout
       initial={{ opacity: 0, y: -6 }}
       animate={{ opacity: 1, y: 0 }}
