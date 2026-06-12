@@ -41,17 +41,25 @@ so what you see matches this guide byte for byte. Tasks 2–3 use the
 one shared database.
 
 **Identity on writes.** The API takes actor identity from persona headers
-(spoofable by design in the current phase; OIDC replaces the source later):
+(spoofable by design in the current phase; OIDC replaces the source later).
+The REST blocks in tasks 4–7 are bash (Git Bash on Windows; any shell on
+macOS/Linux) and assume this session preamble — paste it once per shell:
 
-```text
--H "Content-Type: application/json"
--H "X-Persona-Id: operating-partner"
--H "X-Persona-Label: Operating Partner"
+```bash
+BASE=http://localhost:8080/api/v1        # substitute your port
+H1='Content-Type: application/json'
+H2='X-Persona-Id: operating-partner'
+H3='X-Persona-Label: Operating Partner'
+uuid() { py -3 -c "import uuid; print(uuid.uuid4())" 2>/dev/null \
+  || python3 -c "import uuid; print(uuid.uuid4())" 2>/dev/null || uuidgen; }
 ```
 
 Every state-changing request body also requires an `idempotencyKey` (any
 unique string; replaying the same key returns the original result without
-duplicating the action).
+duplicating the action). The task blocks mint one with `$(uuid)` — defined
+above rather than `uuidgen` because `uuidgen` does not exist on stock
+Windows; the helper tries the Python launcher first, exactly like the
+committed evidence script (`run-s4-operator-beats.sh`).
 
 **Terminal blocks are evidence, not illustrations.** Every captured output
 in these tasks is quoted from a committed acceptance transcript under

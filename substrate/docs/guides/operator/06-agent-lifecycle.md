@@ -24,7 +24,7 @@ affordance ships ahead of its honest-disclosure plumbing).
 
    ```bash
    curl -s -X POST -H "$H1" -H 'X-Persona-Label: Curasync RCM team' "$BASE/agents" -d "{
-     \"idempotencyKey\":\"$(uuidgen)\",\"domainId\":\"$DOMAIN_ID\",\"agentKey\":\"a-docs-pilot\",
+     \"idempotencyKey\":\"$(uuid)\",\"domainId\":\"$DOMAIN_ID\",\"agentKey\":\"a-docs-pilot\",
      \"name\":\"Claims Pre-fill Pilot\",\"roleDescription\":\"Pre-fills compliance forms from claim context\",
      \"executionLocus\":\"substrate-mcp\",\"deployedByLabel\":\"Curasync RCM team\",
      \"deploymentCriteria\":\"Operate within the governed gateway scope, target 90% pre-fill accuracy\",
@@ -112,7 +112,7 @@ affordance ships ahead of its honest-disclosure plumbing).
 
    ```bash
    curl -s -X POST … "$BASE/agents/a-docs-pilot/pause?domainId=$DOMAIN_ID" \
-     -d "{\"idempotencyKey\":\"$(uuidgen)\",\"reason\":\"Monthly mandate-gate review window\"}"
+     -d "{\"idempotencyKey\":\"$(uuid)\",\"reason\":\"Monthly mandate-gate review window\"}"
    ```
 
    ```json

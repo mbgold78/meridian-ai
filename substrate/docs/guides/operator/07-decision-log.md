@@ -32,6 +32,11 @@ re-verifies every domain chain.
    the same chain as the design decisions — cross-engine accountability in
    one record.
 
+   Hash values are per-boot: a fresh seed mints a new chain, so your
+   `prev=`/`curr=` prefixes will differ from this committed transcript. The
+   types, statuses, titles, ordering, and the `GENESIS` anchor are what must
+   match — and the verify report below is boot-stable.
+
 2. Verify on demand:
 
    ```text

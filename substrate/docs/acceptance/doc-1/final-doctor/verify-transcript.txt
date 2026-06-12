@@ -1,0 +1,132 @@
+DOC-1 FINAL DOCTOR — milestone acceptance walk (plan §8 A1-A6), 2026-06-12.
+Platform: Windows 11 local worktree C:\Users\mbgol\dev\doc1-docs-pipeline @ doc-1/docs-pipeline.
+All output below is pasted from real runs executed during this doctoring session.
+
+== CRITERION 1 — clean-ish verification, docsVerify twice, identical hashes ===============
+
+  $ git clean -ndx substrate/docs/pipeline
+  Would remove substrate/docs/pipeline/build/
+  Would remove substrate/docs/pipeline/node_modules/         <- exactly the sanctioned scope
+  $ git clean -dfx substrate/docs/pipeline                   (fresh npm ci forced)
+
+  Run 1: .\gradlew.bat docsVerify  -> EXIT=0, BUILD SUCCESSFUL in 1m 10s
+  DOCS-VERIFY PASS runs=2 mode=same-boot files=21 skipped=12 manifest=97110215163db5084b1b6ad7b5a3ea4c5972ca2b89e36f860f6504c24ba5a03f
+
+  Run 2: .\gradlew.bat docsVerify  -> EXIT=0, BUILD SUCCESSFUL in 1m 9s
+  DOCS-VERIFY PASS runs=2 mode=same-boot files=21 skipped=12 manifest=97110215163db5084b1b6ad7b5a3ea4c5972ca2b89e36f860f6504c24ba5a03f
+
+  Both aggregates identical to each other AND to the committed S5/S6 transcripts.
+  All 10 legacy-scene per-file hashes byte-identical to the committed S2/S3 values
+  (01=c29f8716, 02=7d7b19aa, 03=37c16f21, 04=6be0a871, 05=0e3b2580, 06=7a726aee,
+   07=27485d14, 08=8742a347, 08.annotated=5e563fd2, 08a=05867a21).
+
+== CRITERION 2 — testid-rename gate demonstration RE-RUN (not trusted from transcript) ====
+
+  $ data-testid="agent-row" -> "agent-row-renamed" in OperationsTab.tsx (scratch)
+  $ .\gradlew.bat docsVerify  -> BUILD FAILED in 1m 7s, npm exit value 3
+  DOCS-VERIFY FAIL topic=coo/04-operations#read-the-fleet spec=coo-operations-tab selector=[data-testid="agent-row"][data-agent-key="a-pre-visit"] (wait failed)
+
+  $ git checkout -- substrate/frontend/src/features/portfolio/tabs/OperationsTab.tsx
+  Post-revert docsAssemble's capture reproduced manifest 97110215... (no residue; below).
+
+== CRITERION 3 — 9 legacy scenes + link check ==============================================
+
+  Scenes: all 9 legacy outputs present in both verify manifests (incl. the FILE-6
+  repurposed 08a-operations-path-segment-notfound.png), hashes equal to committed values.
+  Originals archived: acceptance/final/archive/ holds all 9 PNGs incl. 08a BLANK + README.
+
+  $ .\gradlew.bat docsAssemble  -> EXIT=0, BUILD SUCCESSFUL in 1m 14s (fresh boot)
+  DOCS-CAPTURE PASS files=21 skipped=12 manifest=97110215163db5084b1b6ad7b5a3ea4c5972ca2b89e36f860f6504c24ba5a03f
+  link-check: 44 image reference(s) across 9 markdown file(s) — all resolve
+  DOCS-ASSEMBLE PASS guides=28 images=16 links=44 skippedSpecs=12
+
+== CRITERION 4 — operator tasks 1, 4, 7 spot-executed verbatim (fresh seeded boot) =========
+
+  Task 1: empty boot (port 53181): health UP + domains "data":[] (the trap, proven);
+  seeded boot (port 8080, canonical flags): all expected [seed] lines (14 seeders,
+  'Operational Risk', 22 satellites/70 agents, activate lever ACTIVE, DEMO LEVER ACTIVE
+  warning), readiness by API poll -> domains: 23. SPA serves at /.
+
+  Task 4: FRESH-READER FAILURE FOUND AND FIXED — the guide's idempotency keys used
+  $(uuidgen), which does not exist in Git Bash on stock Windows; steps 3/4 fail as
+  written (API correctly 400s the empty key; nothing issued). The committed evidence
+  script run-s4-operator-beats.sh already worked around this with a py-launcher uuid()
+  helper — the guides now define that helper in the operator index session preamble
+  (with BASE/H1/H2/H3, which previously appeared only as prose) and tasks 4/6 mint keys
+  with $(uuid). Re-run with the fixed text, all observables exact:
+    step 3 : in-flight | escalating; originatedAt=2026-05-12T00:00:00Z;
+             levels [(0,'Operating Partner','cascaded'),(1,'Curasync COO','looking')]
+    step 3b: re-issue same key -> HTTP 200 (idempotent)
+    step 4 : frontierDepth 2; [(0,OP,cascaded),(1,COO,cascaded),(2,HIM Director,looking)]
+    step 5 : #1 issue L0 Operating Partner -> Curasync COO
+             #2 cascade L1 Curasync COO -> Curasync HIM Director
+    step 6 : attention shows 'Awaiting response — Curasync HIM Director at L2';
+             stats total 3 -> 4, bySignal {decline-pending:1, escalating:3, absorbed:0}
+
+  Task 7: steps 1-2 exact in shape and boot-stable values (6 entries GENESIS-anchored,
+  same types/statuses/titles/order; verify valid:true 6/6 firstBrokenAt:null). Hash
+  prefixes are per-boot as the chain design predicts — now stated at step 1 (doc fix).
+  Chain-growth observable exercised with a real governance act (task 6 step 1 verbatim:
+  agent a-docs-pilot registered -> status shadow, deployedAt pinned 2026-05-12):
+    re-verify -> valid:true totalDecisions:7 verifiedLinks:7
+    appended  -> AGENT_DEPLOYED APPROVED prev=f419e466 -> curr=83e1519f agent:a-docs-pilot:AGENT_DEPLOYED
+
+== CRITERION 5 — full regression + production-diff audit ===================================
+
+  Backend: .\gradlew.bat build EXIT=0; then forced real execution (cache defeated):
+  .\gradlew.bat test --rerun -> BUILD SUCCESSFUL in 2m 23s; per-module test XML totals:
+    tests=984 failures+errors=0 skipped=69 (Docker-gated)   <- plan A5 figures exactly.
+
+  Frontend gate (substrate/frontend): see frontend-gate section appended below.
+
+  Production diff audited hunk-by-hunk (git diff main...HEAD -- src dirs):
+  22 frontend files — EXCLUSIVELY additive data-testid/data-* attributes, comments, and
+  the prop-threading required to render them (Card testId, Stat stat, BandSegment testId,
+  CoordinationSignalCard signal, DataTable data-row-id). Zero behavior changes.
+  Plus the two S6-documented gitignore-repair files (ingestion/staging/StagingService.java
+  + StagingResult.java) — NEW tracked files, sha256-verified byte-identical to the live
+  tree's working copies (7584B402..., 3B16DFDE...) and to the S6 slice-report claims;
+  they repair a committed-tree compile break (tracked IngestionCommand.java imports them),
+  not a behavior change. Build-script/CI/gitignore changes are the plan §6 sanctioned set.
+
+== CRITERION 6 — COO stubs for every not-yet verb, visibly skipped =========================
+
+  11/11 stub topics exist with status: blocked-on-ui frontmatter (6 coo/not-yet +
+  5 operator/not-yet, the A6 placement split); stub-inventory.md cross-check holds.
+  Every gate run above printed per-spec SKIP lines and:
+    SKIPPED 12 spec(s) (status != active): blocked=11 manual-job=1
+  and every PASS line carries skipped=12.
+
+== FIXES MADE BY THE DOCTOR (this commit) ==================================================
+
+  1. operator/index.md — runnable session preamble (BASE, H1-H3, uuid() helper with
+     py -3 / python3 / uuidgen fallback chain); previously the task blocks referenced
+     variables defined nowhere runnable, and $(uuidgen) is absent on stock Windows.
+  2. operator/04-cascades.md + operator/06-agent-lifecycle.md — $(uuidgen) -> $(uuid)
+     (4 occurrences).
+  3. operator/07-decision-log.md — step 1 now states hash values are per-boot (the
+     verify report is the boot-stable part), closing a fresh-reader ambiguity.
+  4. This transcript committed at acceptance/doc-1/final-doctor/verify-transcript.txt.
+
+  Post-fix docsAssemble re-run green (operator bundle re-assembled from the edited
+  sources; same capture manifest) — appended below.
+
+== APPENDED RAW RESULTS ====================================================================
+frontend gate (substrate/frontend, real run):
+  npm run type-check -> EXIT=0
+  npm run lint       -> EXIT=0  (eslint --max-warnings 0)
+  npm run test       -> EXIT=0  Test Files 21 passed (21); Tests 145 passed (145)
+  npm run build      -> EXIT=0  (tsc && vite build, built in 10.47s)
+
+post-fix docsAssemble (edited guide sources, fresh boot):
+  DOCS-CAPTURE PASS files=21 skipped=12 manifest=97110215163db5084b1b6ad7b5a3ea4c5972ca2b89e36f860f6504c24ba5a03f
+  link-check: 44 image reference(s) across 9 markdown file(s) — all resolve
+  DOCS-ASSEMBLE PASS guides=28 images=16 links=44 skippedSpecs=12
+  BUILD SUCCESSFUL in 58s
+
+residual risk honestly stated (unchanged from S5/S6 filings):
+  - scene 02 designer Date column renders capture-day wall clock — the manifest is
+    day-scoped (all green runs above share 2026-06-12); cross-day drift remains the
+    open determinism filing ahead of CI.
+  - CI jobs (docs-verify gate, docs-oidc-chip manual lane) remain UNRUN — first
+    execution requires push + one workflow_dispatch (no Docker on this machine).

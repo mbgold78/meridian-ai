@@ -56,7 +56,7 @@ print([d['id'] for d in json.load(sys.stdin)['data'] if d['name']=='Operational 
 
    ```bash
    curl -s -X POST -H "$H1" -H "$H2" -H "$H3" "$BASE/cascade-drafts/$DRAFT_ID/issue" \
-     -d "{\"idempotencyKey\":\"$(uuidgen)\",\"level1OwnerLabel\":\"Curasync COO\"}"
+     -d "{\"idempotencyKey\":\"$(uuid)\",\"level1OwnerLabel\":\"Curasync COO\"}"
    ```
 
    ```text
@@ -76,7 +76,7 @@ print([d['id'] for d in json.load(sys.stdin)['data'] if d['name']=='Operational 
    ```bash
    curl -s -X POST -H "$H1" -H 'X-Persona-Id: curasync-coo' -H 'X-Persona-Label: Curasync COO' \
      "$BASE/cascades/$CASCADE_ID/levels/1/cascade" -d "{
-     \"idempotencyKey\":\"$(uuidgen)\",
+     \"idempotencyKey\":\"$(uuid)\",
      \"refinedCritique\":\"HIM owns the consolidation: produce the single-owner-per-claim model and retire the billing-side re-check.\",
      \"nextOwnerLabel\":\"Curasync HIM Director\"}"
    ```
