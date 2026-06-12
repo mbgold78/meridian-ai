@@ -1,0 +1,82 @@
+// DOC-1 ':docs' — docs capture pipeline (plan §6, decision D-B).
+//
+// A Node-only subproject: no java plugin (the root build.gradle subprojects
+// block explicitly skips 'docs'), no membership in any build/check lifecycle.
+// The three tasks below are invoked EXPLICITLY:
+//
+//   gradlew docsCapture   — :app:bootJar + npm ci (first run) + capture all specs
+//   gradlew docsVerify    — two full capture runs, byte-compared SHA-256
+//                           manifests (D-A within-platform identity).
+//                           -PfreshBoots makes the second run a fresh JVM boot
+//                           (new H2, new UUIDs) per plan §5.
+//   gradlew docsAssemble  — resolve {{capture:id}} placeholders in guide
+//                           sources into build/manual (S1 skeleton)
+//
+// Task names are docs-prefixed (vs plan §6's ':docs:capture' / ':docs:verify')
+// so the bare invocations above resolve unambiguously from the root project
+// and never collide with the base-plugin 'assemble'/'check' lifecycle names.
+
+import com.github.gradle.node.npm.task.NpmTask
+import com.github.gradle.node.npm.task.NpxTask
+
+plugins {
+    id 'com.github.node-gradle.node'
+}
+
+node {
+    download = true
+    version = nodeVersion              // same pin as :app (gradle.properties)
+    npmInstallCommand = 'ci'           // reproducible installs from package-lock.json
+    nodeProjectDir = projectDir
+    // OWN toolchain dirs: with org.gradle.parallel=true, :docs:npmInstall can
+    // be scheduled concurrently with :app's node tasks — sharing
+    // .gradle/nodejs would race the toolchain extraction (plan §6 hazard 2).
+    workDir = file("${rootProject.projectDir}/.gradle/nodejs-docs")
+    npmWorkDir = file("${rootProject.projectDir}/.gradle/npm-docs")
+}
+
+// The runner builds nothing itself: gradle owns the jar (boot mode runs
+// `java -jar` with the canonical flags on a runner-allocated free port).
+def appJarPath = "${rootProject.projectDir}/app/build/libs/app-${version}.jar"
+
+def playwrightInstall = tasks.register('playwrightInstall', NpxTask) {
+    group = 'documentation'
+    description = 'Ensures the pinned Playwright Chromium build is installed (no-op when cached)'
+    dependsOn tasks.named('npmInstall')
+    command = 'playwright'
+    args = ['install', 'chromium']
+}
+
+def runnerArgs = { String npmScript ->
+    def a = ['run', npmScript, '--', "--jar=${appJarPath}".toString()]
+    if (project.hasProperty('docsBaseUrl')) {
+        a += "--base-url=${project.property('docsBaseUrl')}".toString()
+    }
+    if (project.hasProperty('docsSpec')) {
+        a += "--spec=${project.property('docsSpec')}".toString()
+    }
+    a
+}
+
+tasks.register('docsCapture', NpmTask) {
+    group = 'documentation'
+    description = 'Captures every spec in specs/ to build/captures + SHA-256 manifest'
+    dependsOn ':app:bootJar', tasks.named('npmInstall'), playwrightInstall
+    args = runnerArgs('capture')
+}
+
+tasks.register('docsVerify', NpmTask) {
+    group = 'documentation'
+    description = 'Determinism gate: two full capture runs, manifests must be byte-identical (-PfreshBoots for two fresh JVM boots)'
+    dependsOn ':app:bootJar', tasks.named('npmInstall'), playwrightInstall
+    args = project.hasProperty('freshBoots')
+            ? runnerArgs('verify') + '--fresh-boots'
+            : runnerArgs('verify')
+}
+
+tasks.register('docsAssemble', NpmTask) {
+    group = 'documentation'
+    description = 'Resolves {{capture:spec-id}} placeholders in guide sources into build/manual'
+    dependsOn tasks.named('npmInstall'), tasks.named('docsCapture')
+    args = ['run', 'assemble']
+}

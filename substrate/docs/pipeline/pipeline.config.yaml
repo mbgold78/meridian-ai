@@ -1,0 +1,91 @@
+# DOC-1 pipeline global settings (plan §3) — boot flags, clock instant, locale,
+# timezone, font interception, default viewport live HERE, never per-spec.
+# Specs in specs/*.yaml are data; src/ interprets them.
+
+app:
+  # Relative to this directory. The gradle task passes an absolute --jar
+  # (from :app:bootJar) which overrides this default.
+  jar: ../../app/build/libs/app-0.1.0.jar
+  # Canonical capture posture (plan §5 / ratification P-4): dev profile,
+  # seeded demo pack, activated contracts, pinned engine clock.
+  bootArgs:
+    - --spring.profiles.active=dev
+    - --substrate.demo.seed=true
+    - --substrate.demo.contracts.activate=true
+    - --substrate.demo.fixed-clock=2026-05-12T00:00:00Z
+  bootTimeoutMs: 300000
+
+readiness:
+  # Seed completion by API poll, never sleep (plan §5): the seed runs in ONE
+  # outer transaction (SeedOrchestrator), so /api/v1/domains flips 0 -> 23
+  # (1 primary demo domain + 22 Beacon satellite domains, AgentDemoSeeder)
+  # only once the whole seed has committed. Actuator health UP != seeded.
+  api:
+    get: /api/v1/domains
+    until: { path: "$.data.length", equals: 23 }
+    timeoutMs: 300000
+
+context:
+  # Pins the four locale/tz-dependent renderers (plan §5).
+  locale: en-US
+  timezoneId: UTC
+  # index.html hardcodes class="dark"; pinning the browser-side scheme removes
+  # any prefers-color-scheme dependence on the host machine.
+  colorScheme: dark
+  reducedMotion: reduce
+  # vv tour parity (plan §5).
+  viewport: { width: 1536, height: 960 }
+  deviceScaleFactor: 1
+
+browser:
+  # Deterministic raster pipeline (the flag set Chromium's own pixel tests
+  # use). Empirical S1 finding: WITHOUT --disable-partial-raster the
+  # rounded-corner anti-aliasing of the agent-fleet card flapped between two
+  # stable 18-pixel states PER PAGE LOAD (identical anchor geometry both
+  # times) — partial raster reuses or re-rasters the corner tiles depending
+  # on repaint timing after the row-expansion click. srgb pins the color
+  # pipeline; --disable-gpu pins software raster; skia-runtime-opts pins
+  # CPU-feature-dependent skia fast paths.
+  args:
+    - --force-color-profile=srgb
+    - --disable-gpu
+    - --disable-partial-raster
+    - --disable-skia-runtime-opts
+
+storage:
+  # Documented localStorage key contract (ratification P-5). Persona is ALWAYS
+  # pre-seeded via addInitScript under this key — header-only injection is
+  # wrong by construction (chip would diverge from the wire header).
+  personaKey: meridian-persona-level
+
+fonts:
+  # Plan §5 gap 1: index.html loads Google Fonts from the CDN (display=swap) —
+  # network flake / fallback-glyph captures. The runner intercepts
+  # fonts.googleapis.com + fonts.gstatic.com and serves vendored copies.
+  #   vendored — serve assets/fonts (fail the spec on an unvendored URL)
+  #   block    — abort all font CDN requests (deterministic system-font fallback)
+  mode: vendored
+  dir: assets/fonts
+
+settle:
+  # Plan §5: settle-poll — N consecutive byte-identical screenshots at rAF
+  # spacing before a capture is accepted (3: stricter than the plan's minimum
+  # of 2). Applied to every determinism class (mandatory for `animated`,
+  # belt-and-braces for the rest). Preceded by an in-flight-API quiescence
+  # poll so late XHR/fetch responses cannot land between settle frames; a
+  # request firing mid-settle resets the identical counter. Any app API
+  # request that FAILS during a spec fails the capture loudly (the frontend's
+  # retry:false hooks would otherwise freeze fallback UI into the PNG).
+  maxAttempts: 40
+  consecutiveIdentical: 3
+  quiescenceTimeoutMs: 15000
+
+output:
+  capturesDir: build/captures
+
+assemble:
+  # Guide markdown sources (plan §6) — relative to this directory.
+  guidesDir: ../guides
+  outDir: build/manual
+
+selectorTimeoutMs: 30000

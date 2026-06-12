@@ -19,6 +19,14 @@ allprojects {
 }
 
 subprojects {
+    // DOC-1 (plan §6 hazard 1): ':docs' is the Node-only docs capture
+    // pipeline — applying the java conventions here would drag it into
+    // `gradlew build` (CI's backend job). Its tasks are invoked explicitly
+    // (docsCapture/docsAssemble/docsVerify) and never join build/check.
+    if (name == 'docs') {
+        return
+    }
+
     apply plugin: 'java'
 
     java {

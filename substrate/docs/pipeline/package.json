@@ -1,0 +1,21 @@
+{
+  "name": "substrate-docs-pipeline",
+  "version": "0.1.0",
+  "private": true,
+  "description": "DOC-1 docs capture pipeline (plan D-B): declarative YAML capture specs -> deterministic PNGs + SHA-256 manifest. Playwright pin MUST stay in lockstep with substrate/frontend/package.json.",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "capture": "node src/cli.js capture",
+    "verify": "node src/cli.js verify",
+    "assemble": "node src/cli.js assemble",
+    "vendor-fonts": "node scripts/vendor-fonts.js"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.59.1",
+    "js-yaml": "4.1.0",
+    "pngjs": "7.0.0"
+  }
+}

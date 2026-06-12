@@ -1,0 +1,124 @@
+DOC-1 S1 acceptance evidence — .\gradlew.bat docsVerify run twice, identical manifest hash sets
+Platform: Windows 11 local (win32). Per ratified D-A this demonstrates WITHIN-PLATFORM byte-identity +
+two-run self-identity; Linux CI becomes the canonical baseline when the S6 gate lands.
+Each docsVerify invocation = fresh JVM boot (dev profile, demo seed + contracts.activate + fixed-clock
+2026-05-12T00:00:00Z, runner-allocated free port) + TWO full capture passes byte-compared.
+Date: 2026-06-12
+
+=== INVOCATION 1: .\gradlew.bat docsVerify ===
+> Task :engine:processResources UP-TO-DATE
+> Task :app:nodeSetup UP-TO-DATE
+> Task :app:npmSetup SKIPPED
+> Task :app:npmInstall UP-TO-DATE
+> Task :app:frontendBuild UP-TO-DATE
+> Task :docs:nodeSetup UP-TO-DATE
+> Task :docs:npmSetup SKIPPED
+> Task :docs:npmInstall UP-TO-DATE
+> Task :app:processResources UP-TO-DATE
+> Task :common:compileJava UP-TO-DATE
+> Task :common:processResources NO-SOURCE
+> Task :common:classes UP-TO-DATE
+> Task :common:jar UP-TO-DATE
+> Task :engine:compileJava UP-TO-DATE
+> Task :engine:classes UP-TO-DATE
+> Task :engine:jar UP-TO-DATE
+> Task :app:compileJava UP-TO-DATE
+> Task :app:classes UP-TO-DATE
+> Task :app:resolveMainClassName UP-TO-DATE
+> Task :app:bootJar UP-TO-DATE
+> Task :docs:playwrightInstall
+
+> Task :docs:docsVerify
+
+> substrate-docs-pipeline@0.1.0 verify
+> node src/cli.js verify --jar=C:\Users\mbgol\dev\doc1-docs-pipeline\substrate/app/build/libs/app-0.1.0.jar
+
+loaded 2 capture spec(s) from specs/ — schema OK
+  boot-verify: /api/v1/domains $.data.length = 23 (satisfied after 18643ms)
+booted app-0.1.0.jar on http://127.0.0.1:57313 (log: build\boot-verify.log)
+spec=portfolio-landing: /api/v1/domains $.data.length = 23 (satisfied after 7ms)
+spec=portfolio-landing captured 04-portfolio-landing.png
+spec=subsidiary-operations: /api/v1/domains $.data.length = 23 (satisfied after 6ms)
+spec=subsidiary-operations annotation n=1 anchor rect x=201 y=736.5
+spec=subsidiary-operations annotation n=2 anchor rect x=201 y=853.5
+spec=subsidiary-operations annotation n=3 anchor rect x=200 y=1526
+spec=subsidiary-operations captured 08-subsidiary-operations.png, 08-subsidiary-operations.annotated.png
+spec=portfolio-landing: /api/v1/domains $.data.length = 23 (satisfied after 7ms)
+spec=portfolio-landing captured 04-portfolio-landing.png
+spec=subsidiary-operations: /api/v1/domains $.data.length = 23 (satisfied after 4ms)
+spec=subsidiary-operations annotation n=1 anchor rect x=201 y=736.5
+spec=subsidiary-operations annotation n=2 anchor rect x=201 y=853.5
+spec=subsidiary-operations annotation n=3 anchor rect x=200 y=1526
+spec=subsidiary-operations captured 08-subsidiary-operations.png, 08-subsidiary-operations.annotated.png
+stopped app instance 'verify'
+--- RUN A manifest (aggregate sha256=9e7e86bee27bfb21571a856ae7f0d6418b430c480b26e3d404396e3c43d8d082) ---
+  daf06aa445527922ac7507fcae04d1eb508104077d001851ea8d05f93d67b870  04-portfolio-landing.png
+  5e41c945191824a89b2353c4525a283c86bb0f01db1ff4569d809f90f85ce4f2  08-subsidiary-operations.annotated.png
+  668f0ec3e75fffc1c75920b08aa32f9769121108b43bfb8cff53283c28b0cdaa  08-subsidiary-operations.png
+--- RUN B manifest (aggregate sha256=9e7e86bee27bfb21571a856ae7f0d6418b430c480b26e3d404396e3c43d8d082) ---
+  daf06aa445527922ac7507fcae04d1eb508104077d001851ea8d05f93d67b870  04-portfolio-landing.png
+  5e41c945191824a89b2353c4525a283c86bb0f01db1ff4569d809f90f85ce4f2  08-subsidiary-operations.annotated.png
+  668f0ec3e75fffc1c75920b08aa32f9769121108b43bfb8cff53283c28b0cdaa  08-subsidiary-operations.png
+DOCS-VERIFY PASS runs=2 mode=same-boot files=3 manifest=9e7e86bee27bfb21571a856ae7f0d6418b430c480b26e3d404396e3c43d8d082
+
+BUILD SUCCESSFUL in 42s
+16 actionable tasks: 2 executed, 14 up-to-date
+
+=== INVOCATION 2: .\gradlew.bat docsVerify ===
+> Task :engine:processResources UP-TO-DATE
+> Task :docs:nodeSetup UP-TO-DATE
+> Task :docs:npmSetup SKIPPED
+> Task :docs:npmInstall UP-TO-DATE
+> Task :app:nodeSetup UP-TO-DATE
+> Task :app:npmSetup SKIPPED
+> Task :app:npmInstall UP-TO-DATE
+> Task :app:frontendBuild UP-TO-DATE
+> Task :app:processResources UP-TO-DATE
+> Task :common:compileJava UP-TO-DATE
+> Task :common:processResources NO-SOURCE
+> Task :common:classes UP-TO-DATE
+> Task :common:jar UP-TO-DATE
+> Task :engine:compileJava UP-TO-DATE
+> Task :engine:classes UP-TO-DATE
+> Task :engine:jar UP-TO-DATE
+> Task :app:compileJava UP-TO-DATE
+> Task :app:classes UP-TO-DATE
+> Task :app:resolveMainClassName UP-TO-DATE
+> Task :app:bootJar UP-TO-DATE
+> Task :docs:playwrightInstall
+
+> Task :docs:docsVerify
+
+> substrate-docs-pipeline@0.1.0 verify
+> node src/cli.js verify --jar=C:\Users\mbgol\dev\doc1-docs-pipeline\substrate/app/build/libs/app-0.1.0.jar
+
+loaded 2 capture spec(s) from specs/ — schema OK
+  boot-verify: /api/v1/domains $.data.length = 23 (satisfied after 17777ms)
+booted app-0.1.0.jar on http://127.0.0.1:51207 (log: build\boot-verify.log)
+spec=portfolio-landing: /api/v1/domains $.data.length = 23 (satisfied after 6ms)
+spec=portfolio-landing captured 04-portfolio-landing.png
+spec=subsidiary-operations: /api/v1/domains $.data.length = 23 (satisfied after 7ms)
+spec=subsidiary-operations annotation n=1 anchor rect x=201 y=736.5
+spec=subsidiary-operations annotation n=2 anchor rect x=201 y=853.5
+spec=subsidiary-operations annotation n=3 anchor rect x=200 y=1526
+spec=subsidiary-operations captured 08-subsidiary-operations.png, 08-subsidiary-operations.annotated.png
+spec=portfolio-landing: /api/v1/domains $.data.length = 23 (satisfied after 7ms)
+spec=portfolio-landing captured 04-portfolio-landing.png
+spec=subsidiary-operations: /api/v1/domains $.data.length = 23 (satisfied after 5ms)
+spec=subsidiary-operations annotation n=1 anchor rect x=201 y=736.5
+spec=subsidiary-operations annotation n=2 anchor rect x=201 y=853.5
+spec=subsidiary-operations annotation n=3 anchor rect x=200 y=1526
+spec=subsidiary-operations captured 08-subsidiary-operations.png, 08-subsidiary-operations.annotated.png
+stopped app instance 'verify'
+--- RUN A manifest (aggregate sha256=9e7e86bee27bfb21571a856ae7f0d6418b430c480b26e3d404396e3c43d8d082) ---
+  daf06aa445527922ac7507fcae04d1eb508104077d001851ea8d05f93d67b870  04-portfolio-landing.png
+  5e41c945191824a89b2353c4525a283c86bb0f01db1ff4569d809f90f85ce4f2  08-subsidiary-operations.annotated.png
+  668f0ec3e75fffc1c75920b08aa32f9769121108b43bfb8cff53283c28b0cdaa  08-subsidiary-operations.png
+--- RUN B manifest (aggregate sha256=9e7e86bee27bfb21571a856ae7f0d6418b430c480b26e3d404396e3c43d8d082) ---
+  daf06aa445527922ac7507fcae04d1eb508104077d001851ea8d05f93d67b870  04-portfolio-landing.png
+  5e41c945191824a89b2353c4525a283c86bb0f01db1ff4569d809f90f85ce4f2  08-subsidiary-operations.annotated.png
+  668f0ec3e75fffc1c75920b08aa32f9769121108b43bfb8cff53283c28b0cdaa  08-subsidiary-operations.png
+DOCS-VERIFY PASS runs=2 mode=same-boot files=3 manifest=9e7e86bee27bfb21571a856ae7f0d6418b430c480b26e3d404396e3c43d8d082
+
+BUILD SUCCESSFUL in 41s
+16 actionable tasks: 2 executed, 14 up-to-date

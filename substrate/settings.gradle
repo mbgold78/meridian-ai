@@ -4,3 +4,9 @@ include 'app'
 include 'common'
 include 'ingestion'
 include 'engine'
+
+// DOC-1 (decision D-B): docs capture pipeline — a Node-only subproject with
+// its OWN node project dir (racing :app:npmInstall over frontend/node_modules
+// under org.gradle.parallel=true is the hazard this isolation kills).
+include 'docs'
+project(':docs').projectDir = file('docs/pipeline')

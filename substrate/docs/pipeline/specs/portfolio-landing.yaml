@@ -1,0 +1,13 @@
+# Plan §3 worked example (simple) — shipped verbatim as the first real spec.
+id: portfolio-landing
+title: Portfolio vantage-point picker
+topic: client/coo-quick-guide#entering-the-portfolio
+route: /portfolio
+persona: L1_EXECUTIVE
+waits:
+  - api: { get: /api/v1/domains, until: { path: "$.data.length", equals: 23 }, timeoutMs: 60000 }
+  - selector: 'select[aria-label="Choose subsidiary"]'
+  - selector: '[data-banner-provenance="live"]'    # live-mode assertion (PortfolioLayout.tsx:68)
+capture: { mode: fullPage }
+output: 04-portfolio-landing.png
+determinism: static
