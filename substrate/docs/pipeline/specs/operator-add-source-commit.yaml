@@ -1,0 +1,42 @@
+# DOC-1 S5 — PRE-WRITTEN capture spec for a UI verb that does not exist yet
+# (ruling P-2): Add Source actually registering the probed source / kicking
+# off ingestion. The modal is identification-only today ("Add to project"
+# closes the dialog without registering anything — manual 02-client-surfaces);
+# real ingestion runs through the operator CLI (operator/02-corpus-ingest).
+id: operator-add-source-commit
+title: Living Canvas — Add Source registers the probed source for ingestion
+topic: operator/not-yet/add-source-commit
+status: blocked
+statusReason: >-
+  "Add to project" does not register the source or trigger ingestion.
+  RESERVED name in specs/selector-registry.yaml: add-source-commit. The
+  registration PR claims it and flips this spec.
+route: /
+persona: L3_ANALYST
+resolve:
+  - { var: domainId, get: /api/v1/domains, pick: "$.data[?(@.name=='Operational Risk')].id" }
+localStorage:
+  substrate-canvas-welcomed-v1: "1"
+  substrate-workspace-domain-id: "{domainId}"
+waits:
+  - api: { get: /api/v1/domains, until: { path: "$.data.length", equals: 23 }, timeoutMs: 60000 }
+  - selector: '[data-testid="living-canvas"]'
+    attr: data-canvas-ready
+    equals: "true"
+preSteps:
+  - click: 'button:has-text("Add Source")'
+  - waitSelector: '[data-testid="add-source-commit"]'
+liveModeExempt: >-
+  No data-*-source marker exists on this surface because it has no fixture
+  fallback: the canvas hooks render live API data or an explicit error/empty
+  state, and the runner fails the capture on any unexpected app-API failure.
+  The data-canvas-ready=true wait already proves live engine data.
+allowedApiFailures:
+  - match: /api/v1/transformation/plan
+    reason: >-
+      Fixture-gated seam S4 — the plan endpoint 404s on every seeded boot
+      (vv-documented); the ribbon deterministically falls back to the
+      reduction thesis. Deliberately NOT worked around in product code.
+capture: { mode: element, selector: '[data-testid="add-source-commit"]' }
+output: operator-add-source-commit.png
+determinism: animated

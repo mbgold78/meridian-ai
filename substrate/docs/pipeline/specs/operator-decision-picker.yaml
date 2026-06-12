@@ -1,0 +1,34 @@
+# DOC-1 S5 — PRE-WRITTEN capture spec for a UI surface that does not exist
+# yet (ruling P-2): a picker for affected systems/processes on the New
+# Decision form. Today the form takes comma-separated entity IDs (manual
+# 02-client-surfaces "Honest limitation" — practically an engagement-team
+# form, hence operator-grade placement).
+id: operator-decision-picker
+title: Future State Designer — affected systems/processes picker on the decision form
+topic: operator/not-yet/decision-form-picker
+status: blocked
+statusReason: >-
+  No picker exists — Affected Systems / Affected Manual Processes are
+  comma-separated ID fields. RESERVED name in specs/selector-registry.yaml:
+  decision-affected-picker. The picker PR claims it and flips this spec.
+route: /designer
+persona: L3_ANALYST
+resolve:
+  - { var: domainId, get: /api/v1/domains, pick: "$.data[?(@.name=='Operational Risk')].id" }
+localStorage:
+  substrate-workspace-domain-id: "{domainId}"
+waits:
+  - api: { get: /api/v1/domains, until: { path: "$.data.length", equals: 23 }, timeoutMs: 60000 }
+  - api: { get: "/api/v1/design/decisions?domainId={domainId}", until: { path: "$.data.length", min: 5 }, timeoutMs: 60000 }
+  - selector: 'button:has-text("New Decision")'
+preSteps:
+  - click: 'button:has-text("New Decision")'
+  - waitSelector: '[data-testid="decision-affected-picker"]'
+liveModeExempt: >-
+  No data-*-source marker exists on this surface because it has no fixture
+  fallback: the decision table renders solely from GET /design/decisions and
+  the runner fails the capture on any unexpected app-API failure. The api
+  wait on the live decision count is the live-data proof.
+capture: { mode: element, selector: '[data-testid="decision-affected-picker"]' }
+output: operator-decision-picker.png
+determinism: seeded

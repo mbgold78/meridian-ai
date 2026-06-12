@@ -1,0 +1,48 @@
+# DOC-1 S5 — the OIDC identity-chip capture (admin guide, ruling D-C).
+#
+# RATIFIED D-C: this capture is a MANUAL workflow_dispatch lane, never a gate.
+# It needs a stack the gate deliberately does not run: SUBSTRATE_AUTH_MODE=oidc
+# with the Compose Keycloak realm (infra/keycloak/realm-substrate.json) so a
+# REAL browser login produces a verified token. It is therefore excluded from
+# the docsVerify gate manifest (status: manual-job — skipped, counted) and run
+# explicitly by the S6 manual job against the Compose stack:
+#
+#   gradlew docsCapture -PdocsSpec=oidc-identity-chip -PdocsBaseUrl=http://localhost:8080
+#
+# Under oidc the persona switcher is replaced by the read-only identity chip
+# (persona-identity — the one production testid that predates DOC-1): display
+# label from the token (name → preferred_username → sub), persona projected by
+# the backend role-map, sign-out button. The `persona` field below seeds the
+# anonymous-mode localStorage key as every spec does; under oidc the app
+# ignores it — identity comes from the verified JWT (dev-coo / password
+# dev-coo, realm role substrate-coo → EXECUTIVE per the dev role-map).
+#
+# No api: waits — under oidc the API requires a bearer token the poller does
+# not carry; readiness is the login form, then the post-login chip.
+id: oidc-identity-chip
+title: OIDC identity chip — verified user, claim-derived persona, sign-out
+topic: admin/index#identity-model-caveat
+status: manual-job
+statusReason: >-
+  D-C ratified non-gate lane: requires the Compose oidc stack (Keycloak dev
+  realm) and a real browser login — flake surface the gate excludes by
+  design. Run via the S6 workflow_dispatch job (explicit --spec selection
+  overrides the skip).
+route: /
+persona: L1_EXECUTIVE
+waits:
+  # The unauthenticated SPA redirects to the Keycloak login page.
+  - selector: '#kc-form-login'
+preSteps:
+  - fill: { selector: '#username', value: 'dev-coo' }
+  - fill: { selector: '#password', value: 'dev-coo' }
+  - click: '#kc-login'
+  # Back in the app: the chip renders only once a verified user exists.
+  - waitSelector: '[data-testid="persona-identity"]'
+liveModeExempt: >-
+  The chip renders solely from verified token claims (oidc-client-ts user) —
+  there is no fixture fallback and no data-*-source marker; an unauthenticated
+  session never renders the chip at all, which is the proof.
+capture: { mode: element, selector: '[data-testid="persona-identity"]' }
+output: oidc-identity-chip.png
+determinism: static

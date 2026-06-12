@@ -1,0 +1,23 @@
+# DOC-1 S5 — PRE-WRITTEN capture spec for a surface that does not exist yet
+# (ruling P-2): a push-style notification feed. Until it ships, the
+# dashboard's attention-ordered cards ARE the feed (coo/01-dashboard).
+id: coo-notification-feed
+title: Notification feed — decline-pending, breach, and intervention events
+topic: coo/not-yet/notification-feed
+status: blocked
+statusReason: >-
+  No notification feed exists anywhere in the frontend. RESERVED names in
+  specs/selector-registry.yaml: notification-feed, notification-item
+  (+ data-kind). The feature PR decides its chrome home, claims the names,
+  and flips this spec.
+route: /portfolio/dashboard
+persona: L1_EXECUTIVE
+viewport: { width: 1536, height: 3400 }
+waits:
+  - api: { get: /api/v1/domains, until: { path: "$.data.length", equals: 23 }, timeoutMs: 60000 }
+  - selector: '[data-banner-provenance="live"]'
+  - selector: '[data-testid="notification-feed"]'
+  - selector: '[data-testid="notification-item"]'
+capture: { mode: element, selector: '[data-testid="notification-feed"]' }
+output: coo-notification-feed.png
+determinism: seeded

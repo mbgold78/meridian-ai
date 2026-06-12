@@ -1,7 +1,9 @@
 # Plan §3 worked example (simple) — shipped verbatim as the first real spec.
 id: portfolio-landing
 title: Portfolio vantage-point picker
-topic: client/coo-quick-guide#entering-the-portfolio
+# Topic re-pointed in S5: the aspirational "client/coo-quick-guide" name now
+# resolves to the real COO guide file (docs/guides/coo/01-dashboard.md).
+topic: coo/01-dashboard#entering-the-portfolio
 route: /portfolio
 persona: L1_EXECUTIVE
 waits:

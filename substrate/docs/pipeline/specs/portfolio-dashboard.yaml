@@ -15,7 +15,9 @@
 # (signals → opportunities → cascades → roster → phase grid) IS the scene.
 id: portfolio-dashboard
 title: Corporate Operating Partner dashboard — live signals, cascades, roster
-topic: client/coo-quick-guide#portfolio-dashboard
+# Topic re-pointed in S5: the aspirational "client/coo-quick-guide" name now
+# resolves to the real COO guide file (docs/guides/coo/01-dashboard.md).
+topic: coo/01-dashboard#read-the-dashboard
 route: /portfolio/dashboard
 persona: L1_EXECUTIVE
 viewport: { width: 1536, height: 3400 }

@@ -1,0 +1,30 @@
+# DOC-1 S5 — PRE-WRITTEN capture spec for a UI verb that does not exist yet
+# (ruling P-2). The runner SKIPS this spec (status: blocked) instead of
+# failing; the feature PR that builds cascade respond/decline flips it to
+# active and claims the reserved names in specs/selector-registry.yaml.
+id: coo-cascade-respond
+title: Cascade detail — respond / decline affordances at the holder's level
+topic: coo/not-yet/cascade-respond
+status: blocked
+statusReason: >-
+  Cascade respond/decline affordances exist NOWHERE in the frontend (plan
+  FILE-4; CascadeDetailView.tsx EXTENSION POINT cascade-3). Selectors below
+  are RESERVED names from specs/selector-registry.yaml: cascade-actions,
+  cascade-action-respond, cascade-action-decline. Engine verbs already exist
+  API-side (operator/04-cascades).
+route: /portfolio/cascade/{cascadeId}
+persona: L1_EXECUTIVE
+resolve:
+  - { var: domainId, get: /api/v1/domains, pick: "$.data[?(@.name=='Operational Risk')].id" }
+  - { var: cascadeId, get: "/api/v1/cascades?domainId={domainId}", pick: "$.data[?(@.attentionSignal=='decline-pending')].id" }
+viewport: { width: 1536, height: 2200 }
+waits:
+  - api: { get: /api/v1/domains, until: { path: "$.data.length", equals: 23 }, timeoutMs: 60000 }
+  - selector: '[data-cascade-source="live"]'
+  - selector: '[data-testid="cascade-header"]'
+  - selector: '[data-testid="cascade-actions"]'
+  - selector: '[data-testid="cascade-action-respond"]'
+  - selector: '[data-testid="cascade-action-decline"]'
+capture: { mode: element, selector: '[data-testid="cascade-actions"]' }
+output: coo-cascade-respond.png
+determinism: seeded

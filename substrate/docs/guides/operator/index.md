@@ -69,3 +69,24 @@ docs build fails naming the task and spec.
 cascade, a declined contract, a rejected finding, a rejected promotion
 review — is a legitimate outcome, never an error. Expect HTTP 200 on
 declines and reddish accents to mean *leader attention*, not *failure*.
+
+## Not yet in the UI (operator-grade verbs)
+
+Five operator-grade verbs documented in these tasks API-side have no UI
+affordance yet. Each has a stub topic in [`not-yet/`](not-yet/) backed by a
+pre-written `status: blocked` capture spec against reserved
+selector-registry names (skipped — visibly — by the docs build until the
+surface ships):
+
+| Not-yet verb | Stub | Today's path |
+|---|---|---|
+| Issue a cascade from the UI (incl. AI drafting) | [not-yet/cascade-authoring.md](not-yet/cascade-authoring.md) | Task 4 (API) |
+| Curate a finding from the Risks tab | [not-yet/finding-curation.md](not-yet/finding-curation.md) | Task 3 (API) |
+| Accept a Draft-from-Universe proposal | [not-yet/draft-accept.md](not-yet/draft-accept.md) | read-only preview |
+| Add Source actually registering the source | [not-yet/add-source-commit.md](not-yet/add-source-commit.md) | Task 2 (CLI) |
+| Decision-form entity picker | [not-yet/decision-form-picker.md](not-yet/decision-form-picker.md) | paste IDs |
+
+(The six COO-facing not-yet verbs — cascade respond/decline, contract
+review/decline, contract operational state, attestation, notification feed,
+agent controls — stub in the [COO guide](../coo/index.md) per the plan's A6
+placement split.)

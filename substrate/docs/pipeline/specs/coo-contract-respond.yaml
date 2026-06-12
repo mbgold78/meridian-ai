@@ -1,0 +1,26 @@
+# DOC-1 S5 — PRE-WRITTEN capture spec for a UI flow that does not exist yet
+# (ruling P-2; queue #28 footer pattern). The shipped contract-action-review /
+# contract-action-decline buttons render but are deliberately inert; this
+# spec captures the response flow they will open once it ships.
+id: coo-contract-respond
+title: Contract detail — the review/decline response flow
+topic: coo/not-yet/contract-respond
+status: blocked
+statusReason: >-
+  The Review/Decline buttons ship inert (tooltips say the flow is not defined
+  in v1); contract responses are operator-grade actions today
+  (operator/05-contracts). contract-respond-flow is a RESERVED name in
+  specs/selector-registry.yaml; the flow PR claims it and flips this spec.
+route: /portfolio/contract/co-tribal-knowledge-depopulation
+persona: L1_EXECUTIVE
+viewport: { width: 1536, height: 2400 }
+waits:
+  - api: { get: /api/v1/domains, until: { path: "$.data.length", equals: 23 }, timeoutMs: 60000 }
+  - selector: '[data-contract-source="live"]'
+  - selector: '[data-testid="contract-actions"]'
+preSteps:
+  - click: '[data-testid="contract-action-review"]'
+  - waitSelector: '[data-testid="contract-respond-flow"]'
+capture: { mode: element, selector: '[data-testid="contract-respond-flow"]' }
+output: coo-contract-respond.png
+determinism: seeded

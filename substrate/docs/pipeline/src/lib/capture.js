@@ -142,15 +142,16 @@ export async function runSpec({ browser, spec, config, baseUrl, outDir, warnings
     // it rides the SVG document clock. pauseAnimations() stops that clock and
     // setCurrentTime(0) pins every SMIL element to its t=0 pose, identical on
     // every run and boot. Done after waits/preSteps so the SVGs exist.
-    if (spec.determinism === 'animated') {
-      await page.evaluate(() => {
-        for (const svg of document.querySelectorAll('svg')) {
-          if (typeof svg.pauseAnimations === 'function') {
-            svg.pauseAnimations();
-            svg.setCurrentTime(0);
-          }
+    const freezeSmil = () => page.evaluate(() => {
+      for (const svg of document.querySelectorAll('svg')) {
+        if (typeof svg.pauseAnimations === 'function') {
+          svg.pauseAnimations();
+          svg.setCurrentTime(0);
         }
-      });
+      }
+    });
+    if (spec.determinism === 'animated') {
+      await freezeSmil();
     }
 
     const quiesceDeadline = Date.now() + (config.settle?.quiescenceTimeoutMs ?? 15000);
@@ -182,6 +183,14 @@ export async function runSpec({ browser, spec, config, baseUrl, outDir, warnings
     let identical = 1;
     let stable = false;
     for (let i = 0; i < maxAttempts; i++) {
+      // S5 hardening: re-apply the SMIL freeze on every attempt. Idempotent
+      // for already-frozen SVGs (paused at t=0 stays paused at t=0 — no
+      // pixel change), but catches SVG layers that MOUNT (or are re-created
+      // by a late React re-render) after the one-time freeze above — caught
+      // as a run-to-run settle flake on the risks-tab scene in S5.
+      if (spec.determinism === 'animated') {
+        await freezeSmil();
+      }
       await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(undefined)))));
       if (inflight > 0) {
         identical = 0; // a request fired mid-settle — wait it out and restart

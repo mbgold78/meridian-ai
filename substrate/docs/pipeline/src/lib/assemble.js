@@ -47,6 +47,15 @@ export function assembleGuides({ config, specs, log }) {
           `DOCS-ASSEMBLE FAIL guide=${rel} placeholder=${id} reason=unknown-spec`,
         );
       }
+      // S5: blocked / manual-job specs produce no gate capture by design —
+      // stub topics must reference the spec FILE in prose, never {{capture:}}.
+      if (spec.status !== 'active') {
+        throw new PipelineError(
+          EXIT.ASSEMBLE,
+          `DOCS-ASSEMBLE FAIL guide=${rel} placeholder=${id} topic=${spec.topic} reason=spec-status-${spec.status} ` +
+            `(a status: ${spec.status} spec produces no capture — reference the spec file in prose instead)`,
+        );
+      }
       const fileName = !baseOnly && spec.annotations?.length
         ? spec.output.replace(/\.png$/, '.annotated.png')
         : spec.output;

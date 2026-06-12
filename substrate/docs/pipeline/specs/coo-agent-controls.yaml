@@ -1,0 +1,28 @@
+# DOC-1 S5 — PRE-WRITTEN capture spec for UI verbs that do not exist yet
+# (ruling P-2): agent controls on the Operations tab. The tab is read-only
+# today and says so; control verbs (pause/resume/throttle/kill) are
+# operator-grade API actions (operator/06-agent-lifecycle).
+id: coo-agent-controls
+title: Operations tab — agent control verbs and enforcement disclosure
+topic: coo/not-yet/agent-controls
+status: blocked
+statusReason: >-
+  No pause/resume buttons and no enforcement disclosure render in the
+  Operations tab (plan FILE-3 / ruling P-1 — UI-2 filed follow-on slice).
+  RESERVED names in specs/selector-registry.yaml: agent-controls,
+  agent-control-pause, agent-control-resume, agent-enforcement-disclosure.
+route: /portfolio/subsidiary/curasync-clinical?tab=operations
+persona: L1_EXECUTIVE
+viewport: { width: 1536, height: 2000 }
+waits:
+  - api: { get: /api/v1/domains, until: { path: "$.data.length", equals: 23 }, timeoutMs: 60000 }
+  - selector: '[data-agents-source="live"]'
+  - selector: '[data-testid="agent-row"][data-agent-key="a-pre-visit"]'
+preSteps:
+  - click: '[data-testid="agent-row"][data-agent-key="a-pre-visit"]'
+  - waitSelector: '[data-testid="agent-deployment-panel"]'
+  - waitSelector: '[data-testid="agent-enforcement-disclosure"]'
+  - waitSelector: '[data-testid="agent-controls"]'
+capture: { mode: element, selector: '[data-testid="agent-controls"]' }
+output: coo-agent-controls.png
+determinism: seeded

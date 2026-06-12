@@ -1,0 +1,27 @@
+# DOC-1 S5 — PRE-WRITTEN capture spec for a display surface that does not
+# exist yet (ruling P-2): the contract's operational/lifecycle state. Today an
+# ACTIVE contract still shows only its "Proposed <date>" line (deliberate in
+# contractData.ts; vv-documented; pinned as-is by 07-contract-detail).
+id: coo-contract-status
+title: Contract detail — lifecycle status chip and monitor history
+topic: coo/not-yet/contract-status
+status: blocked
+statusReason: >-
+  No lifecycle-status indicator or monitor history renders on the contract
+  surface (plan FILE-2 / ruling P-1 — UI-1 filed follow-on slice). RESERVED
+  names in specs/selector-registry.yaml: contract-status-chip (+ data-state),
+  contract-monitor-history. Monitor/breach state is an operator-grade API
+  read today (operator/05-contracts, committed transcripts).
+route: /portfolio/contract/co-tribal-knowledge-depopulation
+persona: L1_EXECUTIVE
+viewport: { width: 1536, height: 2400 }
+waits:
+  - api: { get: /api/v1/domains, until: { path: "$.data.length", equals: 23 }, timeoutMs: 60000 }
+  - selector: '[data-contract-source="live"]'
+  - selector: '[data-testid="contract-status-chip"]'
+    attr: data-state
+    equals: "active"
+  - selector: '[data-testid="contract-monitor-history"]'
+capture: { mode: element, selector: '[data-testid="contract-monitor-history"]' }
+output: coo-contract-status.png
+determinism: seeded

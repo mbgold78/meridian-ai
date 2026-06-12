@@ -1,0 +1,23 @@
+# DOC-1 S5 — PRE-WRITTEN capture spec for a UI verb that does not exist yet
+# (ruling P-2): commitment attestation. The verb exists today as the MCP/API
+# verb attest_commitment (agents.md §8); no UI surface renders or accepts
+# attestations.
+id: coo-attestation
+title: Contract detail — attesting a commitment was honored
+topic: coo/not-yet/attestation
+status: blocked
+statusReason: >-
+  No attestation UI exists; attest_commitment is MCP/API-only today. RESERVED
+  names in specs/selector-registry.yaml: contract-attestation-form,
+  contract-attestation-submit. The feature PR claims them and flips this spec.
+route: /portfolio/contract/co-tribal-knowledge-depopulation
+persona: L1_EXECUTIVE
+viewport: { width: 1536, height: 2400 }
+waits:
+  - api: { get: /api/v1/domains, until: { path: "$.data.length", equals: 23 }, timeoutMs: 60000 }
+  - selector: '[data-contract-source="live"]'
+  - selector: '[data-testid="contract-attestation-form"]'
+  - selector: '[data-testid="contract-attestation-submit"]'
+capture: { mode: element, selector: '[data-testid="contract-attestation-form"]' }
+output: coo-attestation.png
+determinism: seeded

@@ -1,0 +1,48 @@
+# DOC-1 S5 — PRE-WRITTEN capture spec for UI verbs that do not exist yet
+# (ruling P-2): finding curation (accept/reject) in the canvas Risks tab.
+# Curation verbs exist API-side and are driven with committed transcripts in
+# operator/03-diagnostics; the Risks tab renders findings read-only today.
+id: operator-finding-curation
+title: Risks tab — curate a finding (accept / reject) from the expanded detail
+topic: operator/not-yet/finding-curation
+status: blocked
+statusReason: >-
+  No curation affordances render in the Risks tab. RESERVED names in
+  specs/selector-registry.yaml: canvas-finding-curate-accept,
+  canvas-finding-curate-reject. The curation UI PR claims them and flips
+  this spec.
+route: /?view=risks
+persona: L3_ANALYST
+resolve:
+  - { var: domainId, get: /api/v1/domains, pick: "$.data[?(@.name=='Operational Risk')].id" }
+localStorage:
+  substrate-canvas-welcomed-v1: "1"
+  substrate-workspace-domain-id: "{domainId}"
+waits:
+  - api: { get: /api/v1/domains, until: { path: "$.data.length", equals: 23 }, timeoutMs: 60000 }
+  - selector: '[data-testid="living-canvas"]'
+    attr: data-canvas-ready
+    equals: "true"
+  - selector: '[data-testid="drawer-panel"]'
+    attr: data-tab
+    equals: "risks"
+  - selector: '[data-testid="canvas-finding-row"]'
+preSteps:
+  - click: '[data-testid="canvas-finding-row"] button'
+  - waitSelector: '[data-testid="canvas-finding-detail"]'
+  - waitSelector: '[data-testid="canvas-finding-curate-accept"]'
+  - waitSelector: '[data-testid="canvas-finding-curate-reject"]'
+liveModeExempt: >-
+  No data-*-source marker exists on this surface because it has no fixture
+  fallback: the Risks tab renders solely from the live findings API, and the
+  runner fails the capture on any unexpected app-API failure. The
+  canvas-finding-row wait is the live-data proof.
+allowedApiFailures:
+  - match: /api/v1/transformation/plan
+    reason: >-
+      Fixture-gated seam S4 — the plan endpoint 404s on every seeded boot
+      (vv-documented); the ribbon deterministically falls back to the
+      reduction thesis. Deliberately NOT worked around in product code.
+capture: { mode: element, selector: '[data-testid="canvas-finding-detail"]' }
+output: operator-finding-curation.png
+determinism: animated

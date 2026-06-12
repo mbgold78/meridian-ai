@@ -1,0 +1,283 @@
+# DOC-1 selector registry — RESERVED names (plan §4, rulings P-2/P-3; S5).
+#
+# This file is the CONTRACT a future feature PR claims. Every name below is
+# reserved for a UI surface or verb that DOES NOT EXIST in the frontend today.
+# Reserving the name here (instead of stubbing inert DOM) keeps DOC-1's
+# zero-production-change constraint AND gives the docs suite a stable
+# vocabulary: the pre-written `status: blocked` capture specs and the
+# `status: blocked-on-ui` stub topics in docs/guides/{coo,operator}/not-yet/
+# reference these names by spelling.
+#
+# Rules of the contract:
+#   1. A feature PR that builds one of these surfaces MUST use the reserved
+#      name exactly (data-testid / data-* attribute as stated), move the
+#      entry from `reserved:` to `shipped:` in this file, flip the paired
+#      capture spec to `status: active`, and replace the stub topic with the
+#      real guide task — all in the same PR. The docs gate (docsVerify) then
+#      starts protecting the new surface mechanically.
+#   2. Nothing in this file may be silently renamed: specs and stub topics
+#      spell these names, and `:docs` schema validation + the S6 CI hint job
+#      key on this registry.
+#   3. The pipeline never loads this file as a capture spec (loadSpecs
+#      excludes `selector-registry*` by name).
+#
+# Conventions: kind `testid` = data-testid value; kind `data-attr` = a
+# machine-readable data-* attribute riding a testid'd element (P-3: stable
+# keys, never per-boot UUIDs).
+
+version: 1
+
+reserved:
+
+  # ---- cascade verbs (COO-facing) -----------------------------------------
+
+  - name: cascade-actions
+    kind: testid
+    surface: frontend/src/features/portfolio/CascadeDetailView.tsx (EXTENSION POINT cascade-3)
+    spec: coo-cascade-respond
+    topic: coo/not-yet/cascade-respond
+    claimedBy: the cascade respond/decline feature slice (product-gated by the queue #24/#28 sessions)
+    notes: >-
+      Footer action region on the cascade detail surface, mirroring the
+      shipped contract-actions region. Plan §4 item 45 / FILE-4: the spec
+      premise "affordances exist but inert" is true only for contracts —
+      cascade respond/decline affordances exist NOWHERE, so these are
+      name-only reservations (no inert DOM stubbing; that would invent
+      product surface).
+
+  - name: cascade-action-respond
+    kind: testid
+    surface: frontend/src/features/portfolio/CascadeDetailView.tsx
+    spec: coo-cascade-respond
+    topic: coo/not-yet/cascade-respond
+    claimedBy: the cascade respond/decline feature slice
+    notes: >-
+      The level-holder's respond verb (absorb / refine-and-cascade). Engine
+      verbs already exist API-side (cascade, absorb, recascade) — see
+      operator/04-cascades for the curl shapes the UI will wrap.
+
+  - name: cascade-action-decline
+    kind: testid
+    surface: frontend/src/features/portfolio/CascadeDetailView.tsx
+    spec: coo-cascade-respond
+    topic: coo/not-yet/cascade-respond
+    claimedBy: the cascade respond/decline feature slice
+    notes: >-
+      The level-holder's formal decline. A decline is a documented governance
+      outcome, never an error — the shipped decline-pending chip and level
+      pill vocabulary (cascade-level-row[data-state="declined"]) already
+      render the read side.
+
+  # ---- contract verbs & state (COO-facing) --------------------------------
+
+  - name: contract-respond-flow
+    kind: testid
+    surface: frontend/src/features/portfolio/ContractDetailView.tsx
+    spec: coo-contract-respond
+    topic: coo/not-yet/contract-respond
+    claimedBy: the contract review/decline flow slice (queue #28 footer pattern)
+    notes: >-
+      The response panel the shipped-but-inert contract-action-review /
+      contract-action-decline buttons (plan §4 items 25/26 — testids exist
+      today, tooltips say the flow is undefined in v1) will open. Those two
+      button names are SHIPPED, not reserved; this entry reserves the flow
+      surface they lead to.
+
+  - name: contract-status-chip
+    kind: testid (+ data-state attr, values proposed|active|declined|expired)
+    surface: frontend/src/features/portfolio/ContractDetailView.tsx (header)
+    spec: coo-contract-status
+    topic: coo/not-yet/contract-status
+    claimedBy: the contract lifecycle-status display slice
+    notes: >-
+      Today an ACTIVE contract still shows only its "Proposed <date>" line
+      (contractData.ts drops lifecycle state; vv-documented, pinned as-is by
+      the 07-contract-detail capture). The read-side activation evidence is
+      the CONTRACT_ACTIVATED ledger row in the decision register.
+
+  - name: contract-monitor-history
+    kind: testid
+    surface: frontend/src/features/portfolio/ContractDetailView.tsx
+    spec: coo-contract-status
+    topic: coo/not-yet/contract-status
+    claimedBy: UI-1 contract monitor-history panel (filed follow-on product slice, ruling P-1 / FILE-2)
+    notes: >-
+      The wire DTO already carries monitors[] / breachSummary
+      (contracts.ts:174-175); the adapter deliberately drops them
+      (contractData.ts:51). Until UI-1 lands, monitor runs and breach state
+      are operator-grade API reads — operator/05-contracts documents the real
+      response shapes from committed acceptance transcripts.
+
+  - name: contract-attestation-form
+    kind: testid
+    surface: frontend/src/features/portfolio/ContractDetailView.tsx (per-commitment)
+    spec: coo-attestation
+    topic: coo/not-yet/attestation
+    claimedBy: the commitment attestation UI slice
+    notes: >-
+      Attestation exists today as the MCP/API verb (attest_commitment;
+      agents.md §8) — a party records that a commitment was honored. No UI
+      surface renders or accepts attestations yet.
+
+  - name: contract-attestation-submit
+    kind: testid
+    surface: frontend/src/features/portfolio/ContractDetailView.tsx
+    spec: coo-attestation
+    topic: coo/not-yet/attestation
+    claimedBy: the commitment attestation UI slice
+    notes: Submit affordance inside contract-attestation-form.
+
+  # ---- notification feed (COO-facing) -------------------------------------
+
+  - name: notification-feed
+    kind: testid
+    surface: portfolio chrome (header bar) — exact home decided by the feature slice
+    spec: coo-notification-feed
+    topic: coo/not-yet/notification-feed
+    claimedBy: the notification feed slice
+    notes: >-
+      The push side of what the dashboard already computes on read:
+      decline-pending cascades, breach events, agents entering intervention.
+      Until it ships, the dashboard's attention-ordered cards ARE the feed —
+      coo/01-dashboard teaches that reading habit.
+
+  - name: notification-item
+    kind: testid (+ data-kind attr, e.g. cascade-decline|contract-breach|agent-intervention)
+    surface: portfolio chrome
+    spec: coo-notification-feed
+    topic: coo/not-yet/notification-feed
+    claimedBy: the notification feed slice
+    notes: Per-entry row inside notification-feed.
+
+  # ---- agent controls (COO-facing Operations tab) --------------------------
+
+  - name: agent-controls
+    kind: testid
+    surface: frontend/src/features/portfolio/tabs/OperationsTab.tsx (deployment panel)
+    spec: coo-agent-controls
+    topic: coo/not-yet/agent-controls
+    claimedBy: the agent control verbs UI slice
+    notes: >-
+      The Operations tab is read-only today (the tab says so). Control verbs
+      (pause/resume/throttle/kill) exist operator-grade in the agent API —
+      operator/06-agent-lifecycle drives them with committed transcripts.
+
+  - name: agent-control-pause
+    kind: testid
+    surface: frontend/src/features/portfolio/tabs/OperationsTab.tsx
+    spec: coo-agent-controls
+    topic: coo/not-yet/agent-controls
+    claimedBy: the agent control verbs UI slice
+    notes: Pause verb; pairs with agent-control-resume.
+
+  - name: agent-control-resume
+    kind: testid
+    surface: frontend/src/features/portfolio/tabs/OperationsTab.tsx
+    spec: coo-agent-controls
+    topic: coo/not-yet/agent-controls
+    claimedBy: the agent control verbs UI slice
+    notes: Resume verb; pairs with agent-control-pause.
+
+  - name: agent-enforcement-disclosure
+    kind: testid
+    surface: frontend/src/features/portfolio/tabs/OperationsTab.tsx (deployment panel)
+    spec: coo-agent-controls
+    topic: coo/not-yet/agent-controls
+    claimedBy: UI-2 enforcement-disclosure rendering (filed follow-on product slice, ruling P-1 / FILE-3)
+    notes: >-
+      criteriaGates / readOnly / shadowEnteredAt are dropped before
+      AgentDeploymentPanel today — whether a pause is a recorded instruction
+      or a gateway-enforced block is invisible in the UI. The verb-response
+      enforcement block is documented from committed transcripts in
+      operator/06-agent-lifecycle.
+
+  # ---- operator-grade authoring verbs --------------------------------------
+
+  - name: cascade-issue-button
+    kind: testid
+    surface: frontend/src/features/portfolio/CorporateOperatingPartnerView.tsx (cascade grid header)
+    spec: operator-cascade-authoring
+    topic: operator/not-yet/cascade-authoring
+    claimedBy: the cascade authoring UI slice
+    notes: >-
+      "There is no 'issue a cascade' button anywhere in the client UI yet" —
+      authoring is operator-grade only (API/MCP). operator/04-cascades holds
+      the committed draft→PATCH→issue curl transcript the UI will wrap.
+
+  - name: cascade-author-form
+    kind: testid
+    surface: portfolio dashboard — authoring modal/panel
+    spec: operator-cascade-authoring
+    topic: operator/not-yet/cascade-authoring
+    claimedBy: the cascade authoring UI slice
+    notes: Critique text, acceptance criteria, target chain — the draft fields the API takes today.
+
+  - name: cascade-author-ai-draft
+    kind: testid
+    surface: portfolio dashboard — authoring modal/panel
+    spec: operator-cascade-authoring
+    topic: operator/not-yet/cascade-authoring
+    claimedBy: the cascade AI-authoring slice
+    notes: AI-assisted critique drafting (Anthropic-key-gated, like every AI assist surface).
+
+  - name: canvas-finding-curate-accept
+    kind: testid
+    surface: frontend/src/features/canvas/drawer/RisksTab.tsx (expanded finding)
+    spec: operator-finding-curation
+    topic: operator/not-yet/finding-curation
+    claimedBy: the finding curation UI slice
+    notes: >-
+      Curation verbs exist API-side (operator/03-diagnostics drives
+      accept/reject with committed transcripts; ai_curation_events records
+      actor identity). The Risks tab renders findings read-only today.
+
+  - name: canvas-finding-curate-reject
+    kind: testid
+    surface: frontend/src/features/canvas/drawer/RisksTab.tsx (expanded finding)
+    spec: operator-finding-curation
+    topic: operator/not-yet/finding-curation
+    claimedBy: the finding curation UI slice
+    notes: A rejected finding is a documented curation outcome, never an error.
+
+  - name: draft-accept
+    kind: testid
+    surface: frontend/src/features/capability-designer (Draft from Universe dialog)
+    spec: operator-draft-accept
+    topic: operator/not-yet/draft-accept
+    claimedBy: the generative-draft accept slice
+    notes: >-
+      Drafts are a read-only preview today — no accept button; committing a
+      draft into the tree ships in a later phase (manual 02-client-surfaces
+      "Honest limitations").
+
+  - name: add-source-commit
+    kind: testid
+    surface: frontend/src/features/canvas (Add Source modal)
+    spec: operator-add-source-commit
+    topic: operator/not-yet/add-source-commit
+    claimedBy: the Add Source registration slice
+    notes: >-
+      The modal is identification-only today: "Add to project" closes the
+      dialog without registering anything. Real ingestion runs through the
+      operator-side CLI (operator/02-corpus-ingest).
+
+  - name: decision-affected-picker
+    kind: testid
+    surface: frontend/src/features/designer/FutureStateDesigner.tsx (New Decision form)
+    spec: operator-decision-picker
+    topic: operator/not-yet/decision-form-picker
+    claimedBy: the decision-form entity picker slice
+    notes: >-
+      Affected Systems / Affected Manual Processes take comma-separated
+      entity IDs today — no picker. Practically an engagement-team form;
+      executives consume decisions through the canvas Log tab.
+
+# Shipped names referenced by the reservations above (informational — these
+# already exist in the DOM and are protected by active capture specs):
+#   contract-actions, contract-action-review, contract-action-decline
+#     (ContractDetailView footer — deliberately inert, plan §4 items 25-27)
+#   cascade-level-row[data-state], cascade-action-row[data-chain-seq]
+#     (read-side cascade vocabulary the respond/decline verbs will extend)
+#   agent-row[data-agent-key], agent-deployment-panel, finding-card
+#     (read-side Operations tab the control verbs will extend)
+shipped: []

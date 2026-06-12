@@ -1,0 +1,26 @@
+# DOC-1 S5 — PRE-WRITTEN capture spec for a UI verb that does not exist yet
+# (ruling P-2): cascade authoring (issue + AI-assisted drafting). Authoring is
+# operator-grade only today (API/MCP) — operator/04-cascades holds the
+# committed draft→PATCH→issue curl transcript the UI will wrap.
+id: operator-cascade-authoring
+title: Dashboard — issue a cascade (authoring form with AI draft assist)
+topic: operator/not-yet/cascade-authoring
+status: blocked
+statusReason: >-
+  There is no "issue a cascade" button anywhere in the client UI. RESERVED
+  names in specs/selector-registry.yaml: cascade-issue-button,
+  cascade-author-form, cascade-author-ai-draft. The authoring PR claims them
+  and flips this spec (AI draft assist additionally needs an Anthropic key).
+route: /portfolio/dashboard
+persona: L3_ANALYST
+viewport: { width: 1536, height: 3400 }
+waits:
+  - api: { get: /api/v1/domains, until: { path: "$.data.length", equals: 23 }, timeoutMs: 60000 }
+  - selector: '[data-banner-provenance="live"]'
+  - selector: '[data-testid="cascade-issue-button"]'
+preSteps:
+  - click: '[data-testid="cascade-issue-button"]'
+  - waitSelector: '[data-testid="cascade-author-form"]'
+capture: { mode: element, selector: '[data-testid="cascade-author-form"]' }
+output: operator-cascade-authoring.png
+determinism: seeded

@@ -1,0 +1,50 @@
+# DOC-1 S5 — COO guide task 5 ("walk a finding's provenance", beat 2).
+#
+# Persona: Executive (L1_EXECUTIVE) — COO read-path capture. The operator
+# guide captures the same surface as Architect (operator-provenance-drawer);
+# the pixels differ in the persona chip only — the product's design, stated
+# in both guides rather than escalated (plan §7 risk register).
+#
+# The From tab (/?view=provenance) is the evidence chain the COO walks after
+# reading a finding: entries grouped by source file, each with label, source
+# line, extractor chip, sha256 prefix and a confidence pip.
+#
+# Honesty note carried into the guide: on the seeded capture boot these
+# entries are the EvidenceSeeder's synthetic rows (extractor='seed' in the
+# chip) — a real engagement shows extractor='ingestion' rows tracing to the
+# client corpus.
+id: coo-provenance-walk
+title: From tab — the source chain behind what the canvas asserts
+topic: coo/05-finding-provenance#walk-the-source-chain
+route: /?view=provenance
+persona: L1_EXECUTIVE
+resolve:
+  - { var: domainId, get: /api/v1/domains, pick: "$.data[?(@.name=='Operational Risk')].id" }
+localStorage:
+  substrate-canvas-welcomed-v1: "1"
+  substrate-workspace-domain-id: "{domainId}"
+waits:
+  - api: { get: /api/v1/domains, until: { path: "$.data.length", equals: 23 }, timeoutMs: 60000 }
+  - selector: '[data-testid="living-canvas"]'
+    attr: data-canvas-ready
+    equals: "true"
+  - selector: '[data-testid="drawer-panel"]'
+    attr: data-tab
+    equals: "provenance"
+  - selector: '[data-testid="provenance-tab"]'
+  - selector: '[data-testid="provenance-entry"]'
+liveModeExempt: >-
+  No data-*-source marker exists on this surface because it has no fixture
+  fallback: entries render solely from GET /evidence/domain (loading spinner /
+  explicit empty state otherwise), and the runner fails the capture on any
+  unexpected app-API failure. The provenance-entry wait (rows exist only when
+  the live evidence API answered) is the live-data proof.
+allowedApiFailures:
+  - match: /api/v1/transformation/plan
+    reason: >-
+      Fixture-gated seam S4 — the plan endpoint 404s on every seeded boot
+      (vv-documented); the ribbon deterministically falls back to the
+      reduction thesis. Deliberately NOT worked around in product code.
+capture: { mode: fullPage }
+output: coo-provenance-walk.png
+determinism: animated

@@ -1,0 +1,34 @@
+# DOC-1 S5 — PRE-WRITTEN capture spec for a UI verb that does not exist yet
+# (ruling P-2): accepting a generative capability draft into the tree.
+# Drafts are a read-only preview today (manual 02-client-surfaces "Honest
+# limitations"); committing a draft ships in a later phase.
+id: operator-draft-accept
+title: Capability designer — accept a Draft-from-Universe proposal into the tree
+topic: operator/not-yet/draft-accept
+status: blocked
+statusReason: >-
+  The Draft from Universe dialog has no accept button. RESERVED name in
+  specs/selector-registry.yaml: draft-accept. The accept PR claims it and
+  flips this spec (the dialog is AI-backed — the lane additionally needs an
+  Anthropic key, so this spec may stay manual-lane even once built).
+route: /designer/capabilities
+persona: L3_ANALYST
+resolve:
+  - { var: domainId, get: /api/v1/domains, pick: "$.data[?(@.name=='Operational Risk')].id" }
+localStorage:
+  substrate-workspace-domain-id: "{domainId}"
+waits:
+  - api: { get: /api/v1/domains, until: { path: "$.data.length", equals: 23 }, timeoutMs: 60000 }
+  - api: { get: "/api/v1/capabilities?domainId={domainId}", until: { path: "$.data.length", equals: 2 }, timeoutMs: 60000 }
+  - selector: '[data-testid="capability-tree-row"]'
+preSteps:
+  - click: 'button:has-text("Draft from Universe")'
+  - waitSelector: '[data-testid="draft-accept"]'
+liveModeExempt: >-
+  No data-*-source marker exists on this surface because it has no fixture
+  fallback: the tree renders solely from GET /capabilities and the runner
+  fails the capture on any unexpected app-API failure. The api wait on the
+  live capability count is the live-data proof.
+capture: { mode: element, selector: '[data-testid="draft-accept"]' }
+output: operator-draft-accept.png
+determinism: seeded

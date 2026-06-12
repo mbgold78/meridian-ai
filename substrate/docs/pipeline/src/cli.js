@@ -55,12 +55,31 @@ async function main() {
   const specs = loadSpecs(SPECS_DIR, { only: values.spec });
   log(`loaded ${specs.length} capture spec(s) from specs/ — schema OK`);
 
+  // S5 spec lifecycle: blocked (pre-written against RESERVED registry names,
+  // P-2) and manual-job (D-C non-gate lane) specs are SKIPPED, never failed.
+  // Explicit --spec selection overrides the skip — that is how the S6 manual
+  // workflow_dispatch job runs the OIDC chip spec against the Compose stack.
+  const skipped = values.spec ? [] : specs.filter((s) => s.status !== 'active');
+  const runnable = values.spec ? specs : specs.filter((s) => s.status === 'active');
+  if (values.spec && specs.some((s) => s.status !== 'active')) {
+    log(`NOTE --spec=${values.spec} explicitly selects a status=${specs[0].status} spec — running it anyway (manual lane)`);
+  }
+  const logSkips = () => {
+    for (const s of skipped) {
+      log(`SKIP spec=${s.id} status=${s.status} topic=${s.topic} — ${String(s.statusReason).split('\n')[0].trim()}`);
+    }
+    if (skipped.length > 0) {
+      const by = (st) => skipped.filter((s) => s.status === st).length;
+      log(`SKIPPED ${skipped.length} spec(s) (status != active): blocked=${by('blocked')} manual-job=${by('manual-job')}`);
+    }
+  };
+
   if (command === 'assemble') {
     const res = assembleGuides({ config, specs, log });
     // S3 link check (plan §6 / acceptance A3): every image reference in the
     // configured doc roots — manual + acceptance/final — must resolve on disk.
     const lc = checkImageLinks({ config, log });
-    log(`DOCS-ASSEMBLE PASS guides=${res.guides} images=${res.images} links=${lc.refs}`);
+    log(`DOCS-ASSEMBLE PASS guides=${res.guides} images=${res.images} links=${lc.refs} skippedSpecs=${skipped.length}`);
     return;
   }
 
@@ -84,7 +103,7 @@ async function main() {
   try {
     const runPass = async (baseUrl, outDir) => {
       fs.rmSync(outDir, { recursive: true, force: true });
-      for (const spec of specs) {
+      for (const spec of runnable) {
         await runSpec({ browser, spec, config, baseUrl, outDir, warnings, log });
       }
       return writeManifest(outDir);
@@ -107,14 +126,16 @@ async function main() {
     };
 
     if (command === 'capture') {
+      logSkips();
       const m = await withApp('capture', async (baseUrl) => {
         if (!values['base-url']) await runWarmup(baseUrl);
         return runPass(baseUrl, capturesDir);
       });
       printManifest('CAPTURE', m);
-      log(`DOCS-CAPTURE PASS files=${Object.keys(m.manifest.files).length} manifest=${m.aggregate}`);
+      log(`DOCS-CAPTURE PASS files=${Object.keys(m.manifest.files).length} skipped=${skipped.length} manifest=${m.aggregate}`);
     } else {
       // verify — two full runs, byte-compared (D-A within-platform identity)
+      logSkips();
       const dirA = fromPipelineRoot('build/verify/run-a');
       const dirB = fromPipelineRoot('build/verify/run-b');
       let a, b;
@@ -140,7 +161,7 @@ async function main() {
       fs.rmSync(capturesDir, { recursive: true, force: true });
       fs.mkdirSync(capturesDir, { recursive: true });
       for (const f of fs.readdirSync(dirB)) fs.copyFileSync(path.join(dirB, f), path.join(capturesDir, f));
-      log(`DOCS-VERIFY PASS runs=2 mode=${values['fresh-boots'] ? 'fresh-boots' : 'same-boot'} files=${Object.keys(a.manifest.files).length} manifest=${a.aggregate}`);
+      log(`DOCS-VERIFY PASS runs=2 mode=${values['fresh-boots'] ? 'fresh-boots' : 'same-boot'} files=${Object.keys(a.manifest.files).length} skipped=${skipped.length} manifest=${a.aggregate}`);
     }
   } finally {
     await browser.close();

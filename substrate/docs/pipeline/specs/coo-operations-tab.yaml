@@ -1,0 +1,29 @@
+# DOC-1 S5 — COO guide task 4 ("read the agent Operations tab").
+#
+# Persona: Executive (L1_EXECUTIVE) — the COO guide's captures are taken as
+# the persona its reader holds (slice S5 ruling); persona changes the chip
+# and wire header only, never data visibility (manual:239 / plan §7).
+#
+# Same surface as 08-subsidiary-operations (operator/06) but the READ pose:
+# no row expanded, no deployment panel — the fleet as the COO sees it on
+# arrival. Selector set mirrors the proven operator spec:
+#   [data-agents-source="live"] — the agents-specific provenance marker; the
+#       only way to refuse the silent live→fixture fallback (agentData.ts).
+#   [data-testid="agent-row"][data-agent-key="a-pre-visit"] — agent_key is
+#       seed-stable fixture parity, never a per-boot UUID (P-3).
+# Tall viewport (inner-scroll shell, S1 finding): renders the whole scene —
+# fleet strip, agent roster, open findings — scroll-free.
+id: coo-operations-tab
+title: Operations tab — the agent fleet as the subsidiary COO reads it
+topic: coo/04-operations#read-the-fleet
+route: /portfolio/subsidiary/curasync-clinical?tab=operations
+persona: L1_EXECUTIVE
+viewport: { width: 1536, height: 2000 }
+waits:
+  - api: { get: /api/v1/domains, until: { path: "$.data.length", equals: 23 }, timeoutMs: 60000 }
+  - selector: '[data-agents-source="live"]'     # live-mode assertion (plan §4 item 35)
+  - selector: '[data-testid="agent-row"][data-agent-key="a-pre-visit"]'
+  - selector: '[data-testid="finding-card"]'
+capture: { mode: fullPage }
+output: coo-operations-tab.png
+determinism: seeded

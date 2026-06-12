@@ -19,7 +19,9 @@
 # the vv original was viewport-cropped at 960 (inner-scroll shell).
 id: cascade-detail-decline-pending
 title: Cascade detail — decline pending, with level and action timelines
-topic: client/coo-quick-guide#inspect-a-cascade
+# Topic re-pointed in S5: the aspirational "client/coo-quick-guide" name now
+# resolves to the real COO guide file (docs/guides/coo/02-cascades.md).
+topic: coo/02-cascades#read-a-cascade
 route: /portfolio/cascade/{cascadeId}
 persona: L1_EXECUTIVE
 resolve:

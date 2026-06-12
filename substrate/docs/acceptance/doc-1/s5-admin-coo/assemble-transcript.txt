@@ -1,0 +1,52 @@
+DOC-1 S5 acceptance evidence — docsAssemble: admin + coo bundles (gradlew docsAssemble, EXIT=0).
+Full invocation: fresh JVM boot -> warm-up sweep -> docsCapture (21 files, 12 skipped) -> assemble -> link check.
+Date: 2026-06-12. Extracted verbatim from the gradle run (s5-assemble.log):
+
+> Task :app:npmSetup SKIPPED
+> Task :docs:npmSetup SKIPPED
+SKIP spec=coo-agent-controls status=blocked topic=coo/not-yet/agent-controls — No pause/resume buttons and no enforcement disclosure render in the Operations tab (plan FILE-3 / ruling P-1 — UI-2 filed follow-on slice). RESERVED names in specs/selector-registry.yaml: agent-controls, agent-control-pause, agent-control-resume, agent-enforcement-disclosure.
+SKIP spec=coo-attestation status=blocked topic=coo/not-yet/attestation — No attestation UI exists; attest_commitment is MCP/API-only today. RESERVED names in specs/selector-registry.yaml: contract-attestation-form, contract-attestation-submit. The feature PR claims them and flips this spec.
+SKIP spec=coo-cascade-respond status=blocked topic=coo/not-yet/cascade-respond — Cascade respond/decline affordances exist NOWHERE in the frontend (plan FILE-4; CascadeDetailView.tsx EXTENSION POINT cascade-3). Selectors below are RESERVED names from specs/selector-registry.yaml: cascade-actions, cascade-action-respond, cascade-action-decline. Engine verbs already exist API-side (operator/04-cascades).
+SKIP spec=coo-contract-respond status=blocked topic=coo/not-yet/contract-respond — The Review/Decline buttons ship inert (tooltips say the flow is not defined in v1); contract responses are operator-grade actions today (operator/05-contracts). contract-respond-flow is a RESERVED name in specs/selector-registry.yaml; the flow PR claims it and flips this spec.
+SKIP spec=coo-contract-status status=blocked topic=coo/not-yet/contract-status — No lifecycle-status indicator or monitor history renders on the contract surface (plan FILE-2 / ruling P-1 — UI-1 filed follow-on slice). RESERVED names in specs/selector-registry.yaml: contract-status-chip (+ data-state), contract-monitor-history. Monitor/breach state is an operator-grade API read today (operator/05-contracts, committed transcripts).
+SKIP spec=coo-notification-feed status=blocked topic=coo/not-yet/notification-feed — No notification feed exists anywhere in the frontend. RESERVED names in specs/selector-registry.yaml: notification-feed, notification-item (+ data-kind). The feature PR decides its chrome home, claims the names, and flips this spec.
+SKIP spec=oidc-identity-chip status=manual-job topic=admin/index#identity-model-caveat — D-C ratified non-gate lane: requires the Compose oidc stack (Keycloak dev realm) and a real browser login — flake surface the gate excludes by design. Run via the S6 workflow_dispatch job (explicit --spec selection overrides the skip).
+SKIP spec=operator-add-source-commit status=blocked topic=operator/not-yet/add-source-commit — "Add to project" does not register the source or trigger ingestion. RESERVED name in specs/selector-registry.yaml: add-source-commit. The registration PR claims it and flips this spec.
+SKIP spec=operator-cascade-authoring status=blocked topic=operator/not-yet/cascade-authoring — There is no "issue a cascade" button anywhere in the client UI. RESERVED names in specs/selector-registry.yaml: cascade-issue-button, cascade-author-form, cascade-author-ai-draft. The authoring PR claims them and flips this spec (AI draft assist additionally needs an Anthropic key).
+SKIP spec=operator-decision-picker status=blocked topic=operator/not-yet/decision-form-picker — No picker exists — Affected Systems / Affected Manual Processes are comma-separated ID fields. RESERVED name in specs/selector-registry.yaml: decision-affected-picker. The picker PR claims it and flips this spec.
+SKIP spec=operator-draft-accept status=blocked topic=operator/not-yet/draft-accept — The Draft from Universe dialog has no accept button. RESERVED name in specs/selector-registry.yaml: draft-accept. The accept PR claims it and flips this spec (the dialog is AI-backed — the lane additionally needs an Anthropic key, so this spec may stay manual-lane even once built).
+SKIP spec=operator-finding-curation status=blocked topic=operator/not-yet/finding-curation — No curation affordances render in the Risks tab. RESERVED names in specs/selector-registry.yaml: canvas-finding-curate-accept, canvas-finding-curate-reject. The curation UI PR claims them and flips this spec.
+SKIPPED 12 spec(s) (status != active): blocked=11 manual-job=1
+booted app-0.1.0.jar on http://127.0.0.1:51176 (log: build\boot-capture.log)
+--- warm-up pass (discarded; cold-app first-session raster effects — see cli.js note) ---
+DOCS-CAPTURE PASS files=21 skipped=12 manifest=97110215163db5084b1b6ad7b5a3ea4c5972ca2b89e36f860f6504c24ba5a03f
+assemble: admin\index.md -> build\manual\admin\index.md
+assemble: coo\01-dashboard.md -> build\manual\coo\01-dashboard.md
+assemble: coo\02-cascades.md -> build\manual\coo\02-cascades.md
+assemble: coo\03-contracts.md -> build\manual\coo\03-contracts.md
+assemble: coo\04-operations.md -> build\manual\coo\04-operations.md
+assemble: coo\05-finding-provenance.md -> build\manual\coo\05-finding-provenance.md
+assemble: coo\index.md -> build\manual\coo\index.md
+assemble: coo\not-yet\agent-controls.md -> build\manual\coo\not-yet\agent-controls.md
+assemble: coo\not-yet\attestation.md -> build\manual\coo\not-yet\attestation.md
+assemble: coo\not-yet\cascade-respond.md -> build\manual\coo\not-yet\cascade-respond.md
+assemble: coo\not-yet\contract-respond.md -> build\manual\coo\not-yet\contract-respond.md
+assemble: coo\not-yet\contract-status.md -> build\manual\coo\not-yet\contract-status.md
+assemble: coo\not-yet\notification-feed.md -> build\manual\coo\not-yet\notification-feed.md
+assemble: operator\01-first-boot.md -> build\manual\operator\01-first-boot.md
+assemble: operator\02-corpus-ingest.md -> build\manual\operator\02-corpus-ingest.md
+assemble: operator\03-diagnostics.md -> build\manual\operator\03-diagnostics.md
+assemble: operator\04-cascades.md -> build\manual\operator\04-cascades.md
+assemble: operator\05-contracts.md -> build\manual\operator\05-contracts.md
+assemble: operator\06-agent-lifecycle.md -> build\manual\operator\06-agent-lifecycle.md
+assemble: operator\07-decision-log.md -> build\manual\operator\07-decision-log.md
+assemble: operator\index.md -> build\manual\operator\index.md
+assemble: operator\not-yet\add-source-commit.md -> build\manual\operator\not-yet\add-source-commit.md
+assemble: operator\not-yet\cascade-authoring.md -> build\manual\operator\not-yet\cascade-authoring.md
+assemble: operator\not-yet\decision-form-picker.md -> build\manual\operator\not-yet\decision-form-picker.md
+assemble: operator\not-yet\draft-accept.md -> build\manual\operator\not-yet\draft-accept.md
+assemble: operator\not-yet\finding-curation.md -> build\manual\operator\not-yet\finding-curation.md
+assemble: pilot\s1-pipeline-pilot.md -> build\manual\pilot\s1-pipeline-pilot.md
+link-check: 44 image reference(s) across 9 markdown file(s) — all resolve
+DOCS-ASSEMBLE PASS guides=27 images=16 links=44 skippedSpecs=12
+BUILD SUCCESSFUL in 58s

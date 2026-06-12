@@ -1,0 +1,59 @@
+# DOC-1 S5 — COO guide task 5 ("walk a finding's provenance", beat 1).
+#
+# Persona: Executive (L1_EXECUTIVE) — COO read-path capture.
+#
+# The Risks tab (/?view=risks deep-link): severity-counted header chips and
+# the severity-sorted findings list. NO row-expansion pre-step — the guide
+# narrates the click and the expanded body (description, recommendation,
+# Affects chips) in prose instead.
+#
+# S5 DISCOVERED constraint (recorded): a clicked finding row is NOT gate-
+# capturable today. Clicking spotlights the affected systems and arms an 8s
+# clear timer (LivingCanvas.handleSpotlightIds); the clear rebuilds the
+# node/edge arrays, re-creating the SMIL flow-dot <animateMotion> elements on
+# a fresh (running) timeline — un-freezing dots the runner paused — and the
+# drawer panel is translucent (bg-surface-raised/90 + backdrop-blur-2xl), so
+# the canvas state BLEEDS THROUGH every panel pixel. Each docsVerify pass
+# settled internally but the two passes froze different post-click states
+# (ring-present vs ring-cleared behind the blur): a deterministic-looking
+# scene that is actually bistable across passes — caught by the two-run gate
+# exactly as designed. The unexpanded deep-link pose below has no timer, no
+# spotlight and no rebuild, matching the S4-proven operator-provenance-drawer
+# recipe on the same drawer.
+id: coo-finding-detail
+title: Risks tab — severity chips and the findings list
+topic: coo/05-finding-provenance#read-the-finding
+route: /?view=risks
+persona: L1_EXECUTIVE
+resolve:
+  - { var: domainId, get: /api/v1/domains, pick: "$.data[?(@.name=='Operational Risk')].id" }
+localStorage:
+  substrate-canvas-welcomed-v1: "1"
+  substrate-workspace-domain-id: "{domainId}"
+waits:
+  - api: { get: /api/v1/domains, until: { path: "$.data.length", equals: 23 }, timeoutMs: 60000 }
+  - selector: '[data-testid="living-canvas"]'
+    attr: data-canvas-ready
+    equals: "true"
+  - selector: '[data-testid="drawer-panel"]'
+    attr: data-tab
+    equals: "risks"
+  - selector: '[data-testid="canvas-finding-row"]'
+liveModeExempt: >-
+  No data-*-source marker exists on this surface because it has no fixture
+  fallback: the Risks tab renders solely from the live findings API (explicit
+  empty state otherwise), and the runner fails the capture on any unexpected
+  app-API failure. The canvas-finding-row wait (rows exist only when the live
+  findings API answered) is the live-data proof.
+allowedApiFailures:
+  - match: /api/v1/transformation/plan
+    reason: >-
+      Fixture-gated seam S4 — the plan endpoint 404s on every seeded boot
+      (vv-documented); the ribbon deterministically falls back to the
+      reduction thesis. Deliberately NOT worked around in product code.
+capture: { mode: fullPage }
+annotations:
+  - { n: 1, anchor: '[data-testid="canvas-finding-row"]',
+      offset: { x: -18, y: 4 }, text: "Findings, severity-first — click one to expand its description, recommendation, and affected systems" }
+output: coo-finding-detail.png
+determinism: animated

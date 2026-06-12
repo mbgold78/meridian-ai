@@ -12,10 +12,24 @@ import { schemaFailure } from './errors.js';
 const TOP_KEYS = new Set([
   'id', 'title', 'topic', 'route', 'resolve', 'persona', 'localStorage',
   'viewport', 'waits', 'preSteps', 'capture', 'annotations', 'output',
-  'determinism', 'liveModeExempt', 'allowedApiFailures',
+  'determinism', 'liveModeExempt', 'allowedApiFailures', 'status', 'statusReason',
 ]);
 const PERSONAS = new Set(['L1_EXECUTIVE', 'L3_ANALYST']);
 const DETERMINISM = new Set(['static', 'seeded', 'animated']);
+/**
+ * Spec lifecycle (DOC-1 S5):
+ *   active     — captured + gated (default).
+ *   blocked    — pre-written against RESERVED selector-registry names for a
+ *                UI surface that does not exist yet (ruling P-2). The runner
+ *                SKIPS it (visible SKIPPED count) instead of failing; the
+ *                feature PR that builds the surface flips it to active and
+ *                claims the registry names.
+ *   manual-job — runnable only in the manual workflow_dispatch lane (ruling
+ *                D-C: the OIDC identity chip needs the Compose/Keycloak
+ *                stack); excluded from the gate manifest, run via explicit
+ *                --spec selection.
+ */
+const STATUSES = new Set(['active', 'blocked', 'manual-job']);
 const PRESTEP_KINDS = new Set(['click', 'fill', 'hover', 'waitSelector']);
 
 /** Selector patterns accepted as a live-mode assertion (plan §3: mandatory). */
@@ -58,6 +72,16 @@ export function validateSpec(spec, fileName) {
   }
   if (!DETERMINISM.has(spec.determinism)) {
     fail(errors, `'determinism' must be one of ${[...DETERMINISM].join('|')}`);
+  }
+
+  // status (S5): non-active specs are schema-validated like everything else
+  // (they are PRE-WRITTEN, ready to flip), but the runner skips them.
+  if (spec.status !== undefined && !STATUSES.has(spec.status)) {
+    fail(errors, `'status' must be one of ${[...STATUSES].join('|')} (default: active)`);
+  }
+  spec.status = spec.status ?? 'active';
+  if (spec.status !== 'active' && !isNonEmptyString(spec.statusReason)) {
+    fail(errors, `status: ${spec.status} requires 'statusReason' naming the gap (and the selector-registry entries it waits on)`);
   }
 
   if (spec.resolve !== undefined) {

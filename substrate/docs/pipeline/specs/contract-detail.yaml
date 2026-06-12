@@ -19,7 +19,9 @@
 # action footer) scroll-free; the vv original was viewport-cropped at 960.
 id: contract-detail
 title: Coordination contract detail — terms, monitoring, inert Review/Decline
-topic: client/coo-quick-guide#contract-detail
+# Topic re-pointed in S5: the aspirational "client/coo-quick-guide" name now
+# resolves to the real COO guide file (docs/guides/coo/03-contracts.md).
+topic: coo/03-contracts#read-a-contract
 route: /portfolio/contract/co-tribal-knowledge-depopulation
 persona: L1_EXECUTIVE
 viewport: { width: 1536, height: 2400 }

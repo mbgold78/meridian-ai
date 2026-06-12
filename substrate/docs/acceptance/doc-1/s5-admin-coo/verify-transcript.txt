@@ -1,0 +1,133 @@
+DOC-1 S5 acceptance evidence — D4 admin guide + D5 COO guide + selector registry.
+Date: 2026-06-12. Platform: Windows 11 local (win32); per ratified D-A this demonstrates
+WITHIN-PLATFORM byte-identity + two-run self-identity (Linux CI becomes canonical at S6).
+Each docsVerify invocation = fresh JVM boot (dev profile, demo seed + contracts.activate +
+fixed-clock 2026-05-12T00:00:00Z, runner-allocated free port) + one DISCARDED warm-up sweep +
+TWO full capture passes byte-compared.
+
+Suite: 28 specs on disk = 16 ACTIVE (13 from S2/S4 + 3 new S5 COO scenes), 11 BLOCKED
+(pre-written against RESERVED selector-registry names, ruling P-2 — runner SKIPS them with a
+visible count), 1 MANUAL-JOB (oidc-identity-chip, ruling D-C — non-gate lane). New active:
+  coo-operations-tab    (COO task 4 — Operations tab read pose, L1_EXECUTIVE, no expansion)
+  coo-finding-detail    (COO task 5 beat 1 — Risks tab list, L1_EXECUTIVE; see deviation 1)
+  coo-provenance-walk   (COO task 5 beat 2 — From tab, L1_EXECUTIVE twin of the S4 operator spec)
+
+== ACCEPTANCE GATE 1: docsVerify green TWICE with identical hashes =========================
+
+INVOCATION 1: .\gradlew.bat docsVerify              -> EXIT=0, BUILD SUCCESSFUL in 1m 9s
+DOCS-VERIFY PASS runs=2 mode=same-boot files=21 skipped=12 manifest=97110215163db5084b1b6ad7b5a3ea4c5972ca2b89e36f860f6504c24ba5a03f
+
+INVOCATION 2: .\gradlew.bat docsVerify              -> EXIT=0, BUILD SUCCESSFUL in 1m 9s
+DOCS-VERIFY PASS runs=2 mode=same-boot files=21 skipped=12 manifest=97110215163db5084b1b6ad7b5a3ea4c5972ca2b89e36f860f6504c24ba5a03f
+
+CROSS-BOOT LANE: .\gradlew.bat docsVerify -PfreshBoots -> EXIT=0, BUILD SUCCESSFUL in 1m 35s
+DOCS-VERIFY PASS runs=2 mode=fresh-boots files=21 skipped=12 manifest=97110215163db5084b1b6ad7b5a3ea4c5972ca2b89e36f860f6504c24ba5a03f
+
+Aggregate manifest, ALL THREE invocations: 97110215163db5084b1b6ad7b5a3ea4c5972ca2b89e36f860f6504c24ba5a03f
+Per-file SHA-256 (identical in every compared pass). The 17 pre-S5 files are BYTE-IDENTICAL
+to the hashes committed in s4-operator/verify-transcript.txt — adding the three COO specs,
+the four spec topic re-points, and the runner's settle-loop SMIL hardening (deviation 2)
+changed NO pre-existing pixel:
+  c29f8716091a3d007dbcd5b4996227b01b957771c248f3b555eb5024821e48e1  01-living-canvas.png
+  7d7b19aaa9eb91c0304d1b07eb7070b4cd943ecbf85ad51ee9e17baa64a1313e  02-designer.png
+  37c16f21203d7fc36e54cf14d3411a9efa4447af2ac9ff140de598dee8ae1061  03-capability-designer.png
+  6be0a8717c3a5f61e6e9b5588de59e4755f70b9e853d478d53a62ed0e48ec305  04-portfolio-landing.png
+  0e3b2580a0c5fec099f71a27f0484162e75e456adbd6e61eb8154a7cc2f7c204  05-portfolio-dashboard.png
+  7a726aee9879d825e10d362f84a3d146bedc606838ccbba36feff58c8599bec5  06-cascade-detail-decline-pending.png
+  27485d14ca6f22316a3c2a1e9e246fa9e4b55037d15c044af14b8e266455c6a0  07-contract-detail.png
+  5e563fd2a067ae39ac4fd5f5799d3f864358c8084957de6aad31418327498473  08-subsidiary-operations.annotated.png
+  8742a3477251fb33e5760dcde4a1e6d9fcb96fdcb9c7dc8f65cc54b3d9da240b  08-subsidiary-operations.png
+  05867a21e7921be784e83c087d3d23598f165d348bdb5c0f25f34ab7636851e4  08a-operations-path-segment-notfound.png
+  a41ab1632ab02e4f7f842ec4caf199c77eed7af74f9da3ebc4d6c7ae0c6a07c8  coo-finding-detail.annotated.png
+  9b1fd51e0e967c2f8ec5176d9fc491357a3d0c152d0c21e35e4a1e71b9cc7062  coo-finding-detail.png
+  ed5087ce9f0852c8b6df7e3959351088dfd6e5cc7127150fa56deceb3eab4c84  coo-operations-tab.png
+  056ff79db14bd44acdb8fbdb8f7c15fae9c223f9d78eeb3a3c3246efc61ff8ee  coo-provenance-walk.png
+  2d40482e7674adece646f24d5482cd8b9ced57727c1b62c069e5ee69cac8f07c  operator-breach-signals.annotated.png
+  3be99bfe2294f2ae5931352e8262c6f6540ba824fd5439686acb169471142e90  operator-breach-signals.png
+  cdc6cea4a6394c96039f81369dbbf6cd5e3c661c664aa7a81b4a848cfc7c4ad3  operator-cascade-grid.annotated.png
+  56120a72beddc4d0ad1d8f59a4b8028dbe6f817138c8924320ed88122a3feee1  operator-cascade-grid.png
+  a1935c7bdcc955176067eff7bdaf56c428667efafa5b45c410685b1b04d6d605  operator-decision-verify.png
+  ea1147d59c6050f7d8352a770dffd9420b08a0ce9078cd296767d219fc7a712d  operator-provenance-drawer.annotated.png
+  00a412a20abcac2402e91e7e345ed645a5f4d0ea69a6d593f86719e55a01a0a1  operator-provenance-drawer.png
+
+== ACCEPTANCE GATE 2: blocked specs SKIPPED with a visible count ===========================
+
+Every gate invocation (verify x3, the capture step of assemble) printed one SKIP line per
+non-active spec plus the summary — verbatim from invocation 1:
+
+  SKIP spec=coo-agent-controls status=blocked topic=coo/not-yet/agent-controls — ...
+  SKIP spec=coo-attestation status=blocked topic=coo/not-yet/attestation — ...
+  SKIP spec=coo-cascade-respond status=blocked topic=coo/not-yet/cascade-respond — ...
+  SKIP spec=coo-contract-respond status=blocked topic=coo/not-yet/contract-respond — ...
+  SKIP spec=coo-contract-status status=blocked topic=coo/not-yet/contract-status — ...
+  SKIP spec=coo-notification-feed status=blocked topic=coo/not-yet/notification-feed — ...
+  SKIP spec=oidc-identity-chip status=manual-job topic=admin/index#identity-model-caveat — ...
+  SKIP spec=operator-add-source-commit status=blocked topic=operator/not-yet/add-source-commit — ...
+  SKIP spec=operator-cascade-authoring status=blocked topic=operator/not-yet/cascade-authoring — ...
+  SKIP spec=operator-decision-picker status=blocked topic=operator/not-yet/decision-form-picker — ...
+  SKIP spec=operator-draft-accept status=blocked topic=operator/not-yet/draft-accept — ...
+  SKIP spec=operator-finding-curation status=blocked topic=operator/not-yet/finding-curation — ...
+  SKIPPED 12 spec(s) (status != active): blocked=11 manual-job=1
+
+and every PASS line carries the count first-class: files=21 skipped=12. Explicit
+--spec=<id> selection overrides the skip (the S6 manual-job lane for the OIDC chip);
+{{capture:}} placeholders referencing a non-active spec fail docsAssemble with
+reason=spec-status-<status> (assemble.js guard), so stubs reference spec FILES in prose.
+
+== ACCEPTANCE GATE 3: docsAssemble produces admin + coo bundles ============================
+
+.\gradlew.bat docsAssemble -> EXIT=0, BUILD SUCCESSFUL in 58s (full extract in
+assemble-transcript.txt): 27 guide sources assembled into build/manual/ — operator/ (9 + 5
+not-yet stubs), coo/ (6 + 6 not-yet stubs), admin/ (1), pilot/ (1); 16 {{capture:...}}
+placeholders resolved with copied PNGs + callout legends; link check 44 image references
+across 9 markdown files, all resolve.
+DOCS-ASSEMBLE PASS guides=27 images=16 links=44 skippedSpecs=12
+
+== STUB INVENTORY (acceptance A6) ==========================================================
+
+11 not-yet UI verbs == the plan §8/A6 list, placement per the A6 default split (six
+COO-facing in guides/coo/not-yet/, five operator-grade in guides/operator/not-yet/).
+Full cross-check table: stub-inventory.md (this directory). 22 reserved selector names
+registered with owner notes in substrate/docs/pipeline/specs/selector-registry.yaml.
+
+== DEVIATIONS DISCOVERED IN THIS SLICE (recorded per the binding plan) =====================
+
+1. The COO task-5 capture was planned as "first finding row EXPANDED" — that scene is NOT
+   gate-capturable today. Clicking a finding spotlights its systems and arms an 8s clear
+   timer (LivingCanvas.handleSpotlightIds); the clear rebuilds the node/edge arrays,
+   re-creating the SMIL flow-dot <animateMotion> elements on a fresh RUNNING timeline
+   (un-freezing what the runner paused), and the drawer panel is translucent
+   (bg-surface-raised/90 + backdrop-blur-2xl) so canvas state bleeds through every panel
+   pixel. Each verify pass settled internally but froze a DIFFERENT post-click state
+   (ring-present vs ring-cleared behind the blur): a bistable scene, caught by the two-run
+   gate exactly as designed (first red run: only coo-finding-detail.png differed,
+   runA=8712f38b... runB=695d2270...). Re-specced to the unexpanded Risks-list deep-link
+   pose (the S4-proven operator-provenance-drawer recipe on the same drawer); the guide
+   narrates the click in prose. Debug method preserved: debug-settle.mjs (this directory)
+   bisected the moving region to the canvas SMIL layer post-rebuild.
+
+2. Runner hardening that fell out of (1): the settle loop now RE-APPLIES the SMIL freeze on
+   every attempt for determinism:animated specs (capture.js). Idempotent for already-frozen
+   SVGs — proven by the 17 pre-S5 hashes above being byte-identical to S4 — but converts
+   "an SVG layer mounted after the one-time freeze" from a run-to-run settle flake
+   (observed: same spec, same boot, PASS then never-settled) into convergence.
+
+3. Selector-registry path: the slice prompt names substrate/docs/pipeline/
+   selector-registry.yaml; the binding plan (§4, twice) names specs/selector-registry.yaml,
+   and S1's loadSpecs already excludes 'selector-registry*' from spec loading IN specs/.
+   The plan's path wins: substrate/docs/pipeline/specs/selector-registry.yaml.
+
+4. Topic re-points (no pixel impact): the four L1 specs that pointed at the aspirational
+   "client/coo-quick-guide" topic now point at the real COO guide files
+   (coo/01-dashboard, coo/02-cascades, coo/03-contracts) so docsVerify failures name a
+   file that exists.
+
+5. Spec schema addition (pipeline code, not production): top-level status
+   (active|blocked|manual-job, default active) + statusReason (required when non-active).
+   Non-active specs remain fully schema-validated — they are pre-written contracts, ready
+   to flip. The OIDC chip spec uses status: manual-job (ruling D-C); the 11 verb stubs use
+   status: blocked (ruling P-2).
+
+6. Zero production-code changes in this slice (S4's sanctioned additive class was not even
+   needed): git diff over substrate/frontend + substrate/app is empty. Frontend suite
+   unchanged from S4's recorded 145/145.
