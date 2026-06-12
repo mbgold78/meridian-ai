@@ -42,7 +42,11 @@ export function DecisionsTab({
 
   return (
     <div className="flex h-full flex-col">
-      <div className="border-b border-border px-4 py-3">
+      {/* data-testid (DOC-1 S4, additive only): the header — count, verify
+          button, verify-result banner — is the deterministic capture crop;
+          the rows below render per-boot chain-hash prefixes and can never be
+          byte-stable across fresh seeds. */}
+      <div data-testid="decision-log-header" className="border-b border-border px-4 py-3">
         <div className="flex items-center justify-between">
           <div>
             <span className="text-2xl font-black text-foreground">{decisions.length}</span>

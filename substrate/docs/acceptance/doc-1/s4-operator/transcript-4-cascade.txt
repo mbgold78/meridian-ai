@@ -1,0 +1,92 @@
+
+================ 1. POST /cascade-drafts ==> 201 OPEN draft (free-form; critique + acceptance criteria; SLA 0 = no deadline) ================
+{
+    "data": {
+        "id": "3e2b2be2-e816-42e4-95b0-c77a89ed87be",
+        "domainId": "3defa63f-0dbf-48a4-bb0b-fd1b25cb5348",
+        "authorMemberId": null,
+        "authorLabel": "Operating Partner",
+        "originalCritique": "Manual eligibility re-checks are duplicated across intake and billing. Consolidate to one owner per claim before Q3.",
+        "acceptanceCriteria": "A single named owner per claim; duplicate re-checks retired; a documented decline citing regulatory constraints is acceptable.",
+        "summary": "Consolidate duplicated eligibility re-checks",
+        "affectedDomainId": null,
+        "originFindingId": null,
+        "cascadeGroupId": null,
+        "authoringMode": "free-form",
+        "responseSlaDays": 0,
+        "suggestedCritique": null,
+        "suggestedAcceptanceCriteria": null,
+        "suggestionProvenance": null,
+        "suggestionState": "none",
+        "orchestratorTaskId": null,
+        "status": "open",
+        "issuedCascadeId": null,
+        "createdAt": "2026-06-12T20:53:25.750391Z",
+        "updatedAt": "2026-06-12T20:53:25.750391Z"
+    },
+    "meta": {
+        "timestamp": "2026-06-12T20:53:25.777432Z",
+        "requestId": "ba0f1994-74fd-4f06-ab96-bc67b7ec2942",
+        "version": "0.1.0",
+        "personaLevel": "L3_ANALYST"
+    },
+    "errors": []
+}
+
+================ 2. PATCH /cascade-drafts/{id} ==> refine while OPEN (absent fields untouched) ================
+status          : open
+originalCritique: Manual eligibility re-checks are duplicated across intake and billing. Consolidate to one accountable owner per claim before Q3 close.
+
+================ 3. POST /cascade-drafts/{id}/issue ==> 201, the live cascade is born IN_FLIGHT at L1 (critique + criteria frozen) ================
+id             : ea09aedc-cb00-43bf-b475-4de79d972b22
+currentState   : in-flight | attentionSignal: escalating
+originatedBy   : Operating Partner | originatedAt: 2026-05-12T00:00:00Z
+frontier       : L 1 looking - Curasync COO
+levels         : [(0, 'Operating Partner', 'cascaded'), (1, 'Curasync COO', 'looking')]
+
+================ 4. Re-issue with the SAME idempotencyKey ==> 200 the SAME cascade (idempotent on the draft row, ADR D8) ================
+HTTP 200
+
+================ 5. POST /cascades/{id}/levels/1/cascade AS the L1 owner ==> chain grows to L2 (level verbs belong to the level owner) ================
+currentState   : in-flight | attentionSignal: escalating | frontierDepth: 2
+levels         : [(0, 'Operating Partner', 'cascaded'), (1, 'Curasync COO', 'cascaded'), (2, 'Curasync HIM Director', 'looking')]
+
+================ 5b. GET /cascades/{id}/actions ==> the append-only action timeline (the audit trail) ================
+#1 issue    L0 Operating Partner  -> Curasync COO
+#2 cascade  L1 Curasync COO       -> Curasync HIM Director
+
+================ 6. GET /cascades/attention?domainId= ==> the worklist names whose action is demanded right now ================
+decline-pending-originator Decline pending — Curasync HIM Director declined at L2
+respond-to-decline Respond to decline — Curasync HIM Director declined at L2; response owned at L1
+level-looking      Awaiting response — Curasync HIM Director at L2
+level-looking      Awaiting response — Sentari Senior MT at L3
+level-looking      Awaiting response — Tellix Engineering Director at L2
+
+================ 7. GET /cascades/stats?domainId= ==> the issued count moved 3 -> 4 (the new cascade is escalating) ================
+{
+    "data": {
+        "domainId": "3defa63f-0dbf-48a4-bb0b-fd1b25cb5348",
+        "total": 4,
+        "byState": {
+            "in-flight": 4,
+            "resolved-looks-good": 0,
+            "resolved-declined": 0
+        },
+        "bySignal": {
+            "decline-pending": 1,
+            "escalating": 3,
+            "absorbed": 0
+        },
+        "overdueCount": 0,
+        "actionsLast7Days": 2
+    },
+    "meta": {
+        "timestamp": "2026-06-12T20:53:26.548510200Z",
+        "requestId": "6a3d79f0-e510-4de4-9ae5-7da25ce69de6",
+        "version": "0.1.0",
+        "personaLevel": "L3_ANALYST"
+    },
+    "errors": []
+}
+
+================ SECTION cascade DONE ================

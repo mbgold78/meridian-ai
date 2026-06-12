@@ -1,0 +1,81 @@
+
+================ 1. POST /agents ==> register (deploy); agents land in SHADOW by default; provenance fields are mandatory ================
+id        : a-docs-pilot | status: shadow | operationalMode: shadow
+deployedBy: Curasync RCM team | deployedAt: 2026-05-12T00:00:00Z
+oversight : ['Curasync RCM Lead', 'Curasync COO']
+readOnly  : True (read-only at the gateway unless explicitly granted otherwise)
+
+================ 2. GET /agents/a-docs-pilot ==> controlEffects disclose what pause/kill/throttle would physically do BEFORE you act ================
+status        : shadow
+controlEffects:
+{
+  "pause": {
+    "effect": "recorded-intent",
+    "disclosure": "registry flip recorded; the shared enforcement ladder (substrate.contracts.enforcement.mode) is in SHADOW: this agent's governed calls are rowed would-deny and zombie activity is signaled, not blocked \u2014 enforce mode makes this a hard gateway block"
+  },
+  "kill": {
+    "effect": "recorded-intent",
+    "disclosure": "registry flip recorded; the shared enforcement ladder (substrate.contracts.enforcement.mode) is in SHADOW: this agent's governed calls are rowed would-deny and zombie activity is signaled, not blocked \u2014 enforce mode makes this a hard gateway block"
+  },
+  "throttle": {
+    "effect": "recorded-intent",
+    "disclosure": "registry flip recorded; the shared enforcement ladder (substrate.contracts.enforcement.mode) is in SHADOW: this agent's governed calls are rowed would-deny and zombie activity is signaled, not blocked \u2014 enforce mode makes this a hard gateway block"
+  }
+}
+
+================ 3. POST promote WITHOUT a decided review ==> 409 PROMOTION_REVIEW_REQUIRED (the review gate is real) ================
+HTTP  : HTTP 409
+errors: [
+  {
+    "code": "PROMOTION_REVIEW_REQUIRED",
+    "message": "promote requires an unconsumed APPROVED PROMOTION review newer than the request (ADR-003 D10) \u2014 record + decide a review first",
+    "field": null
+  }
+]
+
+================ 4. POST promote/request ==> recorded; the detail now carries the request + the shadow window it summarizes ================
+verb status: shadow
+promotion  : {"requestedAt": "2026-05-12T00:00:00Z", "latestReview": null}
+shadow since: 2026-05-12T00:00:00Z
+
+================ 5. POST reviews + decide approved ==> a named reviewer records the compliance review with a written rationale ================
+review recorded: dc0a1341-e6ac-48b6-8d34-f23d8b06f567
+{
+    "data": {
+        "id": "dc0a1341-e6ac-48b6-8d34-f23d8b06f567",
+        "agentRegistrationId": "1c54b897-bf8d-481c-a53c-fef43a86efc5",
+        "reviewKind": "promotion",
+        "requestedAt": "2026-05-12T00:00:00Z",
+        "requestedBy": "Curasync RCM Lead",
+        "reviewer": "Curasync RCM Lead",
+        "reviewerMemberId": null,
+        "decidedAt": "2026-05-12T00:00:00Z",
+        "decision": "approved",
+        "rationale": "Shadow window clean; mandate gates structured; oversight chain staffed",
+        "evidenceRefs": null,
+        "consumedByEventId": null
+    },
+    "meta": {
+        "timestamp": "2026-06-12T20:53:28.487651Z",
+        "requestId": "2c9746f9-8ea5-4136-bf34-123a5746d239",
+        "version": "0.1.0",
+        "personaLevel": "L3_ANALYST"
+    },
+    "errors": []
+}
+
+================ 6. POST promote ==> 200; the approved review is CONSUMED (single use); status live ================
+HTTP   : HTTP 200
+status : live
+
+================ 7. POST pause {reason!} ==> 200 + the enforcement block — READ THE DISCLOSURE, not your assumptions (P-1) ================
+HTTP        : HTTP 200
+status      : paused
+enforcement :
+{
+  "effect": "recorded-intent",
+  "confirmationState": "pending",
+  "disclosure": "registry flip recorded; the shared enforcement ladder (substrate.contracts.enforcement.mode) is in SHADOW: this agent's governed calls are rowed would-deny and zombie activity is signaled, not blocked \u2014 enforce mode makes this a hard gateway block"
+}
+
+================ SECTION agents DONE ================

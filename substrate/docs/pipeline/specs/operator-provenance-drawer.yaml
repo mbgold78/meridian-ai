@@ -1,0 +1,55 @@
+# DOC-1 S4 — operator guide task 3 ("provenance walk", UI beat).
+#
+# Persona: Architect (L3_ANALYST) — operator-guide capture.
+#
+# The provenance drawer tab is the UI face of the evidence chain: entries
+# grouped by source file, each with label, source-file line, extractor chip
+# and sha256 prefix. Deep-linked via /?view=provenance (LivingCanvas reads
+# the `view` search param) instead of clicking the rail — plan §4 item 38.
+#
+# Honesty note carried into the guide: on the seeded capture boot these
+# entries are the EvidenceSeeder's synthetic rows (extractor='seed', visible
+# in the chip) — a real engagement shows extractor='ingestion' rows tracing
+# to the client corpus, as in the committed Glacier provenance walk.
+#
+# Canvas family: workspace pinned to the root demo domain via the P-5
+# localStorage contract (per-boot UUID resolved by API, P-3); welcome overlay
+# suppressed; framer-motion + SMIL handled by determinism: animated.
+id: operator-provenance-drawer
+title: Living Canvas drawer — Provenance tab (source chain for ingested entities)
+topic: operator/03-diagnostics#provenance-ui
+route: /?view=provenance
+persona: L3_ANALYST
+resolve:
+  - { var: domainId, get: /api/v1/domains, pick: "$.data[?(@.name=='Operational Risk')].id" }
+localStorage:
+  substrate-canvas-welcomed-v1: "1"
+  substrate-workspace-domain-id: "{domainId}"
+waits:
+  - api: { get: /api/v1/domains, until: { path: "$.data.length", equals: 23 }, timeoutMs: 60000 }
+  - selector: '[data-testid="living-canvas"]'
+    attr: data-canvas-ready
+    equals: "true"
+  - selector: '[data-testid="drawer-panel"]'
+    attr: data-tab
+    equals: "provenance"
+  - selector: '[data-testid="provenance-tab"]'
+  - selector: '[data-testid="provenance-entry"]'
+liveModeExempt: >-
+  No data-*-source marker exists on this surface because it has no fixture
+  fallback: entries render solely from GET /evidence/domain (loading spinner /
+  explicit empty state otherwise), and the runner fails the capture on any
+  unexpected app-API failure. The provenance-entry wait (rows exist only when
+  the live evidence API answered) is the live-data proof.
+allowedApiFailures:
+  - match: /api/v1/transformation/plan
+    reason: >-
+      Fixture-gated seam S4 — the plan endpoint 404s on every seeded boot
+      (vv-documented); the ribbon deterministically falls back to the
+      reduction thesis. Deliberately NOT worked around in product code.
+capture: { mode: fullPage }
+annotations:
+  - { n: 1, anchor: '[data-testid="provenance-entry"]',
+      offset: { x: -18, y: 4 }, text: "Evidence entry — label, source file, extractor chip, sha256 prefix of the registered document" }
+output: operator-provenance-drawer.png
+determinism: animated

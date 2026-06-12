@@ -1,0 +1,186 @@
+
+================ 1. GET /contracts/fi-shared-pre-fill-agent ==> the seeded federation invitation sits PROPOSED; monitor not armed ================
+status   : PROPOSED
+parties  : [('Polestar Life Admin (federation host)', 'required', None), ('Curasync Clinical Systems', 'required', None)]
+monitors : [('utilization-imbalance', 'SUSPENDED', 'METRIC_THRESHOLD')]
+
+================ 2. POST respond — party 1 of 2 ACCEPTED ==> still PROPOSED (activation needs the LAST required acceptance) ================
+status   : PROPOSED
+parties  : [('Polestar Life Admin (federation host)', {'response': 'ACCEPTED', 'respondedBy': 'operating-partner', 'respondedAt': '2026-05-12T00:00:00Z', 'declineTriggerId': None, 'declineReasoning': None}), ('Curasync Clinical Systems', None)]
+
+================ 3. POST respond — party 2 of 2 ACCEPTED ==> ACTIVE; monitors arm ================
+status     : ACTIVE
+activatedAt: 2026-05-12T00:00:00Z
+parties    : [('Polestar Life Admin (federation host)', {'response': 'ACCEPTED', 'respondedBy': 'operating-partner', 'respondedAt': '2026-05-12T00:00:00Z', 'declineTriggerId': None, 'declineReasoning': None}), ('Curasync Clinical Systems', {'response': 'ACCEPTED', 'respondedBy': 'operating-partner', 'respondedAt': '2026-05-12T00:00:00Z', 'declineTriggerId': None, 'declineReasoning': None})]
+monitors   : [('utilization-imbalance', 'ACTIVE')]
+
+================ 4. POST run-now on the armed monitor ==> INDETERMINATE: no party reported metrics yet — the monitor never guesses on missing data (ADR D11) ================
+{
+    "data": {
+        "id": "5e12c205-2d70-42b8-9a30-7a2586b1850f",
+        "monitorId": "18aed41a-af39-451b-a967-1590b8ae3dc3",
+        "startedAt": "2026-05-12T00:00:00Z",
+        "finishedAt": "2026-05-12T00:00:00Z",
+        "outcome": "INDETERMINATE",
+        "periodKey": "2026-Q1",
+        "details": {
+            "rule": "METRIC_THRESHOLD",
+            "metricKey": "utilization_share",
+            "threshold": 0.3,
+            "periodKey": "2026-Q1",
+            "missingPartyIds": [
+                "1b6111ec-deee-4079-b1ba-eb2491222643",
+                "54fa2c7c-815b-40be-a61b-9c3fe7e42401"
+            ],
+            "note": "incomplete period data \u2014 NEVER computed on partial reports (ADR D11); needs-input signal ADHERENCE_STALE"
+        }
+    },
+    "meta": {
+        "timestamp": "2026-06-12T20:53:27.183208300Z",
+        "requestId": "9290cde9-fa19-4579-a011-5152deddc8be",
+        "version": "0.1.0",
+        "personaLevel": "L3_ANALYST"
+    },
+    "errors": []
+}
+
+================ 5. GET /contracts/fi-shared-pre-fill-agent/monitor-runs ==> the run history records every evaluation with its bounded trace ================
+{
+    "data": [
+        {
+            "id": "5e12c205-2d70-42b8-9a30-7a2586b1850f",
+            "monitorId": "18aed41a-af39-451b-a967-1590b8ae3dc3",
+            "startedAt": "2026-05-12T00:00:00Z",
+            "finishedAt": "2026-05-12T00:00:00Z",
+            "outcome": "INDETERMINATE",
+            "periodKey": "2026-Q1",
+            "details": {
+                "rule": "METRIC_THRESHOLD",
+                "metricKey": "utilization_share",
+                "threshold": 0.3,
+                "periodKey": "2026-Q1",
+                "missingPartyIds": [
+                    "1b6111ec-deee-4079-b1ba-eb2491222643",
+                    "54fa2c7c-815b-40be-a61b-9c3fe7e42401"
+                ],
+                "note": "incomplete period data \u2014 NEVER computed on partial reports (ADR D11); needs-input signal ADHERENCE_STALE"
+            }
+        }
+    ],
+    "meta": {
+        "timestamp": "2026-06-12T20:53:27.247659300Z",
+        "requestId": "c8a447f2-2260-49dd-badd-4a5f3a4f9da6",
+        "version": "0.1.0",
+        "personaLevel": "L3_ANALYST"
+    },
+    "errors": []
+}
+
+================ 6. POST run-now missing-monthly-report (co-tribal, ACTIVE via the demo lever) ==> BREACH_DETECTED period 2026-04 ================
+{
+    "data": {
+        "id": "13f54d2b-3bcc-477f-a109-0a434922bce2",
+        "monitorId": "08f4bf6c-f0e9-4818-a7df-02cdec336b25",
+        "startedAt": "2026-05-12T00:00:00Z",
+        "finishedAt": "2026-05-12T00:00:00Z",
+        "outcome": "BREACH_DETECTED",
+        "periodKey": "2026-04",
+        "details": {
+            "rule": "ATTESTATION_CADENCE",
+            "graceDays": 7,
+            "commitments": [
+                {
+                    "commitmentId": "0ceb4b2d-4f8a-48d9-a017-07ceb2614d37",
+                    "cadence": "MONTHLY",
+                    "periodKey": "2026-04",
+                    "graceDeadline": "2026-05-07",
+                    "result": "BREACH_DETECTED"
+                }
+            ]
+        }
+    },
+    "meta": {
+        "timestamp": "2026-06-12T20:53:27.398670400Z",
+        "requestId": "4ddc5eda-263e-4e71-9e19-0e841419d017",
+        "version": "0.1.0",
+        "personaLevel": "L3_ANALYST"
+    },
+    "errors": []
+}
+
+================ 7. Watch the sweep SURFACE the breach: poll GET breaches until status=SURFACED (the PT60S surfacing pass; never sleep) ================
+breach SURFACED after ~1s of polling:
+{
+    "data": [
+        {
+            "id": "c8b2eadb-abcf-4d29-8ebd-1bbb8f04029b",
+            "contractId": "945b05f6-4107-49de-aaf0-327c31f8c1e4",
+            "commitmentId": "0ceb4b2d-4f8a-48d9-a017-07ceb2614d37",
+            "monitorId": "08f4bf6c-f0e9-4818-a7df-02cdec336b25",
+            "periodKey": "2026-04",
+            "status": "SURFACED",
+            "severity": null,
+            "summary": "Missing attestation for period 2026-04 past 7 grace days \u2014 Report monthly progress against the Beacon-provided template",
+            "detectedAt": "2026-05-12T00:00:00Z",
+            "detectedBy": "MONITOR",
+            "lastConfirmedAt": "2026-05-12T00:00:00Z",
+            "surfacedAt": "2026-05-12T00:00:00Z",
+            "acknowledgedBy": null,
+            "acknowledgedAt": null,
+            "resolution": null,
+            "resolutionActor": null,
+            "resolutionRationale": null,
+            "remediationEvidenceRefs": null,
+            "createdAt": "2026-06-12T20:53:27.394569Z",
+            "updatedAt": "2026-06-12T20:53:27.397673Z"
+        }
+    ],
+    "meta": {
+        "timestamp": "2026-06-12T20:53:27.553693800Z",
+        "requestId": "4fbbc531-8b03-429f-8942-791b265db909",
+        "version": "0.1.0",
+        "personaLevel": "L3_ANALYST"
+    },
+    "errors": []
+}
+
+================ 8. GET /contracts/co-tribal-knowledge-depopulation/monitor-runs ==> the BREACH_DETECTED run is in the history ================
+run 13f54d2b…  outcome=BREACH_DETECTED  periodKey=2026-04
+
+================ 9. GET /contracts/signals?domainId= ==> openBreaches.total=1 — the one-call operator heartbeat ================
+{
+    "data": {
+        "pendingFederationInvitations": 0,
+        "openBreaches": {
+            "total": 1,
+            "bySeverity": {}
+        },
+        "declineEligible": [],
+        "needsInput": [
+            {
+                "contractKey": "fi-shared-pre-fill-agent",
+                "monitorId": "18aed41a-af39-451b-a967-1590b8ae3dc3",
+                "kind": "ADHERENCE_STALE"
+            }
+        ],
+        "monitorCoverage": {
+            "structured": 2,
+            "unstructured": 0
+        },
+        "coordinationPatternsThisWeek": 6,
+        "reviewBoundariesDue": [],
+        "coordinationBreakdown": {
+            "contractEvents": 4,
+            "cascadeActions": 2
+        }
+    },
+    "meta": {
+        "timestamp": "2026-06-12T20:53:27.715250800Z",
+        "requestId": "0752381d-4e3f-4918-9411-89d9b4c92d08",
+        "version": "0.1.0",
+        "personaLevel": "L3_ANALYST"
+    },
+    "errors": []
+}
+
+================ SECTION contracts DONE ================

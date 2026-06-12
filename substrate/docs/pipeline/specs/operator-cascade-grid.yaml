@@ -1,0 +1,41 @@
+# DOC-1 S4 — operator guide task 4 ("author + issue a cascade via the API,
+# then observe it in the UI").
+#
+# Persona: Architect (L3_ANALYST) — slice ruling: operator-guide UI captures
+# ride the operator persona, not the client one.
+#
+# The observation surface for an issued cascade is the dashboard's
+# "Cascades you've issued" grid: one card per in-flight cascade, attention-
+# ordered (decline-pending first, then overdue, then escalating by recency).
+# The capture is an ELEMENT crop of that section — the guide's UI step is
+# "find your cascade as a card here", so the card grid IS the scene; the
+# whole-dashboard scene already exists as 05-portfolio-dashboard.png.
+#
+# Determinism: the grid renders the three seeded in-flight cascades (the
+# capture boot cannot carry the reader's own freshly-issued cascade — the
+# guide says so honestly). Card selection waits ride the seed-stable
+# decline-pending attention signal, never per-boot UUIDs (P-3).
+id: operator-cascade-grid
+title: Dashboard cascade grid — issued cascades as attention-ordered cards
+topic: operator/04-cascades#observe-in-ui
+route: /portfolio/dashboard
+persona: L3_ANALYST
+waits:
+  - api: { get: /api/v1/domains, until: { path: "$.data.length", equals: 23 }, timeoutMs: 60000 }
+  - selector: '[data-stats-source="live"]'      # live-mode assertion (§12 engine cards)
+  # The unique decline-pending card — seed-stable signal (P-3); its presence
+  # also proves the grid is live engine data (fixture cascades predate the
+  # live cascade feed wiring).
+  - selector: '[data-testid="cascade-card"][data-attention-signal="decline-pending"]'
+  - selector: '[data-testid="cascade-card"][data-attention-signal="escalating"]'
+capture: { mode: element, selector: "section[aria-label=\"Cascades you've issued\"]" }
+# Element-crop annotation note: offsets are POSITIVE (bubbles sit inside the
+# card's top-left corner) — the crop has no margin for the fullPage-style
+# negative-x gutter placement.
+annotations:
+  - { n: 1, anchor: '[data-testid="cascade-card"][data-attention-signal="decline-pending"]',
+      offset: { x: 16, y: 16 }, text: "Attention chip — decline-pending cards sort first; a decline is leader attention, never an error" }
+  - { n: 2, anchor: '[data-testid="cascade-card"][data-attention-signal="escalating"]',
+      offset: { x: 16, y: 16 }, text: "A freshly issued cascade lands here as Escalating — 'Currently at L1 · 1 level chain'" }
+output: operator-cascade-grid.png
+determinism: seeded

@@ -1,0 +1,52 @@
+
+================ 1. GET /decision-log?domainId= ==> the seeded chain in order: 6 entries, GENESIS-anchored ================
+CONSOLIDATE              APPROVED  prev=GENESIS  -> curr=32f4d5b7  D-001: Consolidate IssuesPortal and Archer Issues Tracking
+RETIRE                   APPROVED  prev=32f4d5b7 -> curr=626759e6  D-002: Retire Piedmont Risk Register and Complete Archer Migration
+AUTOMATE_MANUAL_PROCESS  PROPOSED  prev=626759e6 -> curr=9d95072c  D-003: Automate Change Log / Change Risk Tool Dual Entry
+CONSOLIDATE              REJECTED  prev=9d95072c -> curr=e28d3133  D-004: Consolidation of NPA System and Change Risk Tool
+FORMALIZE_MANUAL_PROCESS PROPOSED  prev=e28d3133 -> curr=cba6baf1  D-005: Formalize CRE Concentration Calculation Before Retirement
+CONTRACT_ACCOUNTABILITY  APPROVED  prev=cba6baf1 -> curr=bd55b4ae  contract:co-tribal-knowledge-depopulation:CONTRACT_ACTIVATED
+
+================ 2. GET /decision-log/verify?domainId= ==> intact report (valid, links == decisions, no first-broken pointer) ================
+{
+    "data": {
+        "valid": true,
+        "totalDecisions": 6,
+        "verifiedLinks": 6,
+        "firstBrokenAt": null,
+        "message": "All 6 decisions verified; chain is intact."
+    },
+    "meta": {
+        "timestamp": "2026-06-12T20:53:25.559331900Z",
+        "requestId": "c42a2b3e-8f62-4b56-84c6-d20a8433e6cd",
+        "version": "0.1.0",
+        "personaLevel": "L3_ANALYST"
+    },
+    "errors": []
+}
+
+================ SECTION decisions-intact DONE ================
+
+================ 8. RE-VERIFY after this session's governance acts ==> the chain GREW (contract activation + agent deploy/promote anchors) and still verifies ================
+{
+    "data": {
+        "valid": true,
+        "totalDecisions": 9,
+        "verifiedLinks": 9,
+        "firstBrokenAt": null,
+        "message": "All 9 decisions verified; chain is intact."
+    },
+    "meta": {
+        "timestamp": "2026-06-12T20:53:28.856677200Z",
+        "requestId": "1a1282fa-d674-4988-8554-9e23c8ec19cd",
+        "version": "0.1.0",
+        "personaLevel": "L3_ANALYST"
+    },
+    "errors": []
+}
+9 chain entries; the appended anchors:
+CONTRACT_ACCOUNTABILITY  APPROVED  prev=bd55b4ae -> curr=47760551  contract:fi-shared-pre-fill-agent:CONTRACT_ACTIVATED
+AGENT_DEPLOYED           APPROVED  prev=47760551 -> curr=6b87343c  agent:a-docs-pilot:AGENT_DEPLOYED
+AGENT_PROMOTED           APPROVED  prev=6b87343c -> curr=3426ec8a  agent:a-docs-pilot:AGENT_PROMOTED
+
+================ SECTION decisions-recheck DONE ================

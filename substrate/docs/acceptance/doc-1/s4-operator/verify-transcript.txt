@@ -1,0 +1,127 @@
+DOC-1 S4 acceptance evidence — D3 operator guide (docs/guides/operator/) + 4 new capture specs.
+Date: 2026-06-12. Platform: Windows 11 local (win32); per ratified D-A this demonstrates
+WITHIN-PLATFORM byte-identity + two-run self-identity (Linux CI becomes canonical at S6).
+Each docsVerify invocation = fresh JVM boot (dev profile, demo seed + contracts.activate +
+fixed-clock 2026-05-12T00:00:00Z, runner-allocated free port) + one DISCARDED warm-up sweep +
+TWO full capture passes byte-compared.
+
+Suite: 13 scene specs = the 9 legacy scenes (S2) + 4 S4 operator specs:
+  operator-provenance-drawer   (task 3 — canvas drawer Provenance tab, /?view=provenance)
+  operator-cascade-grid        (task 4 — dashboard "Cascades you've issued", element crop)
+  operator-breach-signals      (task 5 — coordination-signal strip, element crop)
+  operator-decision-verify     (task 7 — decision-log drawer header + intact verify banner, element crop)
+
+== ACCEPTANCE GATE 1: docsVerify green TWICE with identical hashes ==========================
+
+INVOCATION 1: .\gradlew.bat docsVerify                 -> EXIT=0, BUILD SUCCESSFUL in 59s
+DOCS-VERIFY PASS runs=2 mode=same-boot files=17 manifest=17486510eeab62af53dfbcc4ca437e1c20cf1643e921f9871b377c4f1aa2f7a3
+
+INVOCATION 2: .\gradlew.bat docsVerify                 -> EXIT=0, BUILD SUCCESSFUL in 59s
+DOCS-VERIFY PASS runs=2 mode=same-boot files=17 manifest=17486510eeab62af53dfbcc4ca437e1c20cf1643e921f9871b377c4f1aa2f7a3
+
+BONUS LANE:   .\gradlew.bat docsVerify -PfreshBoots    -> EXIT=0, BUILD SUCCESSFUL in 1m 22s
+DOCS-VERIFY PASS runs=2 mode=fresh-boots files=17 manifest=17486510eeab62af53dfbcc4ca437e1c20cf1643e921f9871b377c4f1aa2f7a3
+
+Aggregate manifest, ALL THREE invocations: 17486510eeab62af53dfbcc4ca437e1c20cf1643e921f9871b377c4f1aa2f7a3
+Per-file SHA-256 (identical in every compared pass; the 10 legacy files are BYTE-IDENTICAL
+to the S2/S3 committed transcripts — adding the four operator specs changed no legacy pixel):
+  c29f8716091a3d007dbcd5b4996227b01b957771c248f3b555eb5024821e48e1  01-living-canvas.png
+  7d7b19aaa9eb91c0304d1b07eb7070b4cd943ecbf85ad51ee9e17baa64a1313e  02-designer.png
+  37c16f21203d7fc36e54cf14d3411a9efa4447af2ac9ff140de598dee8ae1061  03-capability-designer.png
+  6be0a8717c3a5f61e6e9b5588de59e4755f70b9e853d478d53a62ed0e48ec305  04-portfolio-landing.png
+  0e3b2580a0c5fec099f71a27f0484162e75e456adbd6e61eb8154a7cc2f7c204  05-portfolio-dashboard.png
+  7a726aee9879d825e10d362f84a3d146bedc606838ccbba36feff58c8599bec5  06-cascade-detail-decline-pending.png
+  27485d14ca6f22316a3c2a1e9e246fa9e4b55037d15c044af14b8e266455c6a0  07-contract-detail.png
+  5e563fd2a067ae39ac4fd5f5799d3f864358c8084957de6aad31418327498473  08-subsidiary-operations.annotated.png
+  8742a3477251fb33e5760dcde4a1e6d9fcb96fdcb9c7dc8f65cc54b3d9da240b  08-subsidiary-operations.png
+  05867a21e7921be784e83c087d3d23598f165d348bdb5c0f25f34ab7636851e4  08a-operations-path-segment-notfound.png
+  2d40482e7674adece646f24d5482cd8b9ced57727c1b62c069e5ee69cac8f07c  operator-breach-signals.annotated.png
+  3be99bfe2294f2ae5931352e8262c6f6540ba824fd5439686acb169471142e90  operator-breach-signals.png
+  cdc6cea4a6394c96039f81369dbbf6cd5e3c661c664aa7a81b4a848cfc7c4ad3  operator-cascade-grid.annotated.png
+  56120a72beddc4d0ad1d8f59a4b8028dbe6f817138c8924320ed88122a3feee1  operator-cascade-grid.png
+  a1935c7bdcc955176067eff7bdaf56c428667efafa5b45c410685b1b04d6d605  operator-decision-verify.png
+  ea1147d59c6050f7d8352a770dffd9420b08a0ce9078cd296767d219fc7a712d  operator-provenance-drawer.annotated.png
+  00a412a20abcac2402e91e7e345ed645a5f4d0ea69a6d593f86719e55a01a0a1  operator-provenance-drawer.png
+
+== ACCEPTANCE GATE 2: docsAssemble produces the operator bundle, all placeholders resolved ==
+
+.\gradlew.bat docsAssemble (fresh JVM boot -> docsCapture -> assemble -> link check) -> EXIT=0, BUILD SUCCESSFUL in 51s
+DOCS-CAPTURE PASS files=17 manifest=17486510eeab62af53dfbcc4ca437e1c20cf1643e921f9871b377c4f1aa2f7a3
+assemble: operator\01-first-boot.md      -> build\manual\operator\01-first-boot.md
+assemble: operator\02-corpus-ingest.md   -> build\manual\operator\02-corpus-ingest.md
+assemble: operator\03-diagnostics.md     -> build\manual\operator\03-diagnostics.md
+assemble: operator\04-cascades.md        -> build\manual\operator\04-cascades.md
+assemble: operator\05-contracts.md       -> build\manual\operator\05-contracts.md
+assemble: operator\06-agent-lifecycle.md -> build\manual\operator\06-agent-lifecycle.md
+assemble: operator\07-decision-log.md    -> build\manual\operator\07-decision-log.md
+assemble: operator\index.md              -> build\manual\operator\index.md
+assemble: pilot\s1-pipeline-pilot.md     -> build\manual\pilot\s1-pipeline-pilot.md
+link-check: 44 image reference(s) across 9 markdown file(s) — all resolve
+DOCS-ASSEMBLE PASS guides=9 images=9 links=44
+
+Resolved placeholders in the operator bundle (annotated variant chosen automatically where
+the spec has annotations; legend appended below each image):
+  01-first-boot.md      <- {{capture:living-canvas}}              -> ../captures/01-living-canvas.png
+  03-diagnostics.md     <- {{capture:operator-provenance-drawer}} -> ../captures/operator-provenance-drawer.annotated.png
+  04-cascades.md        <- {{capture:operator-cascade-grid}}      -> ../captures/operator-cascade-grid.annotated.png
+  05-contracts.md       <- {{capture:operator-breach-signals}}    -> ../captures/operator-breach-signals.annotated.png
+  06-agent-lifecycle.md <- {{capture:subsidiary-operations}}      -> ../captures/08-subsidiary-operations.annotated.png
+  07-decision-log.md    <- {{capture:operator-decision-verify}}   -> ../captures/operator-decision-verify.png
+
+== ACCEPTANCE GATE 3: every terminal block cross-checked against committed evidence ========
+
+Guide terminal blocks are quoted from: the S4 fresh transcripts committed in THIS directory
+(transcript-1-first-boot.txt, transcript-4-cascade.txt, transcript-5-contracts.txt,
+transcript-6-agents.txt, transcript-7-decision-log.txt — produced by run-s4-operator-beats.sh
+on ONE canonical boot, sections ordered decisions-intact -> cascade -> contracts -> agents ->
+decisions-recheck so the chain-growth story is coherent), plus the pre-existing committed
+evidence (manual/05-operator-workflows.md INGEST_EVENT/DIAG_EVENT shapes,
+acceptance/diagnostic-glacier-2026-06-11.json, phase3/substrate-3b-acceptance-evidence.txt,
+d3/acceptance-6c-evidence-{shadow,enforce}.txt).
+
+Programmatic literal cross-check (22 assertions, guide string must appear in BOTH the guide
+and its named evidence file) — ALL OK:
+  OK 02-corpus-ingest.md   <-> manual05   "entitiesExtracted":37 / "entitiesCommitted":42 / full entityCounts map
+  OK 03-diagnostics.md     <-> manual05   run_finalized DIAG_EVENT line; clean verify-sweep JSON
+  OK 03-diagnostics.md     <-> glacier    registry sha256 e6326c46…c4e446ca
+  OK 04-cascades.md        <-> t4         issue levels line; action timeline "#1 issue L0…"; stats total 4
+  OK 05-contracts.md       <-> t5         SUSPENDED monitor line; BREACH_DETECTED; graceDeadline 2026-05-07;
+                                          run 13f54d2b… history line; needsInput ADHERENCE_STALE
+  OK 06-agent-lifecycle.md <-> t6         SHADOW-ladder disclosure text; PROMOTION_REVIEW_REQUIRED message
+  OK 06-agent-lifecycle.md <-> 6c-enforce gateway-block disclosure pair (the other end of the ladder)
+  OK 07-decision-log.md    <-> t7         intact message (6); grown-chain anchor line (9)
+  OK 01-first-boot.md      <-> t1         health JSON; Started SubstrateApplication line
+
+Frontend gate at this commit (one additive testid added in S4 — decision-log-header on
+DecisionsTab.tsx, see deviation 2): vitest 145 passed / 145 (21 files).
+
+== DEVIATIONS DISCOVERED IN THIS SLICE (recorded per the binding plan) =====================
+
+1. Plan §5 / ruling P-6 assumed "the first PT60S monitor sweep lands up to ~60s after seed"
+   and that breach-state scenes poll for the POST-SWEEP state. Reality under the CANONICAL
+   FIXED clock: activation initializes next_run_at to the pinned instant, and the due query
+   is strictly next_run_at < now — a frozen clock never satisfies it, so the sweep NEVER
+   claims a monitor on its own. BREACH_DETECTED comes only from POST run-now (exactly how
+   the committed phase-3/3b acceptance produced it); the sweep's trigger-ARMING and breach-
+   SURFACING passes still tick every PT60S (the surfacing pass is observed in
+   transcript-5-contracts.txt step 7). Consequences: operator-breach-signals does NOT wait
+   for breach state (none can exist on a read-only capture boot — also removes any sweep-
+   timing race from the gate), and guide task 5 teaches run-now as the demo lever, sweep-
+   driven runs as the real-clock behavior. Candidate plan correction (FILE-10).
+
+2. The decision-log drawer ROWS render per-boot chain-hash prefixes ("prev 32f4d5b7 ->
+   curr …") — byte-UNSTABLE across fresh boots by design of the hash chain (caught as a
+   cross-invocation manifest diff isolated to operator-decision-verify.png; each invocation
+   was internally green). Fix: the capture is an element crop of the drawer HEADER (count +
+   Verify button + intact banner — every pixel boot-deterministic), enabled by ONE additive
+   data-testid (decision-log-header, DecisionsTab.tsx) — the sanctioned production-change
+   class. The wall-clock row dates (02-designer S2 deviation) are cropped out with the rows.
+
+3. Element-crop annotation geometry: the fullPage idiom (negative-x gutter offsets) lands
+   outside a tight element crop — the compositor correctly failed loudly ("annotation n=1
+   lands outside the captured image"). S4 element-crop specs use positive in-card offsets;
+   noted in the spec headers.
+
+4. Task 4's cascade UI observation uses the dashboard cascade GRID (element crop of the
+   seeded three-card state): a capture boot cannot carry the reader's freshly-issued
+   cascade, and the guide says so honestly ("your card appears alongside them").

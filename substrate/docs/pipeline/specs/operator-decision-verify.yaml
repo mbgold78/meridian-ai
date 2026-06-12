@@ -1,0 +1,62 @@
+# DOC-1 S4 — operator guide task 7 ("decision-log verify", UI beat).
+#
+# Persona: Architect (L3_ANALYST) — operator-guide capture.
+#
+# Deep-links the canvas drawer's decision log (/?view=decisions), then
+# CLICKS "Verify chain" (static button text — plan §4 item 42) and waits for
+# the intact result banner: decision-verify-result[data-valid="true"],
+# "✓ All 6 decisions verified; chain is intact. · 6/6 links". 6 = 5 seeded
+# design decisions + the CONTRACT_ACTIVATED accountability anchor appended
+# when the activate lever flips co-tribal ACTIVE.
+#
+# S4 DISCOVERED constraint (recorded): the decision ROWS render per-boot
+# chain-hash prefixes ("prev 32f4d5b7 -> curr …") — the seeded chain hashes
+# over per-boot UUIDs, so any crop containing rows is byte-UNSTABLE across
+# fresh boots (caught by two consecutive docsVerify invocations: only this
+# file's hash moved). The capture is therefore an ELEMENT crop of the drawer
+# HEADER — decision count, Verify button, intact banner — whose every pixel
+# is boot-deterministic. The testid on that header div is an S4 additive
+# attribute (the one sanctioned production-change class). The rows' wall-
+# clock date rendering (02-designer deviation) is cropped out with them.
+id: operator-decision-verify
+title: Decision log drawer header — intact chain-verify result
+topic: operator/07-decision-log#verify-in-ui
+route: /?view=decisions
+persona: L3_ANALYST
+resolve:
+  - { var: domainId, get: /api/v1/domains, pick: "$.data[?(@.name=='Operational Risk')].id" }
+localStorage:
+  substrate-canvas-welcomed-v1: "1"
+  substrate-workspace-domain-id: "{domainId}"
+waits:
+  - api: { get: /api/v1/domains, until: { path: "$.data.length", equals: 23 }, timeoutMs: 60000 }
+  # 5 seeded decisions + 1 CONTRACT_ACTIVATED ledger anchor (afterCommit —
+  # potentially a beat AFTER the domains==23 readiness signal, so poll).
+  - api: { get: "/api/v1/design/decisions?domainId={domainId}", until: { path: "$.data.length", equals: 6 }, timeoutMs: 60000 }
+  - selector: '[data-testid="living-canvas"]'
+    attr: data-canvas-ready
+    equals: "true"
+  - selector: '[data-testid="drawer-panel"]'
+    attr: data-tab
+    equals: "decisions"
+  - selector: '[data-testid="decision-log-row"]'
+preSteps:
+  - click: 'button:has-text("Verify chain")'
+  - waitSelector: '[data-testid="decision-verify-result"][data-valid="true"]'
+liveModeExempt: >-
+  No data-*-source marker exists on this surface because it has no fixture
+  fallback: rows render solely from GET /design/decisions and the verify
+  banner solely from GET /decision-log/verify (the runner fails the capture
+  on any unexpected app-API failure). The api wait on the live row count (6,
+  including the cross-engine CONTRACT_ACTIVATED anchor that only exists when
+  the live contract engine ran) plus data-valid="true" are the live-data
+  proof.
+allowedApiFailures:
+  - match: /api/v1/transformation/plan
+    reason: >-
+      Fixture-gated seam S4 — the plan endpoint 404s on every seeded boot
+      (vv-documented); the ribbon deterministically falls back to the
+      reduction thesis. Deliberately NOT worked around in product code.
+capture: { mode: element, selector: '[data-testid="decision-log-header"]' }
+output: operator-decision-verify.png
+determinism: animated

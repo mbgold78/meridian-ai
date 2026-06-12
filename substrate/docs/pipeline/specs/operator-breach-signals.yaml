@@ -1,0 +1,41 @@
+# DOC-1 S4 — operator guide task 5 ("read the breach where it actually
+# surfaces in the UI").
+#
+# Persona: Architect (L3_ANALYST) — operator-guide capture.
+#
+# P-1 honesty: the contract detail page renders TERMS ONLY today (monitor
+# history / breach state are API-only — FILE-2, re-specced per the
+# ratification record). The one dashboard surface where contract activity
+# moves at all is the coordination-signal strip: the "Coordination signals"
+# card counts contract events plus cascade actions over the trailing 7 days
+# of the pinned clock. The guide reads the breach itself over the API
+# (signals → breaches → monitor-runs) and points at this strip as today's
+# dashboard echo — no more is claimed.
+#
+# S4 DISCOVERED DEVIATION from plan §5/P-6 (recorded): under the canonical
+# FIXED clock the monitor sweep never claims a monitor on its own — at
+# activation next_run_at is initialized to "due now" (= the pinned instant),
+# and the due query is strictly next_run_at < now, which a frozen clock never
+# satisfies. BREACH_DETECTED therefore only ever comes from POST run-now
+# (exactly how the committed acceptance-3b transcripts produced it); the
+# sweep's ARMING and SURFACING passes still run every PT60S. Consequence
+# here: this spec does NOT wait for breach state (none can exist on a
+# read-only capture boot, which also removes any sweep-timing race), and the
+# captured strip is the deterministic no-breach seeded state.
+id: operator-breach-signals
+title: Coordination signal strip — the dashboard echo of contract activity
+topic: operator/05-contracts#read-the-breach
+route: /portfolio/dashboard
+persona: L3_ANALYST
+waits:
+  - api: { get: /api/v1/domains, until: { path: "$.data.length", equals: 23 }, timeoutMs: 60000 }
+  - selector: '[data-stats-source="live"]'      # live-mode assertion (§12 engine cards)
+  - selector: '[data-signal="coordination-signals"][data-card-source="live"]'
+capture: { mode: element, selector: 'section[aria-label="Coordination signals"]' }
+# Element-crop annotation note: positive offsets (bubble inside the card) —
+# no fullPage-style negative-x gutter exists in a tight crop.
+annotations:
+  - { n: 1, anchor: '[data-signal="coordination-signals"]',
+      offset: { x: 16, y: 16 }, text: "Contract events + cascade actions, trailing 7 days — the dashboard echo of the activity your run-now/breach beats create" }
+output: operator-breach-signals.png
+determinism: seeded

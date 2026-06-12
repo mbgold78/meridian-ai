@@ -1,0 +1,70 @@
+DOC-1 S4 — operator guide task 1 evidence: first boot, empty vs seeded.
+Date: 2026-06-12. Jar: app/build/libs/app-0.1.0.jar (gradlew :app:bootJar).
+Two real boots on this machine, outputs captured live (port numbers are the
+runner's choice — any free port works via --server.port).
+
+================ A. EMPTY boot (no demo flags) — a real engagement starts from ingestion, not a seed ================
+
+$ java -jar app\build\libs\app-0.1.0.jar --spring.profiles.active=dev --server.port=53181
+
+Boot log (key lines):
+  The following 1 profile is active: "dev"
+  Tomcat started on port 53181 (http) with context path '/'
+  Started SubstrateApplication in 10.507 seconds (process running for 11.015)
+
+$ curl -s http://localhost:53181/actuator/health
+{"status":"UP","groups":["liveness","readiness"]}
+
+$ curl -s http://localhost:53181/api/v1/domains
+{
+    "data": [],
+    "meta": {
+        "timestamp": "2026-06-12T20:41:18.578611Z",
+        "requestId": "90016b9c-f02e-497d-a4f6-4bbea83b35c6",
+        "version": "0.1.0",
+        "personaLevel": "L3_ANALYST"
+    },
+    "errors": []
+}
+
+NOTE the trap this proves: health says UP while domains is EMPTY — "the app
+answers HTTP" and "the workspace has data" are different facts. Readiness
+for seeded work is the domain count, not the health endpoint.
+
+================ B. SEEDED boot — the canonical demo/docs posture ================
+
+$ java -jar app\build\libs\app-0.1.0.jar --spring.profiles.active=dev ^
+    --substrate.demo.seed=true --substrate.demo.contracts.activate=true ^
+    --substrate.demo.fixed-clock=2026-05-12T00:00:00Z --server.port=53180
+
+Boot log — the seed runs in ONE outer transaction; one line per seeder
+(this is how you confirm what landed without writing SQL):
+
+[seed] Registered 14 seeder(s): [DomainSeeder, AgentDemoSeeder, BrandingSeeder, ContractSeeder, OrganizationSeeder, CascadeDemoSeeder, PhaseSeeder, ReaderSeeder, SystemSeeder, ProcessSeeder, CanonicalEntitySeeder, CapabilitySeeder, DiagnosticSeeder, EvidenceSeeder]
+[seed] Fresh DB — starting bulk seed
+[seed] DomainSeeder: 1 demo domain [id=3defa63f-0dbf-48a4-bb0b-fd1b25cb5348, name='Operational Risk', isDemo=true]
+[seed] AgentDemoSeeder: 22 satellite domains created, 70 agents seeded via the lifecycle verb path, 0 already present (idempotent re-entry)
+[seed]   co-tribal-knowledge-depopulation [id=945b05f6-4107-49de-aaf0-327c31f8c1e4, status=PROPOSED]
+[seed]   fi-shared-pre-fill-agent [id=061ed92a-a92e-4641-b504-e1a82825da22, status=PROPOSED]
+[seed]   activate lever: co-tribal-knowledge-depopulation is ACTIVE [activatedAt=2026-05-12T00:00:00Z]
+[seed] ContractSeeder: 2 of 2 fixture contracts seeded via the registry create path [domainId=3defa63f-0dbf-48a4-bb0b-fd1b25cb5348, activate=true, guards=false] (0 = already present, idempotent re-entry keyed (domain, contract_key))
+[seed] OrganizationSeeder: 25 members, 5 role overlaps
+[seed]   c-vendor-cost [id=a499aae9-e10a-43f6-bf63-f47a3d2c1dd3, state=in-flight, signal=decline-pending, frontier=L2 declined, chainSeq=3]
+[seed] CascadeDemoSeeder: 3 of 3 fixture cascades seeded via the lifecycle verb path [domainId=3defa63f-0dbf-48a4-bb0b-fd1b25cb5348] (0 = already present, idempotent re-entry)
+[seed] DiagnosticSeeder: 21 findings, 5 decisions
+[seed] EvidenceSeeder: 2 document registries, 38 provenance records
+[seed] Bulk seed complete [domainId=3defa63f-0dbf-48a4-bb0b-fd1b25cb5348]
+
+DEMO LEVER ACTIVE: engine clock FIXED at 2026-05-12T00:00:00Z (substrate.demo.fixed-clock; S15 demo determinism — never enable in a customer engagement build)
+
+Seed-readiness by API poll (NEVER a sleep) — the count flips 0 -> 23 only
+once the whole seed transaction has committed:
+
+$ curl -s http://localhost:53180/api/v1/domains   # poll until data.length == 23
+domains: 23
+first  : ['Operational Risk', 'Curasync Clinical Systems', 'RevSync Health Financial']
+
+================ Worked-when ================
+Empty boot : /actuator/health UP and GET /api/v1/domains -> "data": []
+Seeded boot: GET /api/v1/domains -> 23 rows (1 primary + 22 Beacon satellites);
+             the metric that moved: domain count 0 -> 23.
