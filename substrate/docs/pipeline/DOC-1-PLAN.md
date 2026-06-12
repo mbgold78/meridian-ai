@@ -297,3 +297,21 @@ Screenshots are build artifacts — `build/docs/**` never checked in; manual sou
 | A6 | COO stubs for every not-yet UI verb | 11 UI-verb stubs enumerated (cascade issue+AI authoring; cascade level verbs; contract review/decline; contract operational state; attestation; notification feed; agent controls; finding curation; generative-draft accept; Add Source commit; decision-form picker). Placement decision: the genuinely COO-facing six live in the COO guide; the five operator-grade verbs stub in the operator guide (default — object if wrong) | S5: stub inventory table cross-checked against the §3 verb list; every stub has `status: blocked-on-ui` frontmatter + a pre-written capture spec against RESERVED testids |
 
 **Secondary decisions defaulted in this plan (object if wrong):** canonical clock instant `2026-05-12T00:00:00Z` + separate stall-flip lane; FILE-2/3 re-spec rather than build UI; 08a archived; COO-vs-operator stub placement split; fonts via runner interception not self-hosting.
+
+---
+
+## 9. Ratification record — 2026-06-12 (product-owner authority delegated to orchestrator by Mike)
+
+| # | Question | Ruling |
+|---|---|---|
+| D-A | Hash mode | RATIFIED as recommended: byte-identical within-platform; Linux CI is the canonical baseline; local Windows runs verify structural determinism (selector pass + within-run stability), never cross-platform byte equality. |
+| D-B | Pipeline home | RATIFIED: new `:docs` Gradle subproject at `substrate/docs/pipeline/` with its own node project; explicitly excluded from the backend gate task graph. |
+| D-C | OIDC chip capture | RATIFIED: manual `workflow_dispatch` Compose job, non-gate. |
+| P-1 | Two D3 moments lacking UI (contract monitor history; agent enforcement disclosure) | RE-SPEC to the operator-grade API path: both doc moments become terminal captures of the real API responses (`GET .../monitors` + run history; verb-response `enforcement` block), which is faithful to how an operator actually reads them today. The two UI rendering gaps are FILED as named follow-on product slices (UI-1 contract monitor-history panel; UI-2 enforcement-disclosure rendering in Ops detail) — NOT built in DOC-1, preserving the zero-production-change constraint. |
+| P-2 | Cascade respond/decline forward testids | RESERVE name-only in the selector registry. Adding inert cascade affordances would invent product surface that queue #24/#28 sessions explicitly gate. D5 stubs reference registry names; the feature PR that builds the verbs claims them. |
+| P-3 | Live-entity capture identity (per-boot UUIDs) | Capture specs never hard-code engine UUIDs. Selection rides stable fixture keys via data-* attributes (agent_key, contractKey, slug) and seed-deterministic signals (e.g. the unique decline-pending card); the data-* machine-readable markers are formalized as part of the capture contract alongside data-testid. |
+| P-4 | Canonical docs clock | Backend flag `substrate.demo.fixed-clock=2026-05-12T00:00:00Z` is the canonical capture instant. Frontend `FIXTURE_CLOCK` (2026-04-26) is left untouched — it is deterministic, which is all captures require; the 16-day semantic skew is documented in CONTRIBUTING.md and its alignment is FILED (rides the S15 live-clock swap, not DOC-1). |
+| P-5 | Persona application in captures | localStorage pre-seeding via addInitScript (keys `meridian-persona-level`, `substrate-workspace-domain-id`, `substrate-canvas-welcomed-v1`), treated as a documented storage-key contract with do-not-rename guards already present in source. |
+| P-6 | Breach-state scenes | Captures requiring `BREACH_DETECTED` poll the monitor-run API for the post-sweep state (never sleep), consistent with the seed-readiness poll discipline. |
+
+Acceptance criterion 5 is restated per §8 against real counts (backend 984; frontend = whatever `npm run test -- --run` reports at slice time, captured in evidence).
