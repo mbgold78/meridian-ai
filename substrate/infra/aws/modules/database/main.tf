@@ -47,15 +47,15 @@ resource "aws_db_parameter_group" "this" {
 resource "aws_db_instance" "this" {
   identifier = "${var.name_prefix}-db"
 
-  engine                      = "postgres"
-  engine_version              = var.db_engine_version
-  auto_minor_version_upgrade  = true
-  instance_class              = var.db_instance_class
-  multi_az                    = var.db_multi_az
-  db_subnet_group_name        = aws_db_subnet_group.this.name
-  parameter_group_name        = aws_db_parameter_group.this.name
-  vpc_security_group_ids      = [var.db_security_group_id]
-  publicly_accessible         = false
+  engine                     = "postgres"
+  engine_version             = var.db_engine_version
+  auto_minor_version_upgrade = true
+  instance_class             = var.db_instance_class
+  multi_az                   = var.db_multi_az
+  db_subnet_group_name       = aws_db_subnet_group.this.name
+  parameter_group_name       = aws_db_parameter_group.this.name
+  vpc_security_group_ids     = [var.db_security_group_id]
+  publicly_accessible        = false
 
   db_name             = var.db_name
   username            = var.db_user
