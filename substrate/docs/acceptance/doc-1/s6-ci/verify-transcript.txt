@@ -1,0 +1,127 @@
+DOC-1 S6 acceptance evidence — CI wiring + contributor doc + milestone gates.
+Date: 2026-06-12. Platform: Windows 11 local (win32); per ratified D-A these runs demonstrate
+WITHIN-PLATFORM byte-identity (Linux CI — the new docs-verify job in
+.github/workflows/substrate-ci.yml — becomes the canonical baseline once this branch merges;
+no GitHub Actions run can exist before the workflow lands on a pushed ref, so the CI-side
+green is honestly UNRUN here and verifiable on the first push).
+
+Tree state for every run below: S5 commit 94a7e145 + the S6 working set (workflow jobs,
+CONTRIBUTING.md, FILED.md, spec-path-hint.mjs, runtimeAuth schema/runner support, the
+oidc-identity-chip runtimeAuth/allowedApiFailures additions, and the staging-package repair —
+see "pre-existing repo defect" below). Suite: 28 specs = 16 ACTIVE, 11 BLOCKED, 1 MANUAL-JOB.
+
+== ACCEPTANCE GATE: docsVerify EXIT=0 TWICE with identical hash manifests ==================
+
+INVOCATION 1: .\gradlew.bat docsVerify              -> EXIT=0, BUILD SUCCESSFUL in 1m 9s
+DOCS-VERIFY PASS runs=2 mode=same-boot files=21 skipped=12 manifest=97110215163db5084b1b6ad7b5a3ea4c5972ca2b89e36f860f6504c24ba5a03f
+
+INVOCATION 2: .\gradlew.bat docsVerify              -> EXIT=0, BUILD SUCCESSFUL in 1m 9s
+DOCS-VERIFY PASS runs=2 mode=same-boot files=21 skipped=12 manifest=97110215163db5084b1b6ad7b5a3ea4c5972ca2b89e36f860f6504c24ba5a03f
+
+CROSS-BOOT LANE (what the CI gate runs): .\gradlew.bat docsVerify -PfreshBoots
+                                                    -> EXIT=0, BUILD SUCCESSFUL in 1m 35s
+DOCS-VERIFY PASS runs=2 mode=fresh-boots files=21 skipped=12 manifest=97110215163db5084b1b6ad7b5a3ea4c5972ca2b89e36f860f6504c24ba5a03f
+
+POST-CRITERION-2-REVERT RE-RUN (proves the scratch rename was fully reverted):
+.\gradlew.bat docsVerify                            -> EXIT=0, BUILD SUCCESSFUL in 1m 25s
+DOCS-VERIFY PASS runs=2 mode=same-boot files=21 skipped=12 manifest=97110215163db5084b1b6ad7b5a3ea4c5972ca2b89e36f860f6504c24ba5a03f
+
+The aggregate manifest is IDENTICAL across all four invocations AND identical to the S5
+committed transcript (s5-admin-coo/verify-transcript.txt) — the S6 runner changes
+(runtimeAuth injection support in capture.js/schema.js, gate-skipped spec edits) changed
+ZERO pixels. Per-file SHA-256, identical in every compared pass (RUN A shown; RUN B equal):
+  c29f8716091a3d007dbcd5b4996227b01b957771c248f3b555eb5024821e48e1  01-living-canvas.png
+  7d7b19aaa9eb91c0304d1b07eb7070b4cd943ecbf85ad51ee9e17baa64a1313e  02-designer.png
+  37c16f21203d7fc36e54cf14d3411a9efa4447af2ac9ff140de598dee8ae1061  03-capability-designer.png
+  6be0a8717c3a5f61e6e9b5588de59e4755f70b9e853d478d53a62ed0e48ec305  04-portfolio-landing.png
+  0e3b2580a0c5fec099f71a27f0484162e75e456adbd6e61eb8154a7cc2f7c204  05-portfolio-dashboard.png
+  7a726aee9879d825e10d362f84a3d146bedc606838ccbba36feff58c8599bec5  06-cascade-detail-decline-pending.png
+  27485d14ca6f22316a3c2a1e9e246fa9e4b55037d15c044af14b8e266455c6a0  07-contract-detail.png
+  5e563fd2a067ae39ac4fd5f5799d3f864358c8084957de6aad31418327498473  08-subsidiary-operations.annotated.png
+  8742a3477251fb33e5760dcde4a1e6d9fcb96fdcb9c7dc8f65cc54b3d9da240b  08-subsidiary-operations.png
+  05867a21e7921be784e83c087d3d23598f165d348bdb5c0f25f34ab7636851e4  08a-operations-path-segment-notfound.png
+  a41ab1632ab02e4f7f842ec4caf199c77eed7af74f9da3ebc4d6c7ae0c6a07c8  coo-finding-detail.annotated.png
+  9b1fd51e0e967c2f8ec5176d9fc491357a3d0c152d0c21e35e4a1e71b9cc7062  coo-finding-detail.png
+  ed5087ce9f0852c8b6df7e3959351088dfd6e5cc7127150fa56deceb3eab4c84  coo-operations-tab.png
+  056ff79db14bd44acdb8fbdb8f7c15fae9c223f9d78eeb3a3c3246efc61ff8ee  coo-provenance-walk.png
+  2d40482e7674adece646f24d5482cd8b9ced57727c1b62c069e5ee69cac8f07c  operator-breach-signals.annotated.png
+  3be99bfe2294f2ae5931352e8262c6f6540ba824fd5439686acb169471142e90  operator-breach-signals.png
+  cdc6cea4a6394c96039f81369dbbf6cd5e3c661c664aa7a81b4a848cfc7c4ad3  operator-cascade-grid.annotated.png
+  56120a72beddc4d0ad1d8f59a4b8028dbe6f817138c8924320ed88122a3feee1  operator-cascade-grid.png
+  a1935c7bdcc955176067eff7bdaf56c428667efafa5b45c410685b1b04d6d605  operator-decision-verify.png
+  ea1147d59c6050f7d8352a770dffd9420b08a0ce9078cd296767d219fc7a712d  operator-provenance-drawer.annotated.png
+  00a412a20abcac2402e91e7e345ed645a5f4d0ea69a6d593f86719e55a01a0a1  operator-provenance-drawer.png
+
+Every invocation printed one SKIP line per non-active spec plus the summary
+(blocked=11 manual-job=1) — unchanged from S5; skipped=12 on every PASS line.
+
+== FULL WORKTREE GATES =====================================================================
+
+BACKEND  .\gradlew.bat build -> EXIT=0, BUILD SUCCESSFUL in 2m 11s (29 actionable tasks).
+  NOTE — pre-existing repo defect discovered AND repaired in this slice: the first
+  `gradlew build` in this fresh worktree FAILED at :ingestion:compileJava — 4 errors,
+  `package com.meridian.substrate.ingestion.staging does not exist`. Root cause: the
+  unanchored `staging/` rule at substrate/.gitignore:55 (meant for the ingestion CLI's
+  runtime dir) silently swallowed the Java PACKAGE directory
+  ingestion/src/main/java/com/meridian/substrate/ingestion/staging/ — StagingService.java +
+  StagingResult.java existed ONLY as ignored working-tree files in the primary dev tree
+  while tracked code (IngestionCommand.java, since commit 4e58c12) imported them. Every
+  fresh checkout/worktree — and Linux CI's backend job — could not compile the committed
+  tree; the defect was masked on the dev box. Repair (this slice, fully disclosed):
+  substrate/.gitignore gains `!**/src/**/staging/` + `!**/src/**/staging/**` negations, and
+  the two sources are committed BYTE-IDENTICAL to the working copies the live instance runs
+  (sha256 verified at copy time:
+    7584b402eb2f650bcffe6f61a0c43686b51f6b16c8a299f38bf0eae037d1ccf8  StagingService.java
+    3b16dfdef5fcaaf46e4a12fe75cb90f6baf243bcc2a2ad06f868fb8b7e9641c2  StagingResult.java ).
+  After the repair: :ingestion:compileJava FROM-CACHE-clean, :ingestion:test + :app:test
+  green, BUILD SUCCESSFUL. This is a deviation from DOC-1's zero-production-change
+  constraint, forced by the slice's own "prove no regression" acceptance gate and recorded
+  in the commit message.
+
+FRONTEND (substrate/frontend)
+  npm run type-check -> EXIT=0
+  npm run lint       -> EXIT=0 (--max-warnings 0)
+  npm test           -> EXIT=0 — Test Files 21 passed (21), Tests 145 passed (145)
+  npm run build      -> EXIT=0 (vite build; pre-existing chunk-size warning only)
+
+ASSEMBLE .\gradlew.bat docsAssemble -> EXIT=0, BUILD SUCCESSFUL in 59s
+DOCS-ASSEMBLE PASS guides=28 images=16 links=44 skippedSpecs=12
+  (28 = S5's 27 + the new guides/CONTRIBUTING.md. Incidental proof along the way: the FIRST
+  assemble run FAILED with `DOCS-ASSEMBLE FAIL guide=CONTRIBUTING.md placeholder=id
+  reason=unknown-spec` because the doc's "running locally" section spelled a literal
+  {{capture:id}} example — the resolver polices prose files too; the example now uses the
+  non-matching <id> form.)
+
+== CI WIRING DELIVERED (this slice's product) ==============================================
+
+.github/workflows/substrate-ci.yml:
+  docs-verify    — GATE (push to main + every PR touching substrate/**): ubuntu-latest,
+                   JDK 21 + setup-gradle + setup-node 22, npm ci + npx playwright install
+                   --with-deps chromium (pinned 1.59.1 from the pipeline's own lockfile),
+                   `./gradlew docsVerify -PfreshBoots` (two fresh JVM boots, byte-compared
+                   manifests — Linux output is the D-A canonical baseline), the advisory
+                   spec-path-hint step (PR-only, continue-on-error, plan §6 enforcement #2,
+                   scripts/spec-path-hint.mjs), and an artifact upload of the canonical
+                   captures. Runs PARALLEL to the backend job, which is untouched.
+  docs-oidc-chip — MANUAL (workflow_dispatch only, ruling D-C, non-gate): Compose-boots the
+                   keycloak service (realm-substrate.json import, host :8081), builds the
+                   jar, boots it on :8080 in the canonical capture posture + oidc mode
+                   (issuer http://localhost:8081/realms/substrate, Keycloak claims/role-map),
+                   waits for seed via a TOKEN-BEARING /domains poll (password grant, dev-coo
+                   — /domains 401s anonymously under oidc), then
+                   `./gradlew docsCapture -PdocsSpec=oidc-identity-chip
+                   -PdocsBaseUrl=http://localhost:8080` and uploads the chip PNG.
+                   The four pre-existing jobs are guarded `github.event_name !=
+                   'workflow_dispatch'` so a manual dispatch runs ONLY this lane.
+  HONESTY: both jobs are unrunnable from this Windows dev box (no Docker; no Actions runner
+  for an unpushed workflow). Their YAML parses clean; every constituent command lane was
+  proven locally where the platform allows (docsVerify/docsCapture/the hint script above and
+  in rename-failure-transcript.txt). First-push CI run remains the A1/A2 CI-side proof.
+
+S6 discovered deviation (recorded per the binding plan): the SPA bundle embedded in
+app-0.1.0.jar resolves auth mode `anonymous` (no VITE_* auth env at build; nothing serves
+the runtime config "next to the bundle"), so the S5 oidc-identity-chip spec as written could
+never reach #kc-form-login. Fix inside the pipeline, zero production change: specs may now
+declare `runtimeAuth:` (schema.js) and the runner injects it as window.__SUBSTRATE_AUTH__
+via addInitScript (capture.js) — exactly the production runtime-config seam documented in
+frontend/src/auth/config.ts. The compose/deploy-side gap is FILED (AUTH-1 in ../FILED.md).

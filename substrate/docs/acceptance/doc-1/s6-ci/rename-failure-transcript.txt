@@ -1,0 +1,70 @@
+DOC-1 S6 — acceptance criterion 2 demonstration (plan §8/A2):
+"Scratch-branch testid rename fails naming topic+spec."
+Date: 2026-06-12. Platform: Windows 11 local. All output below is pasted from real runs.
+
+== STEP 1: scratch-rename ONE documented data-testid ======================================
+
+  $ sed -i 's/data-testid="agent-row"/data-testid="agent-row-renamed"/' \
+      substrate/frontend/src/features/portfolio/tabs/OperationsTab.tsx
+  $ git diff --stat substrate/frontend
+   substrate/frontend/src/features/portfolio/tabs/OperationsTab.tsx | 2 +-
+   1 file changed, 1 insertion(+), 1 deletion(-)
+
+`agent-row` is documented by two ACTIVE specs (coo-operations-tab, subsidiary-operations)
+and is the exact selector the plan's A2 row names.
+
+== STEP 2: docsVerify FAILS, NAMING TOPIC + SPEC + SELECTOR ===============================
+
+  $ .\gradlew.bat docsVerify        -> EXIT != 0, BUILD FAILED in 1m 7s
+
+Verbatim tail (the boot, seed-poll and earlier specs pass; the first spec that waits on the
+renamed selector fails in the required format):
+
+  spec=coo-operations-tab: /api/v1/domains $.data.length = 23 (satisfied after 4ms)
+  stopped app instance 'verify'
+  DOCS-VERIFY FAIL topic=coo/04-operations#read-the-fleet spec=coo-operations-tab selector=[data-testid="agent-row"][data-agent-key="a-pre-visit"] (wait failed)
+
+  > Task :docs:docsVerify FAILED
+  > Process 'command '...\npm.cmd'' finished with non-zero exit value 3
+  BUILD FAILED in 1m 7s
+
+Exit value 3 = the regression-gate exit code (src/lib/errors.js contract: 3 = schema or
+selector regression). The failure names:
+  topic    = coo/04-operations#read-the-fleet      <- the guide section to update
+  spec     = coo-operations-tab                    <- the capture spec to update
+  selector = [data-testid="agent-row"][data-agent-key="a-pre-visit"]
+
+which is precisely the CONTRIBUTING.md contract ("the gate fails naming exactly what to
+fix"). In the CI gate the identical failure surfaces in the docs-verify job log.
+
+== STEP 3: the ADVISORY path-hint on the same change ======================================
+
+To exercise plan §6 enforcement #2 (frontend source touched, no spec touched), the rename
+was committed to a scratch commit and the hint script run against its parent, then the
+commit was reset. Verbatim output (9 hints, exit 0 — warning annotations, never a gate);
+first two shown in full, remainder identical in shape:
+
+  $ node scripts/spec-path-hint.mjs --base=HEAD~1
+  ::warning title=docs capture spec may need an update::substrate/frontend/src/features/portfolio/tabs/OperationsTab.tsx touches 'data-testid="agent-row"' — referenced by spec=coo-operations-tab topic=coo/04-operations#read-the-fleet (specs/coo-operations-tab.yaml). Update the task topic + capture spec in this PR; if the selector breaks, the docs-verify gate fails mechanically (DOCS-VERIFY FAIL topic=... spec=... selector=...).
+  ::warning title=docs capture spec may need an update::substrate/frontend/src/features/portfolio/tabs/OperationsTab.tsx touches 'data-testid="agent-row"' — referenced by spec=subsidiary-operations topic=operator/06-agent-lifecycle#observe-in-ui (specs/subsidiary-operations.yaml). [...]
+  [... data-testid="agent-deployment-panel" -> subsidiary-operations ...]
+  [... data-agents-source -> coo-operations-tab + subsidiary-operations ...]
+  [... data-agent-key -> coo-operations-tab + subsidiary-operations ...]
+  [... data-testid="finding-card" -> coo-operations-tab + subsidiary-operations ...]
+  spec-path-hint: 9 hint(s) emitted (advisory only — the gate is docsVerify).
+  EXIT=0
+
+The hint scans BOTH sides of the diff (merge-base content via `git show` + HEAD content),
+so REMOVED selectors hint too. Hits on `data-agents-source`/`data-agent-key`/`finding-card`
+are correct positives: those attributes also live in the touched file.
+
+== STEP 4: revert, prove restoration ======================================================
+
+  $ git reset HEAD~1 && git checkout -- substrate/frontend/src/features/portfolio/tabs/OperationsTab.tsx
+  $ grep -c 'data-testid="agent-row"' substrate/frontend/src/features/portfolio/tabs/OperationsTab.tsx
+  1
+  $ .\gradlew.bat docsVerify        -> EXIT=0, BUILD SUCCESSFUL in 1m 25s
+  DOCS-VERIFY PASS runs=2 mode=same-boot files=21 skipped=12 manifest=97110215163db5084b1b6ad7b5a3ea4c5972ca2b89e36f860f6504c24ba5a03f
+
+Same aggregate manifest as every green run in verify-transcript.txt — the demo left no
+residue.

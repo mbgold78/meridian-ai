@@ -30,6 +30,29 @@ statusReason: >-
   overrides the skip).
 route: /
 persona: L1_EXECUTIVE
+# S6 discovered deviation: the SPA bundle embedded in app-0.1.0.jar (and the
+# compose image — same Dockerfile stage, no VITE_* auth env) resolves
+# `anonymous` via auth/config.ts, so WITHOUT runtime injection this page never
+# redirects to Keycloak and '#kc-form-login' never appears. The runner injects
+# this object as window.__SUBSTRATE_AUTH__ via addInitScript — the documented
+# production seam (config.ts resolution rung 1, "config served next to the
+# bundle"). Values mirror the manual job's stack: Keycloak published on host
+# :8081 (docker-compose.yml), public SPA client substrate-app
+# (realm-substrate.json), Keycloak realm roles under realm_access.roles, and
+# the display-only roleMap mirror of the backend's dev role-map
+# (application-postgres.yml) so the chip shows EXECUTIVE for dev-coo exactly
+# as the backend projects it.
+runtimeAuth:
+  mode: oidc
+  oidc:
+    authority: http://localhost:8081/realms/substrate
+    clientId: substrate-app
+    rolesClaimPath: realm_access.roles
+    roleMap:
+      substrate-admin: ADMIN
+      substrate-exec: EXECUTIVE
+      substrate-coo: EXECUTIVE
+      substrate-operator: L3_ANALYST
 waits:
   # The unauthenticated SPA redirects to the Keycloak login page.
   - selector: '#kc-form-login'
@@ -44,5 +67,13 @@ liveModeExempt: >-
   there is no fixture fallback and no data-*-source marker; an unauthenticated
   session never renders the chip at all, which is the proof.
 capture: { mode: element, selector: '[data-testid="persona-identity"]' }
+# Route / is the Living Canvas: the post-login page deterministically fires
+# the fixture-gated GET /transformation/plan, which 404s on every seeded boot
+# (same expected failure the living-canvas spec allows — seam S4).
+allowedApiFailures:
+  - match: /api/v1/transformation/plan
+    reason: >-
+      Fixture-gated seam S4 — the plan endpoint 404s on every seeded boot
+      (vv-documented); irrelevant to the element-cropped identity chip.
 output: oidc-identity-chip.png
 determinism: static

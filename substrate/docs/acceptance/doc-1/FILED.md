@@ -1,0 +1,24 @@
+# DOC-1 — filed items ledger
+
+Items DOC-1 deliberately did **not** fix (zero-production-change constraint,
+plan §7 + §9 rulings), recorded here as the milestone's outbound work orders.
+Each is independently actionable; none blocks the docs pipeline, which
+documents reality as it renders today.
+
+| ID | Item | Origin | Disposition / follow-on |
+|----|------|--------|--------------------------|
+| FILE-1 | `GET /api/v1/contracts` **without** `domainId` returns 500 INTERNAL_ERROR where a 400 validation error is correct (live-verified). | plan §7 | Backend validation fix. Guides only ever show the correct call (`?domainId=<resolved>`); the wart is never displayed or worked around in docs. |
+| FILE-2 / **UI-1** | Contract **monitor history** surface absent: wire DTO carries `monitors[]`/`breachSummary` (`contracts.ts:174-175`), adapter deliberately drops them (`contractData.ts:51`). | plan §7; ruling P-1 | Named product slice **UI-1: contract monitor-history panel**. Docs re-specced to the operator-grade API path (terminal capture of `GET .../monitors` + run history); testid `contract-monitor-history` RESERVED in `specs/selector-registry.yaml` — the UI-1 PR claims it per the registry process (CONTRIBUTING.md). |
+| FILE-3 / **UI-2** | Agent **enforcement disclosure** never rendered: `criteriaGates`/`readOnly`/`shadowEnteredAt` dropped before `AgentDeploymentPanel` (`OperationsTab.tsx`). | plan §7; ruling P-1 | Named product slice **UI-2: enforcement-disclosure rendering in Ops detail**. Same re-spec treatment (verb-response `enforcement` block as terminal capture); testid `agent-enforcement-disclosure` RESERVED. |
+| FILE-4 | Cascade **respond/decline affordances do not exist anywhere** in the frontend (the spec premise "exist but inert" is true only for contracts). | plan §7 | Product decision gated by the queue #24/#28 sessions — mirrors the contract-footer pattern. Names `cascade-actions` / `cascade-action-respond` / `cascade-action-decline` RESERVED (ruling P-2); D5 stub topics + blocked specs pre-written against them. No inert DOM stubbing. |
+| FILE-5 | vv Finding 2 (false portfolio-landing footer) + Finding 3 (stall-card/grid copy contradiction) — open copy issues on scenes 04/05. | plan §7 | Copy fixes. Captures pin current copy deliberately; when the fixes land, re-capture is one command (`gradlew docsCapture`) + the gate re-baselines. Noted in the S3 (D2) evidence. |
+| FILE-6 | `08a-operations-path-segment-BLANK.png` documented a since-fixed bug (catch-all NotFound at `App.tsx:53`) — irreproducible. | plan §7 | Archived with provenance note (`acceptance/final/archive/`), not migrated; the URL was repurposed as the NotFound-panel scene (`operations-path-segment-notfound` spec). Closed for DOC-1; no further action. |
+| FILE-7 | Live agents list returns `agentKey=null` on the wire (live-checked). | plan §7 | Backend DTO fix candidate. D3 T5 sources keys from deploy responses / agent detail instead of the list; any future `{idOrKey}`-by-key curl in docs must re-verify first. |
+| FILE-8 | No assembler existed for USER-MANUAL.md despite its self-description; section sources vs assembled output used different callout vocabulary (`Honest limitation.` vs `Not yet:`). | plan §7 | Formalized by `docsAssemble` (S5) including the normalization; D5 stub extraction keys on the source form. Closed for DOC-1. |
+| CLOCK-1 | **FIXTURE_CLOCK alignment**: backend capture clock is `2026-05-12T00:00:00Z`; frontend `FIXTURE_CLOCK` is compile-time `2026-04-26` (`clock.ts`) — a documented 16-day semantic skew (harmless today: date strings render from fixture/seed absolutes). | ruling P-4 | Rides the **S15 live-clock swap** (arming the `setPortfolioClock` seam), NOT a docs change. Until then the skew is an invariant — see CONTRIBUTING.md "clock-skew note"; never align one clock in passing. |
+| AUTH-1 | The SPA bundle embedded in `app-0.1.0.jar` **and** the compose image is built without `VITE_*` auth env, so `resolveAuthConfig()` falls back to `anonymous` — the compose "testing shape" (`SUBSTRATE_AUTH_MODE=oidc` backend) serves a frontend that never starts the OIDC login flow. Nothing serves the documented `window.__SUBSTRATE_AUTH__` runtime config "next to the bundle". | S6 discovered | Deploy/compose gap: the testing shape (and the customer deploy doc) needs a concrete mechanism serving the runtime auth config (config.js or templated script tag). The docs pipeline works around it honestly — the manual OIDC lane injects `window.__SUBSTRATE_AUTH__` via the spec's `runtimeAuth` key, exercising the same production seam. |
+
+Registry-reserved names for FILE-2/3/4 (and the other not-yet verbs) live in
+`substrate/docs/pipeline/specs/selector-registry.yaml` (22 names, owner notes,
+claiming rules). The claim process a feature PR must follow is in
+`substrate/docs/guides/CONTRIBUTING.md`.

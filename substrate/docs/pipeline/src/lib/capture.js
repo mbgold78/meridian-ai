@@ -67,6 +67,19 @@ export async function runSpec({ browser, spec, config, baseUrl, outDir, warnings
       for (const [k, v] of entries) localStorage.setItem(k, v);
     }, storageEntries);
 
+    // Runtime auth-config injection (S6, manual OIDC lane): the SPA resolves
+    // its auth mode from window.__SUBSTRATE_AUTH__ FIRST (auth/config.ts) —
+    // the per-engagement "config served next to the bundle" production seam.
+    // The bundle inside the jar is built without VITE_* auth env (anonymous),
+    // so specs that need the real oidc login flow declare the injected config
+    // here. Runs on every origin in the context (incl. the IdP login page),
+    // where it is inert.
+    if (spec.runtimeAuth) {
+      await context.addInitScript((cfg) => {
+        window.__SUBSTRATE_AUTH__ = cfg;
+      }, spec.runtimeAuth);
+    }
+
     // Track in-flight app API calls so a late fetch can never land between
     // the settle frames (predicate-based quiescence, not a sleep) — and track
     // FAILED app API calls: the frontend's `retry: false` data hooks settle on

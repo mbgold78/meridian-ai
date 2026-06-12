@@ -6,6 +6,12 @@ on:
     paths: ["substrate/**", ".github/workflows/substrate-ci.yml"]
   pull_request:
     paths: ["substrate/**", ".github/workflows/substrate-ci.yml"]
+  # DOC-1 ruling D-C: the OIDC identity-chip capture is a MANUAL lane (Compose
+  # Keycloak + real browser login = flake surface the gate excludes by
+  # design). Dispatch runs ONLY docs-oidc-chip — every other job is guarded
+  # with `github.event_name != 'workflow_dispatch'` so a manual dispatch never
+  # burns a full CI sweep.
+  workflow_dispatch:
 
 defaults:
   run:
@@ -13,6 +19,7 @@ defaults:
 
 jobs:
   backend:
+    if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -25,6 +32,7 @@ jobs:
         run: ./gradlew build
 
   frontend:
+    if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -54,6 +62,7 @@ jobs:
   # image — no login, no push, no AWS calls (plan §3: nothing provisioned
   # during build; the image is an artifact, not a deployment).
   container:
+    if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     needs: [backend, frontend]
     env:
@@ -89,6 +98,7 @@ jobs:
   # READMEs). init -backend=false: no state, no credentials, no AWS calls —
   # validation only, nothing is ever planned or applied from CI.
   terraform:
+    if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -109,3 +119,172 @@ jobs:
         run: |
           terraform init -backend=false -input=false
           terraform validate
+
+  # DOC-1 gate (plan §6, ratified D-A): the docs capture suite IS the UI
+  # regression suite. Two FULL capture sweeps from two fresh JVM boots (new
+  # H2, new UUIDs) must produce byte-identical SHA-256 manifests; a renamed /
+  # removed documented selector fails here naming the guide topic + spec
+  # (DOCS-VERIFY FAIL topic=... spec=... selector=...). Linux output is the
+  # CANONICAL baseline — Windows local runs prove within-platform identity
+  # only (DirectWrite vs FreeType makes cross-platform byte-equality
+  # unachievable for text-bearing pages). Runs PARALLEL to `backend`, which
+  # stays untouched (`gradlew build` excludes :docs by design — root
+  # build.gradle subprojects guard), so the backend gate is not slowed.
+  docs-verify:
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history: the spec-path-hint step (soft layer, plan §6
+          # enforcement #2) diffs PR paths against the merge-base.
+          fetch-depth: 0
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: substrate/docs/pipeline/package-lock.json
+      # System libraries for the PINNED Chromium build (the browser binary
+      # itself is also cached here; gradle's playwrightInstall then no-ops —
+      # both resolve to ~/.cache/ms-playwright). npm ci uses the pipeline's
+      # own lockfile: the Playwright pin must stay in lockstep with
+      # substrate/frontend (CONTRIBUTING rule, decision D-B cost).
+      - name: Install pinned Playwright Chromium + system deps
+        working-directory: substrate/docs/pipeline
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: docsVerify — two fresh boots, byte-identical manifests
+        run: ./gradlew docsVerify -PfreshBoots
+      # Soft hint, NEVER a gate (the gate is the docsVerify step above): if
+      # this PR touches substrate/frontend/src/** without touching any capture
+      # spec, annotate the run with the guide topics whose specs reference
+      # selectors appearing in the touched files (testid -> spec -> topic map
+      # generated from specs/*.yaml into build/selector-registry.json).
+      - name: Spec-path hint (advisory — PR touching documented surfaces)
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        working-directory: substrate/docs/pipeline
+        run: node scripts/spec-path-hint.mjs --base="origin/${{ github.base_ref }}"
+      - name: Upload canonical Linux captures (+ verify runs on failure)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: docs-captures-linux
+          path: |
+            substrate/docs/pipeline/build/captures/
+            substrate/docs/pipeline/build/verify/run-a/manifest.json
+            substrate/docs/pipeline/build/verify/run-b/manifest.json
+          retention-days: 14
+          if-no-files-found: warn
+
+  # DOC-1 manual lane (ratified D-C): the OIDC identity-chip capture. NON-GATE
+  # by ruling — a real browser login against the Compose Keycloak realm
+  # (infra/keycloak/realm-substrate.json) is flake surface the gate excludes;
+  # the spec (specs/oidc-identity-chip.yaml, status: manual-job) is skipped by
+  # docsVerify and selected here EXPLICITLY via -PdocsSpec. Topology: Compose
+  # boots ONLY the keycloak service (host :8081); the app runs as the plain
+  # jar on host :8080 in the canonical capture posture PLUS oidc mode dialing
+  # the realm — every party (browser, backend, token poll) addresses the
+  # issuer as http://localhost:8081/realms/substrate, so the token `iss` and
+  # the resource-server expectation agree without KC_HOSTNAME pinning. The
+  # SPA enters oidc mode via the runner-injected window.__SUBSTRATE_AUTH__
+  # runtime-config seam declared in the spec (the jar's embedded bundle is
+  # built without VITE_* auth env and would otherwise stay anonymous).
+  docs-oidc-chip:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    env:
+      # Compose interpolates `:?`-guarded vars for the whole file even when a
+      # single service starts — throwaway values for this disposable lane
+      # (the imported dev realm ships fixed dev users; postgres never starts).
+      KEYCLOAK_ADMIN_PASSWORD: docs-oidc-manual-lane
+      SUBSTRATE_DB_PASSWORD: unused-postgres-never-starts
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: substrate/docs/pipeline/package-lock.json
+      - name: Compose-boot Keycloak (dev realm import)
+        run: docker compose up -d keycloak
+      - name: Install pinned Playwright Chromium + system deps
+        working-directory: substrate/docs/pipeline
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: Build app jar
+        run: ./gradlew :app:bootJar
+      - name: Wait for the realm discovery document
+        run: |
+          for i in $(seq 1 90); do
+            curl -fsS http://localhost:8081/realms/substrate/.well-known/openid-configuration >/dev/null 2>&1 && exit 0
+            sleep 2
+          done
+          echo "Keycloak discovery never came up" >&2
+          docker compose logs keycloak | tail -50 >&2
+          exit 1
+      - name: Boot app — canonical capture posture + oidc against the realm
+        run: |
+          java -jar app/build/libs/app-0.1.0.jar \
+            --spring.profiles.active=dev \
+            --substrate.demo.seed=true \
+            --substrate.demo.contracts.activate=true \
+            --substrate.demo.fixed-clock=2026-05-12T00:00:00Z \
+            --substrate.auth.mode=oidc \
+            --substrate.auth.oidc.issuer-uri=http://localhost:8081/realms/substrate \
+            --substrate.auth.oidc.claims.roles=realm_access.roles \
+            --substrate.auth.oidc.persona.role-map.substrate-admin=ADMIN \
+            --substrate.auth.oidc.persona.role-map.substrate-exec=EXECUTIVE \
+            --substrate.auth.oidc.persona.role-map.substrate-coo=EXECUTIVE \
+            --substrate.auth.oidc.persona.role-map.substrate-operator=L3_ANALYST \
+            --server.port=8080 > /tmp/substrate-app.log 2>&1 &
+          echo $! > /tmp/substrate-app.pid
+      # Seed readiness by API poll, never sleep-and-hope: under oidc the
+      # domains endpoint 401s anonymously, so the poll carries a real
+      # password-grant token (dev-coo — the same user the capture logs in as;
+      # direct access grants are enabled on the public substrate-app client).
+      - name: Wait for app health + seed commit (token-bearing poll)
+        run: |
+          for i in $(seq 1 150); do
+            curl -fsS http://localhost:8080/api/v1/health >/dev/null 2>&1 && break
+            sleep 2
+          done
+          curl -fsS http://localhost:8080/api/v1/health >/dev/null
+          TOKEN=$(curl -fsS \
+            -d grant_type=password -d client_id=substrate-app \
+            -d username=dev-coo -d password=dev-coo \
+            http://localhost:8081/realms/substrate/protocol/openid-connect/token | jq -r .access_token)
+          for i in $(seq 1 150); do
+            COUNT=$(curl -fsS -H "Authorization: Bearer $TOKEN" \
+              http://localhost:8080/api/v1/domains | jq '.data | length' || echo 0)
+            if [ "$COUNT" = "23" ]; then echo "seed committed (23 domains)"; exit 0; fi
+            sleep 2
+          done
+          echo "seed never reached 23 domains" >&2
+          tail -80 /tmp/substrate-app.log >&2
+          exit 1
+      - name: Capture the identity chip (explicit --spec overrides the skip)
+        run: ./gradlew docsCapture -PdocsSpec=oidc-identity-chip -PdocsBaseUrl=http://localhost:8080
+      - name: Upload chip capture
+        uses: actions/upload-artifact@v4
+        with:
+          name: docs-oidc-identity-chip
+          path: substrate/docs/pipeline/build/captures/
+          retention-days: 30
+      - name: Teardown
+        if: always()
+        run: |
+          if [ -f /tmp/substrate-app.pid ]; then kill "$(cat /tmp/substrate-app.pid)" 2>/dev/null || true; fi
+          docker compose down -v

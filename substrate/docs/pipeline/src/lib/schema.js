@@ -13,6 +13,7 @@ const TOP_KEYS = new Set([
   'id', 'title', 'topic', 'route', 'resolve', 'persona', 'localStorage',
   'viewport', 'waits', 'preSteps', 'capture', 'annotations', 'output',
   'determinism', 'liveModeExempt', 'allowedApiFailures', 'status', 'statusReason',
+  'runtimeAuth',
 ]);
 const PERSONAS = new Set(['L1_EXECUTIVE', 'L3_ANALYST']);
 const DETERMINISM = new Set(['static', 'seeded', 'animated']);
@@ -91,6 +92,26 @@ export function validateSpec(spec, fileName) {
         fail(errors, `resolve[${i}] needs {var, get, pick}`);
       }
     });
+  }
+
+  // runtimeAuth (S6, manual OIDC lane): the documented window.__SUBSTRATE_AUTH__
+  // runtime-config seam (frontend auth/config.ts resolution rung 1 — "config
+  // served next to the bundle"), injected via addInitScript before app scripts
+  // run. Needed because the SPA bundle embedded in app-0.1.0.jar is built
+  // WITHOUT VITE_* auth env, so it resolves `anonymous` and would never start
+  // the Keycloak login flow the oidc-identity-chip spec depends on (S6
+  // discovered deviation — the S5 spec presumed the Compose stack served an
+  // oidc-mode SPA). Shape mirrors RuntimeAuthConfig; mode=oidc without
+  // authority+clientId is rejected here because the frontend fail-safes to
+  // anonymous on that input, which would capture the WRONG surface silently.
+  if (spec.runtimeAuth !== undefined) {
+    const ra = spec.runtimeAuth;
+    if (!isPlainObject(ra) || !isNonEmptyString(ra.mode)) {
+      fail(errors, `'runtimeAuth' must be a mapping with at least {mode} (window.__SUBSTRATE_AUTH__ shape — see frontend/src/auth/config.ts)`);
+    } else if (ra.mode === 'oidc'
+        && (!isPlainObject(ra.oidc) || !isNonEmptyString(ra.oidc.authority) || !isNonEmptyString(ra.oidc.clientId))) {
+      fail(errors, `runtimeAuth.mode=oidc needs oidc: {authority, clientId} — without them the SPA fail-safes to anonymous and the capture silently shows the wrong surface`);
+    }
   }
 
   if (spec.localStorage !== undefined) {

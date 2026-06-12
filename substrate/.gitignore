@@ -53,3 +53,11 @@ postgres-data/
 # checked-in inputs live in ingestion/samples/)
 output/
 staging/
+# ... but NEVER swallow Java source packages named `staging`: the unanchored
+# rule above silently kept ingestion/src/**/staging/ (StagingService,
+# StagingResult) untracked while tracked code imported it — every fresh
+# checkout/worktree/CI failed to compile, masked on the dev box where the
+# sources existed as IGNORED working-tree files (discovered by DOC-1 S6's
+# `gradlew build` no-regression gate).
+!**/src/**/staging/
+!**/src/**/staging/**
