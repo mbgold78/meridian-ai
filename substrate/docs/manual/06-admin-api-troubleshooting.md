@@ -363,7 +363,7 @@ No `ANTHROPIC_API_KEY` is configured (or the provider is unreachable). This is t
 Expected. The transformation Roadmap is backed by `GET /api/v1/transformation/plan`, which returns 404 unless the demo fixture flag (`substrate.transformation.fixture-enabled`) is on — there is no plan engine yet, only a fictional demo mock-up. The UI shows an empty state rather than an error. The flag must stay off in any customer build.
 
 **The Review / Decline buttons on a contract do nothing.**
-Intentional in this release: the contract detail page renders the affordances but they are inert. Party responses and declines are performed through the API (`POST /contracts/{idOrKey}/respond`, `POST /contracts/{idOrKey}/decline`) or the MCP tools. The detail page itself is fully live (see `../acceptance/final/07-contract-detail.png`).
+Intentional in this release: the contract detail page renders the affordances but they are inert. Party responses and declines are performed through the API (`POST /contracts/{idOrKey}/respond`, `POST /contracts/{idOrKey}/decline`) or the MCP tools. The detail page itself is fully live (see `../pipeline/build/captures/07-contract-detail.png`).
 
 **Where do I author a cascade? I don't see a button.**
 There is no cascade authoring UI yet. Cascades are created through the operator-grade write API (`POST /api/v1/cascade-drafts` → edit → `…/issue`); the UI renders issued cascades, their timelines, and attention signals read-only.

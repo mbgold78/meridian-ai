@@ -147,7 +147,7 @@ Be precise about which is which today:
 
 One visible consequence worth knowing before a demo: the dashboard's lifecycle-stall card truthfully reports the 22 subsidiaries as "unphased (no lifecycle data)" — the live engine has no phase records for them — while the fixture grid directly below confidently places each one in a phase. Both halves are honest about their own source; the pairing reads oddly until the per-subsidiary phase data goes live.
 
-Screenshots of all of these surfaces, captured from a seeded build, are in [`../acceptance/final/`](../acceptance/final/) (for example [`01-living-canvas.png`](../acceptance/final/01-living-canvas.png), [`05-portfolio-dashboard.png`](../acceptance/final/05-portfolio-dashboard.png), [`06-cascade-detail-decline-pending.png`](../acceptance/final/06-cascade-detail-decline-pending.png)).
+Screenshots of all of these surfaces are regenerated from a seeded build by the docs capture pipeline (`gradlew docsCapture`) into `substrate/docs/pipeline/build/captures/` — they are build artifacts, not checked in (for example [`01-living-canvas.png`](../pipeline/build/captures/01-living-canvas.png), [`05-portfolio-dashboard.png`](../pipeline/build/captures/05-portfolio-dashboard.png), [`06-cascade-detail-decline-pending.png`](../pipeline/build/captures/06-cascade-detail-decline-pending.png)). The hand-captured originals from the 2026-06-11 visual-verification tour are archived in [`../acceptance/final/archive/`](../acceptance/final/archive/).
 
 ### What does not work yet
 

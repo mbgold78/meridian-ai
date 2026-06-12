@@ -17,7 +17,7 @@ Each registration also records where the agent executes (its **execution locus**
 
 ### Where you see agents
 
-In the demo workspace, open a subsidiary's dashboard (Subsidiary COO vantage point) and select the **Operations** tab. See `../acceptance/final/08-subsidiary-operations.png`.
+In the demo workspace, open a subsidiary's dashboard (Subsidiary COO vantage point) and select the **Operations** tab. See `../pipeline/build/captures/08-subsidiary-operations.png`.
 
 The tab has three regions:
 

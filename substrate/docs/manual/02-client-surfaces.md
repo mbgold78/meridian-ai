@@ -22,7 +22,7 @@ A few older links redirect rather than break: `/ecosystem` goes to the canvas, `
 
 ## Living Canvas (`/`)
 
-The Living Canvas is the home surface: one screen that draws every system the client runs, every data flow between them, and every manual process people perform by hand. Screenshot: `../acceptance/final/01-living-canvas.png`.
+The Living Canvas is the home surface: one screen that draws every system the client runs, every data flow between them, and every manual process people perform by hand. Screenshot: `../pipeline/build/captures/01-living-canvas.png`.
 
 On your first visit a one-time welcome overlay explains the basics (it never returns after you dismiss it; it is remembered per browser).
 
@@ -134,7 +134,7 @@ The **+ Add Source** button opens a modal that probes a URL you paste (for examp
 
 ## Future State Designer (`/designer`)
 
-The decision register: where target-architecture decisions are recorded, analyzed, and made permanent. Screenshot: `../acceptance/final/02-designer.png`.
+The decision register: where target-architecture decisions are recorded, analyzed, and made permanent. Screenshot: `../pipeline/build/captures/02-designer.png`.
 
 ### The decision table
 
@@ -183,7 +183,7 @@ Rows with status `PROPOSED` carry a **Run Impact Analysis** button. It sends the
 
 ## Capability Designer (`/designer/capabilities`)
 
-A full-screen, two-pane editor for the engagement's capability model. Screenshot: `../acceptance/final/03-capability-designer.png`. (If your workspace renames "Capability" to another term, every label here follows suit.)
+A full-screen, two-pane editor for the engagement's capability model. Screenshot: `../pipeline/build/captures/03-capability-designer.png`. (If your workspace renames "Capability" to another term, every label here follows suit.)
 
 **Header**: a "Canvas" link back to `/`, the surface title, a live count of capabilities, and two actions — **Draft from Universe** and **Create Capability**.
 
@@ -232,7 +232,7 @@ The sections below note per-element which engine serves it live.
 
 ### Landing page — the vantage-point picker (`/portfolio`)
 
-Screenshot: `../acceptance/final/04-portfolio-landing.png`. Two cards:
+Screenshot: `../pipeline/build/captures/04-portfolio-landing.png`. Two cards:
 
 - **Corporate Operating Partner** — the federated view across all subsidiaries. "Enter portfolio dashboard" goes to `/portfolio/dashboard`.
 - **Subsidiary COO** — one operating company's view. Choose a subsidiary from the dropdown, then "Enter subsidiary view" goes to `/portfolio/subsidiary/<slug>`.
@@ -241,7 +241,7 @@ A text link below exits to the standard product, and a footnote restates the fix
 
 ### Corporate Operating Partner dashboard (`/portfolio/dashboard`)
 
-Screenshot: `../acceptance/final/05-portfolio-dashboard.png`. Five zones, top to bottom:
+Screenshot: `../pipeline/build/captures/05-portfolio-dashboard.png`. Five zones, top to bottom:
 
 **Zone 1 — Header strip.** Portfolio identity figures (subsidiary count, industries, total revenue, active phases — all fixture), plus a provenance chip on the right repeating the live/fixture disclosure; hover it for the precise breakdown.
 
@@ -286,7 +286,7 @@ Four tabs follow; the active tab rides the URL (`?tab=operations`), so tab views
 | **Plan** | Initiatives in flight with per-initiative progress meters, value, and target dates; the seven-phase lifecycle spine with the current phase highlighted; and the canonical completion requirements for leaving the current phase. | Fixture |
 | **Operations** | What the company is running today — see below. | **Mixed; agent data is live** |
 
-**The Operations tab** (screenshot: `../acceptance/final/08-subsidiary-operations.png`) has three regions:
+**The Operations tab** (screenshot: `../pipeline/build/captures/08-subsidiary-operations.png`) has three regions:
 
 1. **Fleet stat strip** — *Agents active* and *Agents in intervention* come **live** from the agent registry whenever it answers (each Beacon subsidiary maps to its own seeded engagement domain); *Open findings* is still fixture data.
 2. **Recent agent activity** — the agent fleet, **live** from the registry. Each row: name, role, latest observed activity (derived from real sightings and lifecycle events — "No activity observed" when there is none, never an invented line), a provenance line ("Deployed by … · date · Oversight: chain"), and a governance-status pill:
@@ -306,7 +306,7 @@ Four tabs follow; the active tab rides the URL (`?tab=operations`), so tab views
 
 ### Cascade detail (`/portfolio/cascade/<id>`)
 
-Screenshot: `../acceptance/final/06-cascade-detail-decline-pending.png`. **Live** from the cascade engine (fixture fallback in degraded mode); an unknown id renders a "Cascade not found" panel with a back link.
+Screenshot: `../pipeline/build/captures/06-cascade-detail-decline-pending.png`. **Live** from the cascade engine (fixture fallback in degraded mode); an unknown id renders a "Cascade not found" panel with a back link.
 
 - **Header** — an eyebrow stating the aggregate state (*In-flight cascade*, *Resolved cascade — looks good*, or *Resolved cascade — declined*; a resolved decline is a peer outcome, never failure language), the original critique verbatim (it travels the chain unchanged), who issued it and when, and an **Acceptance criteria** panel — what "fixed" means, in the issuer's words.
 - **Level-by-level transparency** — every level of the chain (L0, L1, …) with its owner, date, and a state pill:
@@ -323,7 +323,7 @@ Screenshot: `../acceptance/final/06-cascade-detail-decline-pending.png`. **Live*
 
 ### Coordination contract detail (`/portfolio/contract/<id>`)
 
-Screenshot: `../acceptance/final/07-contract-detail.png`. **Live** from the contract engine (fixture fallback in degraded mode); reachable from opportunity cards on the dashboard and from a subsidiary's federation-invitation segment (the back link returns wherever you came from). Unknown ids render a "Contract not found" panel.
+Screenshot: `../pipeline/build/captures/07-contract-detail.png`. **Live** from the contract engine (fixture fallback in degraded mode); reachable from opportunity cards on the dashboard and from a subsidiary's federation-invitation segment (the back link returns wherever you came from). Unknown ids render a "Contract not found" panel.
 
 A coordination contract is a documented, monitorable agreement between parts of the portfolio — not a slide-deck proposal. The surface renders its terms first-class:
 
@@ -340,4 +340,4 @@ A coordination contract is a documented, monitorable agreement between parts of 
 ### Further reading
 
 - Engine state vocabularies and invariants: `substrate/docs/engine-spec/` (`cascade.md`, `contracts.md`, `agents.md`, `diagnostic.md`).
-- The full visual acceptance tour these screenshots come from: `substrate/docs/acceptance/final/visual-verification.md`.
+- The full visual acceptance tour these surfaces were originally verified in: `substrate/docs/acceptance/final/visual-verification.md` (its hand-captured screenshots are archived alongside it; the screenshots referenced above are regenerated by the docs pipeline).

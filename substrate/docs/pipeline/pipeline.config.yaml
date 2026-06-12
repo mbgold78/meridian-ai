@@ -97,5 +97,16 @@ assemble:
   # Guide markdown sources (plan §6) — relative to this directory.
   guidesDir: ../guides
   outDir: build/manual
+  # DOC-1 S3 link check (plan §6 / acceptance A3): markdown roots (files or
+  # dirs, relative to this directory) whose image references — BOTH styles,
+  # markdown-link and plain backtick path — must resolve on disk relative to
+  # the file containing them. The manual points at the capture artifacts in
+  # build/captures (produced by docsCapture, which docsAssemble depends on);
+  # acceptance/final points at its checked-in archive/ of hand-captured
+  # originals. A renamed spec output or a stale doc path fails assemble
+  # (exit 5) naming file, line, and the unresolved reference.
+  linkCheck:
+    - ../manual
+    - ../acceptance/final
 
 selectorTimeoutMs: 30000

@@ -197,7 +197,7 @@ Be precise about which is which today:
 
 One visible consequence worth knowing before a demo: the dashboard's lifecycle-stall card truthfully reports the 22 subsidiaries as unphased while the fixture grid directly below places each one in a phase — see the [dashboard zone walkthrough](#corporate-operating-partner-dashboard) for why both halves are honest.
 
-Screenshots of all of these surfaces, captured from a seeded build, are in [`../acceptance/final/`](../acceptance/final/) (for example [`01-living-canvas.png`](../acceptance/final/01-living-canvas.png), [`05-portfolio-dashboard.png`](../acceptance/final/05-portfolio-dashboard.png), [`06-cascade-detail-decline-pending.png`](../acceptance/final/06-cascade-detail-decline-pending.png)).
+Screenshots of all of these surfaces are regenerated from a seeded build by the docs capture pipeline (`gradlew docsCapture`) into `substrate/docs/pipeline/build/captures/` — they are build artifacts, not checked in (for example [`01-living-canvas.png`](../pipeline/build/captures/01-living-canvas.png), [`05-portfolio-dashboard.png`](../pipeline/build/captures/05-portfolio-dashboard.png), [`06-cascade-detail-decline-pending.png`](../pipeline/build/captures/06-cascade-detail-decline-pending.png)). The hand-captured originals from the 2026-06-11 visual-verification tour are archived in [`../acceptance/final/archive/`](../acceptance/final/archive/).
 
 ### What does not work yet
 
@@ -242,7 +242,7 @@ A few older links redirect rather than break: `/ecosystem` goes to the canvas, `
 
 ## Living Canvas
 
-The Living Canvas, at `/`, is the home surface: one screen that draws every system the client runs, every data flow between them, and every manual process people perform by hand. Screenshot: [`01-living-canvas.png`](../acceptance/final/01-living-canvas.png).
+The Living Canvas, at `/`, is the home surface: one screen that draws every system the client runs, every data flow between them, and every manual process people perform by hand. Screenshot: [`01-living-canvas.png`](../pipeline/build/captures/01-living-canvas.png).
 
 On your first visit a one-time welcome overlay explains the basics (it never returns after you dismiss it; it is remembered per browser).
 
@@ -354,7 +354,7 @@ The **+ Add Source** button opens a modal that probes a URL you paste (for examp
 
 ## Future State Designer
 
-The decision register, at `/designer`: where target-architecture decisions are recorded, analyzed, and made permanent. Screenshot: [`02-designer.png`](../acceptance/final/02-designer.png).
+The decision register, at `/designer`: where target-architecture decisions are recorded, analyzed, and made permanent. Screenshot: [`02-designer.png`](../pipeline/build/captures/02-designer.png).
 
 ### The decision table
 
@@ -401,7 +401,7 @@ Rows with status `PROPOSED` carry a **Run Impact Analysis** button. It sends the
 
 ## Capability Designer
 
-A full-screen, two-pane editor for the engagement's capability model, at `/designer/capabilities`. Screenshot: [`03-capability-designer.png`](../acceptance/final/03-capability-designer.png). (If your workspace renames "Capability" to another term, every label here follows suit.)
+A full-screen, two-pane editor for the engagement's capability model, at `/designer/capabilities`. Screenshot: [`03-capability-designer.png`](../pipeline/build/captures/03-capability-designer.png). (If your workspace renames "Capability" to another term, every label here follows suit.)
 
 **Header**: a "Canvas" link back to `/`, the surface title, a live count of capabilities, and two actions — **Draft from Universe** and **Create Capability**.
 
@@ -448,7 +448,7 @@ The sections below note per-element which engine serves it live.
 
 ### Landing page — the vantage-point picker
 
-Screenshot: [`04-portfolio-landing.png`](../acceptance/final/04-portfolio-landing.png). Two cards:
+Screenshot: [`04-portfolio-landing.png`](../pipeline/build/captures/04-portfolio-landing.png). Two cards:
 
 - **Corporate Operating Partner** — the federated view across all subsidiaries. "Enter portfolio dashboard" goes to `/portfolio/dashboard`.
 - **Subsidiary COO** — one operating company's view. Choose a subsidiary from the dropdown, then "Enter subsidiary view" goes to `/portfolio/subsidiary/<slug>`.
@@ -457,7 +457,7 @@ A text link below exits to the standard product, and a footnote restates the fix
 
 ### Corporate Operating Partner dashboard
 
-At `/portfolio/dashboard`. Screenshot: [`05-portfolio-dashboard.png`](../acceptance/final/05-portfolio-dashboard.png). Five zones, top to bottom:
+At `/portfolio/dashboard`. Screenshot: [`05-portfolio-dashboard.png`](../pipeline/build/captures/05-portfolio-dashboard.png). Five zones, top to bottom:
 
 **Zone 1 — Header strip.** Portfolio identity figures (subsidiary count, industries, total revenue, active phases — all fixture), plus a provenance chip on the right repeating the live/fixture disclosure; hover it for the precise breakdown.
 
@@ -493,7 +493,7 @@ Four tabs follow; the active tab rides the URL (`?tab=operations`), so tab views
 | **Plan** | Initiatives in flight with per-initiative progress meters, value, and target dates; the seven-phase lifecycle spine with the current phase highlighted; and the canonical completion requirements for leaving the current phase. | Fixture |
 | **Operations** | What the company is running today — see below. | **Mixed; agent data is live** |
 
-**The Operations tab** (screenshot: [`08-subsidiary-operations.png`](../acceptance/final/08-subsidiary-operations.png)) has three regions:
+**The Operations tab** (screenshot: [`08-subsidiary-operations.png`](../pipeline/build/captures/08-subsidiary-operations.png)) has three regions:
 
 1. **Fleet stat strip** — *Agents active* and *Agents in intervention* come **live** from the agent registry whenever it answers (each Beacon subsidiary maps to its own seeded engagement domain); *Open findings* is still fixture data.
 
@@ -505,7 +505,7 @@ Four tabs follow; the active tab rides the URL (`?tab=operations`), so tab views
 
 ### Cascade detail page
 
-At `/portfolio/cascade/<id>`. Screenshot: [`06-cascade-detail-decline-pending.png`](../acceptance/final/06-cascade-detail-decline-pending.png). **Live** from the cascade engine (fixture fallback in degraded mode); an unknown id renders a "Cascade not found" panel with a back link.
+At `/portfolio/cascade/<id>`. Screenshot: [`06-cascade-detail-decline-pending.png`](../pipeline/build/captures/06-cascade-detail-decline-pending.png). **Live** from the cascade engine (fixture fallback in degraded mode); an unknown id renders a "Cascade not found" panel with a back link.
 
 Top to bottom:
 
@@ -518,7 +518,7 @@ There is deliberately no edit affordance anywhere on this page. The record is ap
 
 ### Contract detail page
 
-At `/portfolio/contract/<id>`. Screenshot: [`07-contract-detail.png`](../acceptance/final/07-contract-detail.png). **Live** from the contract engine (fixture fallback in degraded mode); reachable from opportunity cards on the dashboard and from a subsidiary's federation-invitation segment (the back link returns wherever you came from). Unknown ids render a "Contract not found" panel.
+At `/portfolio/contract/<id>`. Screenshot: [`07-contract-detail.png`](../pipeline/build/captures/07-contract-detail.png). **Live** from the contract engine (fixture fallback in degraded mode); reachable from opportunity cards on the dashboard and from a subsidiary's federation-invitation segment (the back link returns wherever you came from). Unknown ids render a "Contract not found" panel.
 
 A coordination contract is a documented, monitorable agreement between parts of the portfolio — not a slide-deck proposal (the full concept is in [Part 2 — Coordination contracts](#part-2--coordination-contracts)). The surface renders its terms first-class:
 
@@ -819,7 +819,7 @@ Each registration also records where the agent executes (its **execution locus**
 
 ### Where you see agents
 
-In the demo workspace, open a subsidiary's dashboard (Subsidiary COO vantage point) and select the **Operations** tab — the three regions of that tab (live fleet strip, live agent activity rows with expandable mandate/oversight panels, fixture findings) are walked through under [Subsidiary COO view](#subsidiary-coo-view). Screenshot: [`08-subsidiary-operations.png`](../acceptance/final/08-subsidiary-operations.png).
+In the demo workspace, open a subsidiary's dashboard (Subsidiary COO vantage point) and select the **Operations** tab — the three regions of that tab (live fleet strip, live agent activity rows with expandable mandate/oversight panels, fixture findings) are walked through under [Subsidiary COO view](#subsidiary-coo-view). Screenshot: [`08-subsidiary-operations.png`](../pipeline/build/captures/08-subsidiary-operations.png).
 
 > **Not yet:** the Operations tab is read-only — there are no pause/kill/throttle buttons on screen. All agent lifecycle controls are operator-grade REST calls. The product rule is that no control affordance ships in the UI ahead of the full honest-disclosure plumbing behind it.
 
@@ -1330,7 +1330,7 @@ Every workflow above was proven with runnable commands, and the evidence is chec
 | `acceptance/d5/` | Portfolio statistics acceptance: the baseline portfolio JSON, the fixed-clock boot that flips the stall count 0→1, a dashboard screenshot, and the write-up of the exact commands |
 | `acceptance/phase3/` and `acceptance/d3/` | Contract gateway and agent-governance acceptance transcripts, including the shadow-mode vs. enforce-mode evidence pairs |
 | `acceptance/phase5/` | Authentication acceptance: runnable scripts and transcripts for both the anonymous dev mode and the full OIDC mode |
-| `acceptance/final/` | Screenshots of the shipped surfaces (e.g. [the portfolio dashboard](../acceptance/final/05-portfolio-dashboard.png), [a contract detail](../acceptance/final/07-contract-detail.png)) plus the visual-verification notes |
+| `acceptance/final/` | The visual-verification tour notes, plus `archive/` holding the hand-captured original screenshots. Current screenshots of the shipped surfaces are regenerated by the docs pipeline (`gradlew docsCapture`) as build artifacts under `docs/pipeline/build/captures/` (e.g. [the portfolio dashboard](../pipeline/build/captures/05-portfolio-dashboard.png), [a contract detail](../pipeline/build/captures/07-contract-detail.png)) |
 
 ## Administration
 

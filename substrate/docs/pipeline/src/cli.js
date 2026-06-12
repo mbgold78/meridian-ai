@@ -13,7 +13,9 @@
  *            against one booted instance; --fresh-boots boots a second fresh
  *            JVM (new H2, new UUIDs) for the second pass, per plan §5.
  * assemble — resolves {{capture:spec-id}} placeholders in guide sources into
- *            build/manual/ (S1 skeleton).
+ *            build/manual/ (S1 skeleton) + link-checks every image reference
+ *            (markdown-link AND backtick styles) in the configured doc roots
+ *            (docs/manual, docs/acceptance/final) — S3, plan §6/A3.
  *
  * Exit codes: see src/lib/errors.js (0 ok / 2 env / 3 regression / 4
  * determinism / 5 assemble).
@@ -29,6 +31,7 @@ import { bootApp } from './lib/boot.js';
 import { runSpec } from './lib/capture.js';
 import { writeManifest, diffManifests } from './lib/manifest.js';
 import { assembleGuides } from './lib/assemble.js';
+import { checkImageLinks } from './lib/linkcheck.js';
 import { EXIT, PipelineError } from './lib/errors.js';
 
 const log = (m) => console.log(m);
@@ -54,7 +57,10 @@ async function main() {
 
   if (command === 'assemble') {
     const res = assembleGuides({ config, specs, log });
-    log(`DOCS-ASSEMBLE PASS guides=${res.guides} images=${res.images}`);
+    // S3 link check (plan §6 / acceptance A3): every image reference in the
+    // configured doc roots — manual + acceptance/final — must resolve on disk.
+    const lc = checkImageLinks({ config, log });
+    log(`DOCS-ASSEMBLE PASS guides=${res.guides} images=${res.images} links=${lc.refs}`);
     return;
   }
 

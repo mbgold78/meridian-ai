@@ -20,7 +20,7 @@ Two things make this different from forwarding an email:
 ### Where you see cascades
 
 - **Operating Partner dashboard** (`/portfolio/dashboard`) — the **"Cascades you've issued"** grid shows every in-flight cascade as a card: the first sentence of the critique, where the chain currently sits ("Currently at L2 · 3 level chain"), and an attention-signal chip. Cards are ordered by attention: decline-pending first, then overdue, then escalating by most recent activity. Each card's **Inspect cascade** link opens the detail page. In the demo workspace this grid is live engine data (the header dot's tooltip says which parts of the dashboard are live versus illustrative).
-- **Cascade detail page** (`/portfolio/cascade/<id>`) — the full record. See [The cascade detail page](#the-cascade-detail-page) below. Screenshot: `../acceptance/final/06-cascade-detail-decline-pending.png`.
+- **Cascade detail page** (`/portfolio/cascade/<id>`) — the full record. See [The cascade detail page](#the-cascade-detail-page) below. Screenshot: `../pipeline/build/captures/06-cascade-detail-decline-pending.png`.
 
 ### Level verbs — what each owner can do
 
@@ -157,7 +157,7 @@ Each contract carries:
 
 ### Where you see contracts
 
-- **Contract detail page** (`/portfolio/contract/<key>`) — parties with their commitments, the enforcement section (monitoring description, mechanism panel, decline triggers), the estimated value when one exists, and the actions footer. Entry points: the opportunity cards on the Operating Partner dashboard and the federation-invitation band on a Subsidiary COO view. Screenshot: `../acceptance/final/07-contract-detail.png`.
+- **Contract detail page** (`/portfolio/contract/<key>`) — parties with their commitments, the enforcement section (monitoring description, mechanism panel, decline triggers), the estimated value when one exists, and the actions footer. Entry points: the opportunity cards on the Operating Partner dashboard and the federation-invitation band on a Subsidiary COO view. Screenshot: `../pipeline/build/captures/07-contract-detail.png`.
 - **Operating Partner dashboard** — the coordination-signals strip includes a live "Coordination signals" count (contract events plus cascade actions over the trailing 7 days).
 
 Two honest limitations of the contract detail page today:

@@ -1,0 +1,70 @@
+# DOC-1 S3 — link-audit transcript (acceptance A3: links resolve)
+
+Date: 2026-06-12  Worktree: doc1-docs-pipeline (branch doc-1/docs-pipeline)
+Link checker: substrate/docs/pipeline/src/lib/linkcheck.js, runs inside `docsAssemble`
+Roots checked (pipeline.config.yaml assemble.linkCheck): ../manual (7 files), ../acceptance/final (visual-verification.md + archive/README.md)
+Styles checked: markdown links/images AND plain backtick paths; refs resolve relative to the containing file.
+
+## 1. gradlew docsVerify (determinism gate, post-migration) — GRADLE_EXIT=0
+
+DOCS-VERIFY PASS runs=2 mode=same-boot files=10 manifest=1be63f915f8975492fc9ea03284c62e5e6d797d8694fa5d722a03e618f862199
+BUILD SUCCESSFUL in 47s
+
+   (aggregate manifest identical to the S2-committed verify transcript: 1be63f91…862199)
+
+## 2. gradlew docsAssemble (fresh JVM boot -> docsCapture -> assemble -> link check) — GRADLE_EXIT=0
+
+DOCS-CAPTURE PASS files=10 manifest=1be63f915f8975492fc9ea03284c62e5e6d797d8694fa5d722a03e618f862199
+link-check: 44 image reference(s) across 9 markdown file(s) — all resolve
+DOCS-ASSEMBLE PASS guides=1 images=3 links=44
+BUILD SUCCESSFUL in 44s
+
+## 3. Negative proof — hide one capture artifact (simulates renamed spec output); link check must fail naming file/line/ref
+
+node src/cli.js assemble -> EXIT=5
+DOCS-ASSEMBLE FAIL link-check file=../manual/02-client-surfaces.md line=326 ref=../pipeline/build/captures/07-contract-detail.png resolved=C:\Users\mbgol\dev\doc1-docs-pipeline\substrate\docs\pipeline\build\captures\07-contract-detail.png reason=missing
+DOCS-ASSEMBLE FAIL link-check file=../manual/03-cascades-contracts.md line=160 ref=../pipeline/build/captures/07-contract-detail.png resolved=C:\Users\mbgol\dev\doc1-docs-pipeline\substrate\docs\pipeline\build\captures\07-contract-detail.png reason=missing
+DOCS-ASSEMBLE FAIL link-check file=../manual/05-operator-workflows.md line=303 ref=../pipeline/build/captures/07-contract-detail.png resolved=C:\Users\mbgol\dev\doc1-docs-pipeline\substrate\docs\pipeline\build\captures\07-contract-detail.png reason=missing
+DOCS-ASSEMBLE FAIL link-check file=../manual/06-admin-api-troubleshooting.md line=366 ref=../pipeline/build/captures/07-contract-detail.png resolved=C:\Users\mbgol\dev\doc1-docs-pipeline\substrate\docs\pipeline\build\captures\07-contract-detail.png reason=missing
+DOCS-ASSEMBLE FAIL link-check file=../manual/USER-MANUAL.md line=521 ref=../pipeline/build/captures/07-contract-detail.png resolved=C:\Users\mbgol\dev\doc1-docs-pipeline\substrate\docs\pipeline\build\captures\07-contract-detail.png reason=missing
+DOCS-ASSEMBLE FAIL link-check file=../manual/USER-MANUAL.md line=1333 ref=../pipeline/build/captures/07-contract-detail.png resolved=C:\Users\mbgol\dev\doc1-docs-pipeline\substrate\docs\pipeline\build\captures\07-contract-detail.png reason=missing
+DOCS-ASSEMBLE FAIL link-check 6 broken image reference(s) across 9 file(s)
+
+## 4. Restore + re-run — back to green
+
+node src/cli.js assemble -> EXIT=0
+link-check: 44 image reference(s) across 9 markdown file(s) — all resolve
+DOCS-ASSEMBLE PASS guides=1 images=3 links=44
+
+## 5. Archive listing (substrate/docs/acceptance/final/archive/)
+
+ 
+534493 01-living-canvas.png
+105147 02-designer.png
+33232 03-capability-designer.png
+111425 04-portfolio-landing.png
+120384 05-portfolio-dashboard.png
+165962 06-cascade-detail-decline-pending.png
+131363 07-contract-detail.png
+123466 08-subsidiary-operations.png
+6475 08a-operations-path-segment-BLANK.png
+1892 README.md
+
+## 6. Per-file image-reference breakdown (31 manual refs = plan §8 A3 Scout C count; +13 in acceptance/final added by S3)
+
+
+## 6. Per-file image-reference breakdown (the 31 manual refs = plan §8 A3 / Scout C count; the 13 acceptance/final refs were added/re-pointed by S3)
+
+
+## 6. Per-file image-reference breakdown (the 31 manual refs = plan §8 A3 / Scout C count; the 13 acceptance/final refs were added/re-pointed by S3)
+
+3 manual/01-overview-getting-started.md
+8 manual/02-client-surfaces.md
+2 manual/03-cascades-contracts.md
+1 manual/04-agents-diagnostics.md
+2 manual/05-operator-workflows.md
+1 manual/06-admin-api-troubleshooting.md
+14 manual/USER-MANUAL.md
+2 acceptance/final/archive/README.md
+11 acceptance/final/visual-verification.md
+TOTAL 44

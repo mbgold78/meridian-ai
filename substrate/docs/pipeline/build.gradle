@@ -10,7 +10,9 @@
 //                           -PfreshBoots makes the second run a fresh JVM boot
 //                           (new H2, new UUIDs) per plan §5.
 //   gradlew docsAssemble  — resolve {{capture:id}} placeholders in guide
-//                           sources into build/manual (S1 skeleton)
+//                           sources into build/manual + link-check every
+//                           image reference in docs/manual and
+//                           docs/acceptance/final (S3, plan §6/A3)
 //
 // Task names are docs-prefixed (vs plan §6's ':docs:capture' / ':docs:verify')
 // so the bare invocations above resolve unambiguously from the root project
@@ -76,7 +78,7 @@ tasks.register('docsVerify', NpmTask) {
 
 tasks.register('docsAssemble', NpmTask) {
     group = 'documentation'
-    description = 'Resolves {{capture:spec-id}} placeholders in guide sources into build/manual'
+    description = 'Resolves {{capture:spec-id}} placeholders into build/manual + link-checks all doc image references (manual, acceptance/final)'
     dependsOn tasks.named('npmInstall'), tasks.named('docsCapture')
     args = ['run', 'assemble']
 }
